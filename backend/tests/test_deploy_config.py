@@ -67,3 +67,22 @@ def test_k8s_resources_share_one_namespace():
 def test_container_build_definitions_exist():
     assert (ROOT / "backend" / "Dockerfile").is_file()
     assert (ROOT / "frontend" / "Dockerfile").is_file()
+
+
+def test_every_setting_is_declared_in_both_deployment_paths():
+    """Regression: PROMETHEUS_URL was missing from the K8s ConfigMap.
+
+    The real cluster cannot be exercised here, so every setting that the backend
+    reads must be declared in BOTH deployment paths. Otherwise a variable that
+    works locally silently falls back to its default in production.
+    """
+    config = (ROOT / "backend" / "app" / "config.py").read_text(encoding="utf-8")
+    expected = sorted(name.upper() for name in re.findall(r"^\s{4}([a-z_0-9]+):\s*(?:str|bool|int)", config, re.M))
+    assert expected, "failed to derive settings from config.py"
+
+    compose_env = _compose()["services"]["backend"]["environment"]
+    configmap = next(doc for doc in _docs("namespace.yaml") if doc["kind"] == "ConfigMap")
+
+    for name in expected:
+        assert name in compose_env, f"{name} missing from docker-compose backend environment"
+        assert name in configmap["data"], f"{name} missing from the Kubernetes ConfigMap"

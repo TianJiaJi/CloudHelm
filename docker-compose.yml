@@ -3,10 +3,12 @@ services:
     build: ./backend
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
+      APP_NAME: CloudHelm 运维作战室
       K8S_ENABLED: "true"
       DEMO_FALLBACK: "true"
       PROMETHEUS_URL: ""
       NAMESPACE: cloudhelm
+      ALLOWED_DEPLOYMENTS: guide-service,ai-agent,data-dashboard,miniapp-api
     ports:
       - "8000:8000"
     healthcheck:

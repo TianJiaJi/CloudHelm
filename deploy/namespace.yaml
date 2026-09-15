@@ -9,7 +9,9 @@ metadata:
   name: cloudhelm-config
   namespace: cloudhelm
 data:
+  APP_NAME: CloudHelm 运维作战室
   NAMESPACE: cloudhelm
   DEMO_FALLBACK: "true"
   K8S_ENABLED: "true"
+  PROMETHEUS_URL: ""
   ALLOWED_DEPLOYMENTS: guide-service,ai-agent,data-dashboard,miniapp-api
