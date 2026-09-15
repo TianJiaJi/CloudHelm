@@ -64,7 +64,7 @@ def audit_executed(action_type: str, target: str, operator: str = "control-panel
 
 def build_metrics() -> dict:
     store.tick()
-    pod_items = store.pods
+    pod_items = store.snapshot_pods()
     if adapter.live:
         try:
             pod_items = adapter.pods()
@@ -153,7 +153,7 @@ def get_pods():
             store.log("WARN", f"Pod status fallback: {exc}")
             if not store.demo_fallback:
                 raise HTTPException(503, "Cannot read Kubernetes pods")
-    return {"items": store.pods, "mode": "demo"}
+    return {"items": store.snapshot_pods(), "mode": "demo"}
 
 
 @app.get("/api/metrics")
@@ -184,8 +184,7 @@ def get_audit():
 @app.post("/api/deploy")
 def deploy(operator: str = "control-panel"):
     ensure_allowed("guide-service")
-    store.version += 1
-    version = f"v3.{store.version}"
+    version = store.next_release()
     mode = run_live_or_demo(lambda: adapter.deploy("guide-service", version), lambda: None)
     store.log("SUCCESS", f"Deployment completed: release {version}", "deployment")
     audit_executed("deploy", f"guide-service @ {version}", operator, f"mode={mode}")
@@ -194,12 +193,9 @@ def deploy(operator: str = "control-panel"):
 
 def execute_scale(payload: ScaleRequest):
     ensure_allowed(payload.deployment)
-    previous = {pod["name"] for pod in store.pods}
     mode = run_live_or_demo(lambda: adapter.scale(payload.deployment, payload.replicas), lambda: None)
-    store.replicas[payload.deployment] = payload.replicas
-    store.pods = store._make_pods()
     # Newly created replicas come up as ContainerCreating (yellow) before Running.
-    store.start_pods([pod["name"] for pod in store.pods if pod["name"] not in previous])
+    store.start_pods(store.apply_scale(payload.deployment, payload.replicas))
     store.log("SUCCESS", f"Scaled {payload.deployment} to {payload.replicas} replicas", "scaling")
     return action_result(f"已将 {payload.deployment} 扩容至 {payload.replicas} 个副本", mode, replicas=payload.replicas)
 
@@ -220,12 +216,10 @@ def load_test():
 
 @app.post("/api/rollback")
 def rollback(operator: str = "control-panel"):
-    previous = f"v3.{store.version}"
-    if store.version > 1:
-        store.version -= 1
-    store.log("SUCCESS", f"Rollback completed: {previous} -> v3.{store.version}", "rollback")
-    audit_executed("rollback", f"guide-service: {previous} -> v3.{store.version}", operator)
-    return action_result(f"已回滚至版本 v3.{store.version}", "demo", version=f"v3.{store.version}")
+    previous, current = store.rollback_release()
+    store.log("SUCCESS", f"Rollback completed: {previous} -> {current}", "rollback")
+    audit_executed("rollback", f"guide-service: {previous} -> {current}", operator)
+    return action_result(f"已回滚至版本 {current}", "demo", version=current)
 
 
 @app.get("/api/integration-check")
@@ -236,7 +230,7 @@ def integration_check(operator: str = "control-panel"):
     and — in live mode — when its Service object exists so traffic has a route.
     """
     store.tick()
-    pod_items = store.pods
+    pod_items = store.snapshot_pods()
     mode = "demo"
     service_names: set[str] | None = None
     if adapter.live:
@@ -279,7 +273,8 @@ def integration_check(operator: str = "control-panel"):
 
 @app.get("/api/diagnostics")
 def diagnostics():
-    pod_items = store.pods
+    store.tick()
+    pod_items = store.snapshot_pods()
     mode = "demo"
     if adapter.live:
         try:
@@ -314,7 +309,7 @@ def circuit_breaker_recover(operator: str = "control-panel"):
 
 @app.post("/api/chaos/kill")
 def chaos_kill(payload: PodKillRequest, operator: str = "control-panel"):
-    target = next((pod for pod in store.pods if pod["name"] == payload.pod_name), None)
+    target = next((pod for pod in store.snapshot_pods() if pod["name"] == payload.pod_name), None)
     if target and target["deployment"] not in settings.deployment_names:
         raise HTTPException(403, "Pod is outside the allowed deployment scope")
     if adapter.live:

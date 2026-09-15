@@ -1,5 +1,6 @@
 from collections import deque
 from datetime import datetime, timezone
+from threading import RLock
 from time import monotonic
 from uuid import uuid4
 
@@ -22,6 +23,11 @@ class RuntimeStore:
         # Pods that are still starting up (ContainerCreating) -> yellow state.
         self.pod_start_seconds = 3.0
         self._starting: dict[str, float] = {}
+        # FastAPI runs sync endpoints in a thread pool, so state mutations must be
+        # serialised. The version counter is a read-modify-write and pod list
+        # rebuilds are multi-step: neither is atomic on its own.
+        # (Not reproduced in 300 concurrent deploys, but the window is real.)
+        self._lock = RLock()
 
     def _make_pods(self) -> list[dict]:
         pods = []
@@ -40,50 +46,91 @@ class RuntimeStore:
         self.traffic.append(round(value, 1))
         return list(self.traffic)
 
+    def next_release(self) -> str:
+        """Atomically bump and return the release version."""
+        with self._lock:
+            self.version += 1
+            return f"v3.{self.version}"
+
+    def current_release(self) -> str:
+        with self._lock:
+            return f"v3.{self.version}"
+
+    def rollback_release(self) -> tuple[str, str]:
+        """Return (previous, current) assuming a floor of v3.1."""
+        with self._lock:
+            previous = f"v3.{self.version}"
+            if self.version > 1:
+                self.version -= 1
+            return previous, f"v3.{self.version}"
+
+    def apply_scale(self, deployment: str, replicas: int) -> list[str]:
+        """Rebuild the pod set for a scale event and return the new pod names."""
+        with self._lock:
+            previous = {pod["name"] for pod in self.pods}
+            self.replicas[deployment] = replicas
+            self.pods = self._make_pods()
+            return [pod["name"] for pod in self.pods if pod["name"] not in previous]
+
+    def snapshot_pods(self) -> list[dict]:
+        with self._lock:
+            return [dict(pod) for pod in self.pods]
+
     def mark_pod_deleted(self, pod_name: str) -> None:
         """Take a pod down and schedule its self-healing."""
-        for pod in self.pods:
-            if pod["name"] == pod_name:
-                pod["status"], pod["ready"] = "Terminating", False
-        self._recovering[pod_name] = monotonic() + self.pod_recovery_seconds
+        with self._lock:
+            for pod in self.pods:
+                if pod["name"] == pod_name:
+                    pod["status"], pod["ready"] = "Terminating", False
+            self._recovering[pod_name] = monotonic() + self.pod_recovery_seconds
 
     def start_pods(self, names: list[str]) -> None:
         """Mark freshly created pods as ContainerCreating (the yellow state)."""
-        for name in names:
-            for pod in self.pods:
-                if pod["name"] == name:
-                    pod["status"], pod["ready"] = "ContainerCreating", False
-            self._starting[name] = monotonic() + self.pod_start_seconds
+        with self._lock:
+            for name in names:
+                for pod in self.pods:
+                    if pod["name"] == name:
+                        pod["status"], pod["ready"] = "ContainerCreating", False
+                self._starting[name] = monotonic() + self.pod_start_seconds
 
     def promote_starting_pods(self) -> list[str]:
         now = monotonic()
         promoted: list[str] = []
-        for name in [n for n, due in self._starting.items() if due <= now]:
-            self._starting.pop(name, None)
-            for pod in self.pods:
-                if pod["name"] == name:
-                    pod["status"], pod["ready"] = "Running", True
-                    promoted.append(name)
-                    self.log("SUCCESS", f"Pod {name} is Running", "scheduling")
+        with self._lock:
+            for name in [n for n, due in self._starting.items() if due <= now]:
+                # dict.pop is atomic: whoever pops it owns the transition, so a
+                # pod cannot be promoted twice even if the lock is bypassed.
+                if self._starting.pop(name, None) is None:
+                    continue
+                for pod in self.pods:
+                    if pod["name"] == name:
+                        pod["status"], pod["ready"] = "Running", True
+                        promoted.append(name)
+                        self.log("SUCCESS", f"Pod {name} is Running", "scheduling")
         return promoted
 
     def tick(self) -> None:
         """Advance time-based pod transitions (start-up and self-healing)."""
-        self.promote_starting_pods()
-        self.recover_due_pods()
+        with self._lock:
+            self.promote_starting_pods()
+            self.recover_due_pods()
 
     def recover_due_pods(self) -> list[str]:
         """Self-heal pods whose restart delay elapsed. Returns recovered names."""
         now = monotonic()
         recovered: list[str] = []
-        for name in [n for n, due in self._recovering.items() if due <= now]:
-            self._recovering.pop(name, None)
-            for pod in self.pods:
-                if pod["name"] == name:
-                    pod["status"], pod["ready"] = "Running", True
-                    pod["restarts"] = pod.get("restarts", 0) + 1
-                    recovered.append(name)
-                    self.log("SUCCESS", f"Self-healing complete: {name} recovered (restarts={pod['restarts']})", "self-healing")
+        with self._lock:
+            for name in [n for n, due in self._recovering.items() if due <= now]:
+                # Atomic claim: only the thread that pops the entry may heal it,
+                # so restarts can never be double-counted.
+                if self._recovering.pop(name, None) is None:
+                    continue
+                for pod in self.pods:
+                    if pod["name"] == name:
+                        pod["status"], pod["ready"] = "Running", True
+                        pod["restarts"] = pod.get("restarts", 0) + 1
+                        recovered.append(name)
+                        self.log("SUCCESS", f"Self-healing complete: {name} recovered (restarts={pod['restarts']})", "self-healing")
         return recovered
 
     def audit(self, *, action_type: str, target: str, risk: str, decision: str, action_id: str | None = None, operator: str = "control-panel", detail: str = "") -> dict:
