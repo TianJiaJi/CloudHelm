@@ -25,7 +25,9 @@ git remote -v
 
 ## 项目简介
 
-CloudHelm 是一个正在开发中的项目。本仓库已完成 Git 协作基础设施初始化，尚未包含业务代码。
+CloudHelm 是景区智慧导览系统的运维作战室 MVP，提供 Vue3 监控大屏、FastAPI 控制面、Kubernetes 适配、演示后备、实时日志和安全 AI 运维助手。
+
+快速启动与演示流程见 [docs/OPERATIONS.md](./docs/OPERATIONS.md)。
 
 ## 仓库内容
 

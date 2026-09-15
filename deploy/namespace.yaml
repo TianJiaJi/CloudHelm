@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudhelm
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudhelm-config
+  namespace: cloudhelm
+data:
+  NAMESPACE: cloudhelm
+  DEMO_FALLBACK: "true"
+  K8S_ENABLED: "true"
+  ALLOWED_DEPLOYMENTS: guide-service,ai-agent,data-dashboard,miniapp-api

@@ -1,0 +1,24 @@
+services:
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      K8S_ENABLED: "true"
+      DEMO_FALLBACK: "true"
+      PROMETHEUS_URL: ""
+      NAMESPACE: cloudhelm
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  frontend:
+    build: ./frontend
+    ports:
+      # Nginx in the frontend image listens on 80 (see frontend/nginx.conf).
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy

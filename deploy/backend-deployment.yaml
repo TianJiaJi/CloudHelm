@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudhelm-backend
+  namespace: cloudhelm
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: cloudhelm-backend }
+  template:
+    metadata:
+      labels: { app: cloudhelm-backend }
+    spec:
+      serviceAccountName: cloudhelm-controller
+      containers:
+        - name: backend
+          image: cloudhelm/backend:demo
+          ports: [{ containerPort: 8000 }]
+          envFrom: [{ configMapRef: { name: cloudhelm-config } }]
+          readinessProbe: { httpGet: { path: /api/health, port: 8000 }, initialDelaySeconds: 5 }
+          livenessProbe: { httpGet: { path: /api/health, port: 8000 }, initialDelaySeconds: 10 }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudhelm-backend
+  namespace: cloudhelm
+spec:
+  selector: { app: cloudhelm-backend }
+  ports: [{ port: 8000, targetPort: 8000 }]
