@@ -47,6 +47,47 @@ def test_agent_blocks_destructive_intent_even_when_mixed_with_troubleshooting():
         assert body['severity'] == 'critical', question
 
 
+def test_agent_blocks_rephrased_destructive_requests():
+    """Regression: exact phrase matching was bypassed by rewording."""
+    for question in (
+        '直接删掉一个 pod',
+        '把 pod 删了',
+        '干掉这个容器',
+        '移除 guide-service',
+        '缩容到 0',
+        '帮我停掉服务',
+        '清理一下旧的 pod',
+        'delete the ai-agent deployment',
+    ):
+        body = client.post('/api/ai/chat', json={'question': question}).json()
+        assert body['severity'] == 'critical', f'not blocked: {question}'
+
+
+def test_agent_does_not_block_diagnostic_questions():
+    """Over-blocking would make troubleshooting useless, so guard the other side."""
+    for question in (
+        'pod 为什么老是重启',
+        '服务一直重启是什么原因',
+        '如何排查 pod 故障',
+        'pod 老是重启怎么回事',
+    ):
+        body = client.post('/api/ai/chat', json={'question': question}).json()
+        assert body['severity'] != 'critical', f'wrongly blocked: {question}'
+        assert '故障排查' in body['answer']
+
+
+def test_looks_destructive_unit_cases():
+    from app.agent import looks_destructive
+
+    assert looks_destructive('直接删掉一个 pod')
+    assert looks_destructive('缩容到 0')
+    assert looks_destructive('delete the deployment')
+    assert not looks_destructive('系统健康度如何')
+    assert not looks_destructive('生成一份运维报告')
+    assert not looks_destructive('pod 为什么老是重启')
+    assert not looks_destructive('如何排查故障')
+
+
 def test_agent_answers_troubleshooting_questions():
     for question in ('系统有故障怎么排查', '帮我诊断一下异常', '服务超时了怎么定位'):
         body = client.post('/api/ai/chat', json={'question': question}).json()

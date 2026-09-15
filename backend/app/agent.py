@@ -12,6 +12,39 @@ class AgentReply:
 
 MODE_LABEL = {"live": "实时集群数据", "demo": "演示数据", "unavailable": "不可用"}
 
+# Intent-based destructive detection.
+#
+# Exact phrase matching ("删 pod") is trivially bypassed by rewording —
+# "直接删掉一个 pod" / "把 pod 删了" / "干掉这个容器" all slipped through.
+# So we combine an action verb with a resource noun instead, and exclude
+# questions about an *observed* problem ("pod 为什么老是重启") which are
+# diagnostic, not requests to act.
+DESTRUCTIVE_VERBS = (
+    "删", "移除", "干掉", "杀死", "杀掉", "清理",
+    "kill", "delete", "remove", "drop",
+    "重启", "restart", "下线", "停掉", "停止", "缩容", "scale down",
+)
+# Verbs that are unambiguous even without an explicit resource noun.
+STANDALONE_DESTRUCTIVE = ("kill", "重启", "restart", "下线", "缩容", "scale down")
+RESOURCE_NOUNS = (
+    "pod", "容器", "container", "服务", "deployment", "节点", "node",
+    "实例", "replica", "副本",
+    # English resource words so names like guide-service / ai-agent are caught
+    "service", "agent", "dashboard", "miniapp", "api", "app",
+)
+PROBLEM_MARKERS = ("为什么", "为何", "原因", "怎么回事", "老是", "一直", "why")
+
+
+def looks_destructive(text: str) -> bool:
+    """True when the message asks the agent to perform a destructive action."""
+    if not any(verb in text for verb in DESTRUCTIVE_VERBS):
+        return False
+    if any(marker in text for marker in PROBLEM_MARKERS):
+        return False  # asking why something happened, not asking us to do it
+    if any(verb in text for verb in STANDALONE_DESTRUCTIVE):
+        return True
+    return any(noun in text for noun in RESOURCE_NOUNS)
+
 
 class OperationsAgent:
     """Operations assistant.
@@ -45,7 +78,7 @@ class OperationsAgent:
         # Destructive intent is evaluated first so that mixed phrasing such as
         # "系统故障了，帮我重启" is still blocked instead of matched as a
         # troubleshooting or health question.
-        if any(word in text for word in ("删 pod", "删除 pod", "杀 pod", "kill", "重启", "restart", "下线")):
+        if looks_destructive(text):
             return AgentReply(
                 "该请求涉及破坏性集群操作，已被安全策略拦截。请在控制面板中选择目标并完成二次确认；我不会代为执行。",
                 "critical",
@@ -93,7 +126,7 @@ class OperationsAgent:
                 f"- 数据来源：**{label}**，扩容/回滚/压测等动作在演示后备下为模拟执行。"
             )
 
-        if any(word in text for word in ("排障", "排查", "故障", "异常", "诊断", "定位", "报错", "超时", "oom")):
+        if any(word in text for word in ("排障", "排查", "故障", "异常", "诊断", "定位", "报错", "超时", "oom", "重启", "怎么回事", "原因")):
             if mode == "unavailable":
                 return AgentReply("## 故障排查\n**无法读取集群状态**，因此无法定位问题。请先恢复集群连接或在设置中开启演示后备。", "warning")
             unhealthy = status.get("unhealthy_pods") or []
