@@ -163,15 +163,95 @@ def test_traffic_series_accumulates_over_polls():
     assert all(value > 0 for value in second)
 
 
+def test_scaling_out_does_not_resurrect_a_failing_pod():
+    """Regression: apply_scale used to rebuild the pod list and silently revive
+    a pod that was mid-failure, wiping its restart counter."""
+    from app.store import store
+
+    original = store.pod_recovery_seconds
+    store.pod_recovery_seconds = 600.0
+    try:
+        target = store.snapshot_pods()[0]["name"]
+        store.mark_pod_deleted(target)
+        store.pods[[p["name"] for p in store.pods].index(target)]["restarts"] = 3
+
+        created = store.apply_scale("guide-service", 6)
+        assert created, "expected newly created replicas"
+
+        pod = next(p for p in store.snapshot_pods() if p["name"] == target)
+        assert pod["ready"] is False, "scaling must not silently revive a failing pod"
+        assert pod["status"] == "Terminating"
+        assert pod["restarts"] == 3, "scaling must not reset restart counters"
+    finally:
+        store.pod_recovery_seconds = original
+
+
+def test_stale_recovery_entry_does_not_invent_a_restart():
+    """Regression: a stale healing entry for an already-running pod used to
+    manufacture a restart event ("ghost self-heal").
+
+    This previously asserted only that a second tick did not bump the counter,
+    which the buggy code satisfied too. Assert the real invariant instead:
+    healing must never fire for a pod that is up.
+    """
+    from app.store import store
+
+    target_pod = next((p for p in store.snapshot_pods() if p["ready"]), None)
+    assert target_pod is not None, "precondition: need at least one healthy pod"
+    target = target_pod["name"]
+
+    store._recovering[target] = 0.0  # stale entry pointing at a healthy pod
+    before = target_pod["restarts"]
+    store.tick()
+    after = next(p for p in store.snapshot_pods() if p["name"] == target)["restarts"]
+    assert after == before, "self-healed a pod that was already running"
+
+
+def test_scaling_down_drops_scheduling_state_for_removed_pods():
+    from app.store import store
+
+    original = store.pod_recovery_seconds
+    store.pod_recovery_seconds = 600.0
+    try:
+        store.apply_scale("guide-service", 5)
+        removed = next(p["name"] for p in store.snapshot_pods() if p["deployment"] == "guide-service" and p["name"].endswith("005"))
+        store.mark_pod_deleted(removed)
+        assert removed in store._recovering
+
+        store.apply_scale("guide-service", 2)
+        assert removed not in store._recovering, "removed pod left a stale healing entry"
+        assert all(p["name"] != removed for p in store.snapshot_pods())
+    finally:
+        store.pod_recovery_seconds = original
+
+
 def test_scaling_out_visibly_improves_metrics():
+    from app.store import store
+
     before = client.get('/api/metrics').json()
     pending = client.post('/api/scale', json={'deployment': 'guide-service', 'replicas': 5}).json()
     client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+
+    # New replicas come up as ContainerCreating, so they can only improve the
+    # metrics once they are Running. That lag is deliberate (and realistic).
+    store._starting = {name: 0.0 for name in store._starting}
     after = client.get('/api/metrics').json()
+
     assert after['total_pods'] > before['total_pods']
     assert after['qps'] > before['qps']
     assert after['latency_ms'] < before['latency_ms']
     assert after['error_rate'] < before['error_rate']
+
+
+def test_new_replicas_do_not_count_as_ready_immediately():
+    """Scaling out must not instantly raise the ready count."""
+    store_before = client.get('/api/metrics').json()
+    pending = client.post('/api/scale', json={'deployment': 'miniapp-api', 'replicas': 3}).json()
+    client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+    during = client.get('/api/metrics').json()
+    assert during['total_pods'] > store_before['total_pods']
+    assert during['ready_pods'] <= store_before['ready_pods'] + 0, 'new pods should not be instantly ready'
+    assert during['ready_pods'] == store_before['ready_pods']
 
 
 def test_new_replicas_start_as_container_creating_then_run():

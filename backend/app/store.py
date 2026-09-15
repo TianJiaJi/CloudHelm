@@ -65,12 +65,37 @@ class RuntimeStore:
             return previous, f"v3.{self.version}"
 
     def apply_scale(self, deployment: str, replicas: int) -> list[str]:
-        """Rebuild the pod set for a scale event and return the new pod names."""
+        """Reconcile the pod set for a scale event; return newly created pod names.
+
+        This must NOT rebuild the whole list from scratch. Doing so used to
+        resurrect pods that were mid-failure and wipe their restart counters,
+        while leaving stale self-healing entries behind (a later tick would then
+        "heal" an already-running pod, inflating restarts).
+        Existing pods are therefore preserved by identity, and scheduling state
+        for pods that no longer exist is dropped.
+        """
         with self._lock:
-            previous = {pod["name"] for pod in self.pods}
             self.replicas[deployment] = replicas
-            self.pods = self._make_pods()
-            return [pod["name"] for pod in self.pods if pod["name"] not in previous]
+            by_name = {pod["name"]: pod for pod in self.pods}
+            rebuilt: list[dict] = []
+            created: list[str] = []
+            for dep, count in self.replicas.items():
+                for index in range(1, count + 1):
+                    name = f"{dep}-{index:03d}"
+                    pod = by_name.get(name)
+                    if pod is None:
+                        pod = {"name": name, "deployment": dep, "status": "Running", "ready": True, "restarts": 0}
+                        created.append(name)
+                    rebuilt.append(pod)
+
+            surviving = {pod["name"] for pod in rebuilt}
+            for name in [n for n in self._recovering if n not in surviving]:
+                self._recovering.pop(name, None)
+            for name in [n for n in self._starting if n not in surviving]:
+                self._starting.pop(name, None)
+
+            self.pods = rebuilt
+            return created
 
     def snapshot_pods(self) -> list[dict]:
         with self._lock:
@@ -127,6 +152,10 @@ class RuntimeStore:
                     continue
                 for pod in self.pods:
                     if pod["name"] == name:
+                        # Never invent a restart for a pod that is already healthy:
+                        # a stale entry must not manufacture a healing event.
+                        if pod["ready"]:
+                            continue
                         pod["status"], pod["ready"] = "Running", True
                         pod["restarts"] = pod.get("restarts", 0) + 1
                         recovered.append(name)
