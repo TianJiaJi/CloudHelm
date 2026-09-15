@@ -263,15 +263,28 @@ pwsh -File scripts/install-hooks.ps1     # Windows PowerShell
 ALLOW_PROTECTED_PUSH=1 git push origin main
 ```
 
-### 5.3 常见误操作与报错对照
+### 5.3 hook 的生效边界与报错对照
 
-> ⚠ Git 是在**与远端建连成功之后**才运行 pre-push hook 的。
-> 因此「连不上 / 无写权限」类错误会先于 hook 报出，这是 Git 的固有行为，不是配置错误。
+**关键认知：pre-push 不是「推送前过滤器」，而是「推送前的最后确认」。**
+
+Git 的执行顺序是：**建连 → 取远端 ref → 本地计算 ref 状态 → 运行 hook → 传输**。
+因此下面三种情况**根本不会运行 hook**：
+
+| 情况 | 现象 | 原因 |
+| ---- | ---- | ---- |
+| 无写权限 / 连不上 | `403 Permission denied` | 建连阶段就失败，还没到 ref 计算 |
+| 推送内容已是最新 | `Everything up-to-date` | 无 ref 可推，提前退出 |
+| 非快进推送 | `! [rejected] (non-fast-forward)` | 本地状态计算已判定拒绝，提前退出 |
+
+> hook 的保证是：**只要这次推送本来能成功，hook 就有机会拦住它。**
+> 它拦不住「本来就推不上去」的操作 —— 而那些也不需要拦。
+
+常见操作对照：
 
 | 误操作 | 实际报错 | 说明 | 正确做法 |
 | ------ | -------- | ---- | -------- |
-| 在 `main` 上 `git push origin main` | `✗ CloudHelm pre-push 护栏已拦截本次推送` | hook 正常拦截，并给出中文修复建议 | `git switch dev` 后再推 |
-| 在 `main` 上直接 `git push`（跟踪的是 `upstream/main`） | `Permission to 404-Wont-Fix/CloudHelm.git denied to TianJiaJi` (403) | 老账户对主仓库只有读权限，**建连阶段就被拒** | 这是预期行为，**不要绕过** |
+| 在 `main` 上 `git push origin main` | `✗ CloudHelm pre-push 护栏已拦截本次推送` | hook 正常拦截，给出中文修复建议 | `git switch dev` 后再推 |
+| 在 `main` 上直接 `git push`（跟踪 `upstream/main`） | `403 Permission denied` | 老账户对主仓库只有读权限，建连阶段被拒，hook 来不及运行 | 预期行为；见 §5.1 加 collaborator |
 | `git push upstream dev` | 同上 403 | `upstream` 只用于 `fetch` | `git push origin dev` |
 | `git push origin dev` | — | 正常开发路径 | ✅ |
 
