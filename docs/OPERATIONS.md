@@ -119,6 +119,7 @@ kubectl apply -f deploy/frontend-deployment.yaml
 | Pod 三态颜色 | 浏览器实测扩容瞬间 | 绿 `rgb(53,203,142)` / 黄 `rgb(224,178,63)` ContainerCreating / 红 `rgb(242,110,118)`，见图 `screenshot-pod-states.png` |
 | 部署配置对齐 | `test_deploy_config.py` 静态交叉校验 | 环境变量、端口、命名空间、白名单服务与容器名一致性均有断言（已做反向验证确认非空转） |
 | 全端联调 | 浏览器点击 + 接口实测 | 4/4 通过；杀掉某服务全部副本后变为 3/4 并指出 `failed=['ready']` |
+| 演示剧本一致性 | `test_playbook_contract.py` | 逐一断言剧本引用的 11 条日志/文案与真实行为一致（已做变异验证） |
 
 未验证（受环境限制）：`docker compose up` 与真实 K8s 集群联调 —— 本机没有 Docker 与 kubeconfig。
 
