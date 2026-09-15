@@ -158,37 +158,88 @@ git push --force-with-lease origin dev
 
 ## 5. 仓库护栏
 
-本仓库配置了两层护栏，保证上面的流程不会被绕过。
+本仓库的护栏分两层，**当前只保留客户端一层**。
 
-### 5.1 服务端：分支保护（主仓库 `main`）
+> **当前策略：低摩擦优先（个人使用）。**
+> 服务端分支保护已**关闭**，主仓库 `main` 可被直接推送。
+> 即便关闭保护，本地 pre-push hook 仍会拦截向 `upstream` / `main` 的推送（可用 `ALLOW_PROTECTED_PUSH=1` 绕过）。
+> 需要恢复保护时见 §5.1。
 
-| 规则                 | 值  | 效果                                     |
-| -------------------- | --- | ---------------------------------------- |
-| Require a PR         | 开  | 禁止向 `main` 直推，只能走 PR             |
-| Required approvals   | 0   | 不阻塞单人双账户流程；可按需调成 1        |
-| Dismiss stale reviews| 开  | 新提交会作废旧 approval                   |
-| Require linear history | 开 | 只允许 squash / rebase 合并，历史保持线性 |
-| Allow force pushes   | 关  | 禁止对 `main` 强推                        |
-| Allow deletions      | 关  | 禁止删除 `main`                           |
-| Enforce for admins   | 开  | 管理员同样受约束，包括新账户自己          |
+### 5.1 服务端：分支保护（当前已关闭）
 
-查看当前保护规则：
+> ⚠️ **状态：已关闭** —— `main` 当前可被直接推送。
+> 关闭原因：个人使用场景下，强制 PR 的流程摩擦大于收益。
+
+查看当前状态：
 
 ```bash
-gh api repos/404-Wont-Fix/CloudHelm/branches/main/protection \
-  --jq '{pr: .required_pull_request_reviews.required_approving_review_count,
-         linear: .required_linear_history.enabled,
-         force_push: .allow_force_pushes.enabled,
-         delete: .allow_deletions.enabled,
-         admins: .enforce_admins.enabled}'
+gh api repos/404-Wont-Fix/CloudHelm/branches/main --jq .protected   # true = 保护已开启
 ```
 
-如需把「必须 1 人 approve」打开（由新账户审阅老账户的 PR）：
+**重新开启完整保护**（建议在开始多人协作前执行）：
+
+```bash
+gh api -X PUT repos/404-Wont-Fix/CloudHelm/branches/main/protection --input - <<'JSON'
+{
+  "required_status_checks": null,
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": false,
+    "required_approving_review_count": 0
+  },
+  "restrictions": null,
+  "required_linear_history": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_conversation_resolution": true
+}
+JSON
+```
+
+开启后生效的规则：
+
+| 规则                   | 值  | 效果                                      |
+| ---------------------- | --- | ----------------------------------------- |
+| Require a PR           | 开  | 禁止向 `main` 直推，只能走 PR              |
+| Required approvals     | 0   | 不阻塞单人双账户流程；可按需调成 1         |
+| Dismiss stale reviews  | 开  | 新提交会作废旧 approval                    |
+| Require linear history | 开  | 只允许 squash / rebase 合并，历史保持线性  |
+| Allow force pushes     | 关  | 禁止对 `main` 强推                         |
+| Allow deletions        | 关  | 禁止删除 `main`                            |
+| Enforce for admins     | 开  | 管理员同样受约束，包括新账户自己           |
+
+如需「必须 1 人 approve」（由新账户审阅老账户的 PR）：
 
 ```bash
 gh api -X PATCH repos/404-Wont-Fix/CloudHelm/branches/main/protection/required_pull_request_reviews \
   -f required_approving_review_count=1
 ```
+
+#### 与保护无关的硬约束：老账户无写权限
+
+老账户 `TianJiaJi` 对主仓库**只有读权限**，所以即便保护已关闭，`git push upstream ...`
+仍会在建连阶段直接 `403 Permission denied`。
+
+如需真正的「直推主仓库」能力，先把老账户加为 collaborator（`push` = 写权限）：
+
+```bash
+# 1) 新账户发出邀请
+gh api -X PUT repos/404-Wont-Fix/CloudHelm/collaborators/TianJiaJi -f permission=push
+
+# 2) 老账户接受邀请（邀请 id 从 /user/repository_invitations 取）
+gh auth switch --user TianJiaJi
+gh api user/repository_invitations --jq '.[] | "\(.id)  \(.repository.full_name)"'
+gh api -X PATCH user/repository_invitations/<id>
+```
+
+加入后需同步放开 hook 的规则 1（否则仍会被本地拦截）：
+
+```bash
+ALLOW_PROTECTED_PUSH=1 git push upstream dev
+```
+
+或者直接编辑 `.githooks/pre-push` 删掉「规则 1：upstream 只读」那一段。
 
 ### 5.2 客户端：pre-push hook
 
@@ -237,10 +288,10 @@ ALLOW_PROTECTED_PUSH=1 git push origin main
 
 ## 7. 红线约定
 
-1. **禁止** `git push upstream` —— 主仓库只接受 PR（客户端 hook + 服务端分支保护双重拦截）。
-2. **禁止** 在老账户 fork 上直接推 `main`，开发一律走 `dev`。
-3. **禁止** 反向 PR（新账户 → 老账户）。
+1. **不建议** `git push upstream` —— 老账户无写权限，会被 403 拒绝（本地 hook 也会提前拦截）。
+2. **不建议** 在老账户 fork 上直接推 `main`，开发走 `dev`（本地 hook 会拦截 `main`）。
+3. **不建议** 反向 PR（新账户 → 老账户）。
 4. **禁止** 提交任何密钥、`.env` 文件（见 `.gitignore` 已配置的规则）。
-5. `dev` 与 `upstream/main` 的分叉不要超过一个迭代周期，每个 PR 合并后及时重置同步。
+5. PR 合并后及时同步 `dev`（§4.2），避免与 `upstream/main` 分叉过久。
 
 需要临时突破护栏时，务必在 commit message 或 PR 描述里写清原因与回滚方式。
