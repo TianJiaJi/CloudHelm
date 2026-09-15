@@ -47,11 +47,16 @@ def run_live_or_demo(live_call, demo_call):
 
 
 def request_approval(*, action_type: str, target: str, operator: str = "control-panel", **params) -> str:
-    """Park a high-risk action and write the pending audit record."""
+    """Park a high-risk action and write the request record.
+
+    The initial record says "requested", not "pending": the trail is
+    append-only, so a decided action keeps its request line forever. Labelling
+    it "pending" made every past request look undecided.
+    """
     action_id = str(uuid4())
     risk = RISK_BY_ACTION.get(action_type, "unknown")
     store.pending_actions[action_id] = {"type": action_type, "target": target, "risk": risk, **params}
-    store.audit(action_id=action_id, action_type=action_type, target=target, risk=risk, decision="pending", operator=operator)
+    store.audit(action_id=action_id, action_type=action_type, target=target, risk=risk, decision="requested", operator=operator)
     store.log("WARN", f"High-risk action blocked pending approval by {operator}: {action_type} -> {target}", "security")
     return action_id
 
@@ -177,8 +182,19 @@ def clear_logs(operator: str = "control-panel"):
 
 @app.get("/api/audit")
 def get_audit():
-    """Audit trail: who decided what, on which target, and when."""
-    return {"items": list(store.audit_trail)}
+    """Audit trail: who decided what, on which target, and when.
+
+    `outstanding` lists requests that still have no decision, so a viewer does
+    not have to reconstruct that from the append-only trail.
+    """
+    items = list(store.audit_trail)
+    decided = {entry["action_id"] for entry in items if entry["decision"] in ("approved", "rejected")}
+    outstanding = [
+        {"action_id": action_id, "type": action["type"], "target": action["target"], "risk": action["risk"]}
+        for action_id, action in store.pending_actions.items()
+        if action_id not in decided
+    ]
+    return {"items": items, "outstanding": outstanding}
 
 
 @app.post("/api/deploy")

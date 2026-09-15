@@ -329,7 +329,7 @@ def test_audit_trail_records_target_risk_and_approver():
     action_id = pending['action_id']
 
     entry = _audit_for(action_id)
-    assert entry['decision'] == 'pending'
+    assert entry['decision'] == 'requested'
     assert entry['action_type'] == 'scale'
     assert entry['target'] == 'guide-service -> 4 副本'
     assert entry['risk'] == 'medium'
@@ -355,7 +355,7 @@ def test_agent_suggested_action_is_audited():
     reply = client.post('/api/ai/chat', json={'question': '当前系统有什么瓶颈？'}).json()
     action_id = reply['suggested_action']['action_id']
     entry = _audit_for(action_id)
-    assert entry['decision'] == 'pending'
+    assert entry['decision'] == 'requested'
     assert entry['action_type'] == 'scale'
 
 
@@ -398,6 +398,24 @@ def test_integration_check_is_audited():
     client.get('/api/integration-check')
     actions = [item['action_type'] for item in client.get('/api/audit').json()['items']]
     assert 'integration_check' in actions
+
+
+def test_audit_distinguishes_requested_from_outstanding():
+    """A decided request must not look undecided in the append-only trail."""
+    pending = client.post('/api/scale', json={'deployment': 'guide-service', 'replicas': 4}).json()
+    action_id = pending['action_id']
+
+    body = client.get('/api/audit').json()
+    requested = next(item for item in body['items'] if item['action_id'] == action_id)
+    assert requested['decision'] == 'requested'
+    assert any(item['action_id'] == action_id for item in body['outstanding'])
+
+    client.post('/api/agent/approve', json={'action_id': action_id, 'approved': True})
+    after = client.get('/api/audit').json()
+    assert not any(item['action_id'] == action_id for item in after['outstanding']), 'decided request still listed as outstanding'
+    # The request line itself stays: the trail is append-only.
+    assert any(item['action_id'] == action_id and item['decision'] == 'requested' for item in after['items'])
+    assert any(item['action_id'] == action_id and item['decision'] == 'approved' for item in after['items'])
 
 
 def test_deploy_and_rollback_are_audited():

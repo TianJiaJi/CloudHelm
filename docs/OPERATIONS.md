@@ -144,7 +144,11 @@ kubectl apply -f deploy/frontend-deployment.yaml
 curl -s http://localhost:8000/api/audit
 ```
 
-字段：`action_type` / `target` / `risk` / `decision`（pending、approved、rejected、executed）/ `operator` / `timestamp`。
+字段：`action_type` / `target` / `risk` / `decision` / `operator` / `timestamp`。
+`decision` 取值：`requested`（已受理待确认）、`approved`、`rejected`、`executed`（无需审批的变更）。
+
+轨迹是**只追加**的，因此一次已决动作仍会保留它的 `requested` 行 —— 别把它误读成“仍在等待”。
+响应中的 `outstanding` 数组专门列出**尚未决定**的请求。
 本 MVP 不含登录体系，`operator` 由调用方自报，默认 `control-panel`。
 
 ## 已知边界
