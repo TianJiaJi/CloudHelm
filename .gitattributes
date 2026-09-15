@@ -19,9 +19,6 @@
 *.exe  binary
 *.dll  binary
 
-# Git hooks 必须为 LF —— CRLF 会破坏 shebang 导致 hook 无法执行
-/.githooks/* text eol=lf
-
 # 语言级 diff / 统计
 *.md       text eol=lf
 *.json     text eol=lf
