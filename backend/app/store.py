@@ -19,6 +19,9 @@ class RuntimeStore:
         # an attribute so tests can drive it down to 0.
         self.pod_recovery_seconds = 5.0
         self._recovering: dict[str, float] = {}
+        # Pods that are still starting up (ContainerCreating) -> yellow state.
+        self.pod_start_seconds = 3.0
+        self._starting: dict[str, float] = {}
 
     def _make_pods(self) -> list[dict]:
         pods = []
@@ -43,6 +46,31 @@ class RuntimeStore:
             if pod["name"] == pod_name:
                 pod["status"], pod["ready"] = "Terminating", False
         self._recovering[pod_name] = monotonic() + self.pod_recovery_seconds
+
+    def start_pods(self, names: list[str]) -> None:
+        """Mark freshly created pods as ContainerCreating (the yellow state)."""
+        for name in names:
+            for pod in self.pods:
+                if pod["name"] == name:
+                    pod["status"], pod["ready"] = "ContainerCreating", False
+            self._starting[name] = monotonic() + self.pod_start_seconds
+
+    def promote_starting_pods(self) -> list[str]:
+        now = monotonic()
+        promoted: list[str] = []
+        for name in [n for n, due in self._starting.items() if due <= now]:
+            self._starting.pop(name, None)
+            for pod in self.pods:
+                if pod["name"] == name:
+                    pod["status"], pod["ready"] = "Running", True
+                    promoted.append(name)
+                    self.log("SUCCESS", f"Pod {name} is Running", "scheduling")
+        return promoted
+
+    def tick(self) -> None:
+        """Advance time-based pod transitions (start-up and self-healing)."""
+        self.promote_starting_pods()
+        self.recover_due_pods()
 
     def recover_due_pods(self) -> list[str]:
         """Self-heal pods whose restart delay elapsed. Returns recovered names."""

@@ -133,6 +133,43 @@ def test_scaling_out_visibly_improves_metrics():
     assert after['error_rate'] < before['error_rate']
 
 
+def test_new_replicas_start_as_container_creating_then_run():
+    """Spec: 绿=健康, 黄=启动中, 红=故障 —— new pods must pass through the yellow state."""
+    from app.store import store
+
+    original = store.pod_start_seconds
+    store.pod_start_seconds = 60.0
+    try:
+        pending = client.post('/api/scale', json={'deployment': 'ai-agent', 'replicas': 3}).json()
+        client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+
+        starting = [p for p in client.get('/api/pods').json()['items'] if p['status'] == 'ContainerCreating']
+        assert starting, 'new replicas should be ContainerCreating (yellow), not instantly Running'
+        assert all(p['ready'] is False for p in starting)
+
+        store._starting = {name: 0.0 for name in store._starting}
+        promoted = client.get('/api/pods').json()['items']
+        assert all(p['status'] == 'Running' and p['ready'] for p in promoted if p['deployment'] == 'ai-agent')
+    finally:
+        store.pod_start_seconds = original
+
+
+def test_starting_pods_are_logged():
+    from app.store import store
+
+    original = store.pod_start_seconds
+    store.pod_start_seconds = 60.0
+    try:
+        pending = client.post('/api/scale', json={'deployment': 'data-dashboard', 'replicas': 2}).json()
+        client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+        store._starting = {name: 0.0 for name in store._starting}
+        client.get('/api/pods')
+        messages = [entry['message'] for entry in client.get('/api/logs').json()['items']]
+        assert any('is Running' in message for message in messages)
+    finally:
+        store.pod_start_seconds = original
+
+
 def test_pipeline_status_is_available():
     response = client.get('/api/pipeline')
     assert response.status_code == 200

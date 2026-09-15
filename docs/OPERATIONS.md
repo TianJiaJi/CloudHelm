@@ -78,6 +78,7 @@ kubectl apply -f deploy/frontend-deployment.yaml
 | 投影仪分辨率 | 浏览器 resize 实测 1280×720 / 1366×768 / 1920×1080 / 1024×768 | 无横向溢出；5 个 Pod 与 8 个按钮均入首屏 |
 | 清空日志 | 浏览器点击后刷新页面 | 日志归零且**刷新后不再出现**（服务端同步清除），审计留痕 |
 | 指标环比箭头 | 浏览器读取 DOM | 由上一次采样实时计算（如 QPS ↓0.79% bad / 响应 ↓1.81% good），非写死 |
+| Pod 三态颜色 | 浏览器实测扩容瞬间 | 绿 `rgb(53,203,142)` / 黄 `rgb(224,178,63)` ContainerCreating / 红 `rgb(242,110,118)`，见图 `screenshot-pod-states.png` |
 
 未验证（受环境限制）：`docker compose up` 与真实 K8s 集群联调 —— 本机没有 Docker 与 kubeconfig。
 

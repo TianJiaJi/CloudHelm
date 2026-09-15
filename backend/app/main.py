@@ -62,7 +62,7 @@ def audit_executed(action_type: str, target: str, operator: str = "control-panel
 
 
 def build_metrics() -> dict:
-    store.recover_due_pods()
+    store.tick()
     pod_items = store.pods
     if adapter.live:
         try:
@@ -144,7 +144,7 @@ def update_runtime_settings(payload: SettingsRequest):
 
 @app.get("/api/pods")
 def get_pods():
-    store.recover_due_pods()
+    store.tick()
     if adapter.live:
         try:
             return {"items": adapter.pods(), "mode": "live"}
@@ -193,9 +193,12 @@ def deploy(operator: str = "control-panel"):
 
 def execute_scale(payload: ScaleRequest):
     ensure_allowed(payload.deployment)
+    previous = {pod["name"] for pod in store.pods}
     mode = run_live_or_demo(lambda: adapter.scale(payload.deployment, payload.replicas), lambda: None)
     store.replicas[payload.deployment] = payload.replicas
     store.pods = store._make_pods()
+    # Newly created replicas come up as ContainerCreating (yellow) before Running.
+    store.start_pods([pod["name"] for pod in store.pods if pod["name"] not in previous])
     store.log("SUCCESS", f"Scaled {payload.deployment} to {payload.replicas} replicas", "scaling")
     return action_result(f"已将 {payload.deployment} 扩容至 {payload.replicas} 个副本", mode, replicas=payload.replicas)
 
