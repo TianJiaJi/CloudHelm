@@ -148,7 +148,10 @@ curl -s http://localhost:8000/api/audit
 `decision` 取值：`requested`（已受理待确认）、`approved`、`rejected`、`executed`（无需审批的变更）。
 
 轨迹是**只追加**的，因此一次已决动作仍会保留它的 `requested` 行 —— 别把它误读成“仍在等待”。
-响应中的 `outstanding` 数组专门列出**尚未决定**的请求。
+响应中的 `outstanding` 数组专门列出**尚未决定**的请求，并给出剩余等待秒数 `expires_in`。
+
+未决定的审批会在 `APPROVAL_TTL`（默认 120 秒）后自动过期，记为 `decision: expired`。
+这样即使中途刷新页面或关掉浏览器，也不会留下一个没人能处理的悬空请求。
 本 MVP 不含登录体系，`operator` 由调用方自报，默认 `control-panel`。
 
 ## 已知边界

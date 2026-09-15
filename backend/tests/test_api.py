@@ -418,6 +418,42 @@ def test_audit_distinguishes_requested_from_outstanding():
     assert any(item['action_id'] == action_id and item['decision'] == 'approved' for item in after['items'])
 
 
+def test_undecided_approval_expires_instead_of_lingering_forever():
+    """Regression: reloading mid-approval left a request no UI could resolve."""
+    from app.store import store
+
+    original = store.approval_ttl_seconds
+    store.approval_ttl_seconds = 600.0  # far future so it cannot expire early
+    try:
+        pending = client.post('/api/scale', json={'deployment': 'guide-service', 'replicas': 4}).json()
+        action_id = pending['action_id']
+        assert any(item['action_id'] == action_id for item in client.get('/api/audit').json()['outstanding'])
+
+        # Simulate the client going away: nobody decides, the deadline passes.
+        store.pending_actions[action_id]['expires_at'] = 0.0
+        body = client.get('/api/audit').json()
+
+        assert not any(item['action_id'] == action_id for item in body['outstanding']), 'expired request still outstanding'
+        decisions = [item['decision'] for item in body['items'] if item['action_id'] == action_id]
+        assert 'expired' in decisions
+        assert client.post('/api/agent/approve', json={'action_id': action_id, 'approved': True}).status_code == 404
+    finally:
+        store.approval_ttl_seconds = original
+
+
+def test_outstanding_reports_remaining_ttl():
+    from app.store import store
+
+    original = store.approval_ttl_seconds
+    store.approval_ttl_seconds = 90.0
+    try:
+        pending = client.post('/api/scale', json={'deployment': 'guide-service', 'replicas': 2}).json()
+        entry = next(item for item in client.get('/api/audit').json()['outstanding'] if item['action_id'] == pending['action_id'])
+        assert 0 < entry['expires_in'] <= 90
+    finally:
+        store.approval_ttl_seconds = original
+
+
 def test_deploy_and_rollback_are_audited():
     client.post('/api/deploy')
     client.post('/api/rollback')

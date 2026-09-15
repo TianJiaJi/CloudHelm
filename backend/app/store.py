@@ -28,6 +28,9 @@ class RuntimeStore:
         # rebuilds are multi-step: neither is atomic on its own.
         # (Not reproduced in 300 concurrent deploys, but the window is real.)
         self._lock = RLock()
+        # Undecided approvals expire so a reload mid-approval cannot leave a
+        # request that no UI can ever resolve.
+        self.approval_ttl_seconds = 120.0
 
     def _make_pods(self) -> list[dict]:
         pods = []
@@ -161,6 +164,43 @@ class RuntimeStore:
                         recovered.append(name)
                         self.log("SUCCESS", f"Self-healing complete: {name} recovered (restarts={pod['restarts']})", "self-healing")
         return recovered
+
+    def park_approval(self, action_id: str, action: dict) -> None:
+        """Store an undecided action together with its expiry deadline."""
+        with self._lock:
+            self.pending_actions[action_id] = {**action, "expires_at": monotonic() + self.approval_ttl_seconds}
+
+    def take_approval(self, action_id: str) -> dict | None:
+        """Consume an undecided action; None if unknown or already expired."""
+        with self._lock:
+            action = self.pending_actions.pop(action_id, None)
+        if action is None or action.get("expires_at", 0.0) <= monotonic():
+            return None
+        return action
+
+    def expire_stale_approvals(self) -> list[tuple[str, dict]]:
+        """Drop approvals whose deadline has passed and return them."""
+        now = monotonic()
+        expired: list[tuple[str, dict]] = []
+        with self._lock:
+            for action_id in [k for k, v in self.pending_actions.items() if v.get("expires_at", 0.0) <= now]:
+                expired.append((action_id, self.pending_actions.pop(action_id)))
+        return expired
+
+    def outstanding_approvals(self) -> list[dict]:
+        now = monotonic()
+        with self._lock:
+            return [
+                {
+                    "action_id": action_id,
+                    "type": action["type"],
+                    "target": action["target"],
+                    "risk": action["risk"],
+                    "expires_in": max(0, round(action.get("expires_at", now) - now)),
+                }
+                for action_id, action in self.pending_actions.items()
+                if action.get("expires_at", 0.0) > now
+            ]
 
     def audit(self, *, action_type: str, target: str, risk: str, decision: str, action_id: str | None = None, operator: str = "control-panel", detail: str = "") -> dict:
         """Record who decided what, on which target, and when.

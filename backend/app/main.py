@@ -55,10 +55,17 @@ def request_approval(*, action_type: str, target: str, operator: str = "control-
     """
     action_id = str(uuid4())
     risk = RISK_BY_ACTION.get(action_type, "unknown")
-    store.pending_actions[action_id] = {"type": action_type, "target": target, "risk": risk, **params}
+    store.park_approval(action_id, {"type": action_type, "target": target, "risk": risk, **params})
     store.audit(action_id=action_id, action_type=action_type, target=target, risk=risk, decision="requested", operator=operator)
     store.log("WARN", f"High-risk action blocked pending approval by {operator}: {action_type} -> {target}", "security")
     return action_id
+
+
+def sweep_expired_approvals() -> None:
+    """Expire undecided approvals so none can linger unresolved forever."""
+    for action_id, action in store.expire_stale_approvals():
+        store.audit(action_id=action_id, action_type=action["type"], target=action["target"], risk=action["risk"], decision="expired", operator="system", detail="approval timeout")
+        store.log("INFO", f"Approval expired without a decision: {action['type']} -> {action['target']}", "security")
 
 
 def audit_executed(action_type: str, target: str, operator: str = "control-panel", detail: str = "") -> None:
@@ -184,16 +191,14 @@ def clear_logs(operator: str = "control-panel"):
 def get_audit():
     """Audit trail: who decided what, on which target, and when.
 
-    `outstanding` lists requests that still have no decision, so a viewer does
-    not have to reconstruct that from the append-only trail.
+    `outstanding` lists requests that still have no decision (and have not yet
+    expired), so a viewer does not have to reconstruct that from the
+    append-only trail.
     """
+    sweep_expired_approvals()
     items = list(store.audit_trail)
-    decided = {entry["action_id"] for entry in items if entry["decision"] in ("approved", "rejected")}
-    outstanding = [
-        {"action_id": action_id, "type": action["type"], "target": action["target"], "risk": action["risk"]}
-        for action_id, action in store.pending_actions.items()
-        if action_id not in decided
-    ]
+    decided = {entry["action_id"] for entry in items if entry["decision"] in ("approved", "rejected", "expired")}
+    outstanding = [entry for entry in store.outstanding_approvals() if entry["action_id"] not in decided]
     return {"items": items, "outstanding": outstanding}
 
 
@@ -365,7 +370,8 @@ def chat(payload: ChatRequest, operator: str = "control-panel"):
 
 @app.post("/api/agent/approve")
 def approve(payload: AgentApprovalRequest):
-    action = store.pending_actions.pop(payload.action_id, None)
+    sweep_expired_approvals()
+    action = store.take_approval(payload.action_id)
     if not action:
         raise HTTPException(404, "Action approval has expired or does not exist")
     if not payload.approved:
