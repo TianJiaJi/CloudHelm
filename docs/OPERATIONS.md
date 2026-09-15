@@ -74,6 +74,7 @@ kubectl apply -f deploy/frontend-deployment.yaml
 | 流量曲线动画 | 画布指纹两次采样对比 | 持续变化（非静态图） |
 | 扩容→指标联动 | UI 实测扩容后取指标 | QPS 1290→1346，响应 125.3→118.4ms，实例 5→6 |
 | 关闭后备后操作 | 浏览器点击部署 | API 503 + UI 报错，**无伪造成功日志** |
+| 故障注入→自愈 | 浏览器实测（真实 5 秒延迟） | Pod 变红 `rgb(242,110,118)` → 5s 后变绿 `rgb(53,203,142)`，restarts +1 |
 
 未验证（受环境限制）：`docker compose up` 与真实 K8s 集群联调 —— 本机没有 Docker 与 kubeconfig。
 

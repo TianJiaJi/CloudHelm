@@ -61,6 +61,48 @@ def test_agent_reports_unhealthy_pods_in_troubleshooting():
     assert 'guide-service-002' in body['answer']
 
 
+def test_killed_pod_goes_down_then_self_heals():
+    """Acceptance: 故障注入后节点变红，5 秒内自动恢复。"""
+    from app.store import store
+
+    original = store.pod_recovery_seconds
+    store.pod_recovery_seconds = 60.0  # far future: observe the down state first
+    try:
+        target = store.pods[0]['name']
+        pending = client.post('/api/chaos/kill', json={'pod_name': target}).json()
+        client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+
+        down = next(p for p in client.get('/api/pods').json()['items'] if p['name'] == target)
+        assert down['ready'] is False
+        assert down['status'] == 'Terminating'
+
+        # Move the restart deadline into the past and read again.
+        store._recovering[target] = 0.0
+        healed = next(p for p in client.get('/api/pods').json()['items'] if p['name'] == target)
+        assert healed['ready'] is True
+        assert healed['status'] == 'Running'
+        assert healed['restarts'] >= 1
+    finally:
+        store.pod_recovery_seconds = original
+
+
+def test_self_healing_is_logged():
+    from app.store import store
+
+    original = store.pod_recovery_seconds
+    store.pod_recovery_seconds = 60.0
+    try:
+        target = store.pods[0]['name']
+        pending = client.post('/api/chaos/kill', json={'pod_name': target}).json()
+        client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+        store._recovering[target] = 0.0
+        client.get('/api/pods')
+        messages = [entry['message'] for entry in client.get('/api/logs').json()['items']]
+        assert any('Self-healing complete' in message and target in message for message in messages)
+    finally:
+        store.pod_recovery_seconds = original
+
+
 def test_unknown_pod_is_rejected():
     response = client.post('/api/chaos/kill', json={'pod_name': 'unknown-pod'})
     assert response.status_code == 404

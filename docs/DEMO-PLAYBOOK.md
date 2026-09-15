@@ -64,8 +64,10 @@ curl -s http://localhost:8000/api/health
 ### 环节 5：混沌工程 / 容灾 ⭐
 
 - **操作**：点「故障注入」→ 二次确认 → **再批准一次**
-- **期望**：两次确认 → 日志 `deleted ... self-healing started` → 该 Pod 状态变 `Terminating`
+- **期望**：两次确认 → 日志 `deleted ... self-healing started` → 该 Pod **变红**（`Terminating`）
+  → **约 5 秒后自动恢复绿色**（`Running`，restarts +1）→ 日志 `Self-healing complete`
 - **讲解词**：「故意杀掉一个节点，看系统自愈。**注意这里有两道确认** —— 这正是防 AI 误操作的护栏。」
+- **节奏提醒**：变红后默数约 5 秒就会变绿，别跳过这个瞬间 —— 这是本环节的戏点。
 - **失败台词**：「目标 Pod 不在允许范围内，被安全策略拦下了 —— 这也是我们想演示的防护能力。」
 
 ### 环节 6：一键回滚 ⭐
@@ -130,8 +132,9 @@ curl -s http://localhost:8000/api/audit
 | 读取 Pod 列表 | 压测 |
 | 扩容 | 回滚 |
 | 删除 Pod | 熔断 / 降级 |
-| 发布（写 release annotation） | **指标数值**（见下） |
-| 镜像更新 | CI/CD 状态（页面标 `DEMO 模拟`） |
+| Pod 自愈（5 秒恢复，restarts +1） | **指标数值**（见下） |
+| 发布（写 release annotation） | CI/CD 状态（页面标 `DEMO 模拟`） |
+| 镜像更新 |  |
 
 **关于指标**：`demo` 模式下的 QPS / 响应时间 / 错误率 / 流量曲线是**合成的，但对扩容有真实响应**——
 扩容后 QPS 上升、延迟与错误率下降（每个副本贡献 48 QPS，大于抖动幅度，方向稳定）。

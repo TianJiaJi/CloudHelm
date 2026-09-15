@@ -62,6 +62,7 @@ def audit_executed(action_type: str, target: str, operator: str = "control-panel
 
 
 def build_metrics() -> dict:
+    store.recover_due_pods()
     pod_items = store.pods
     if adapter.live:
         try:
@@ -143,6 +144,7 @@ def update_runtime_settings(payload: SettingsRequest):
 
 @app.get("/api/pods")
 def get_pods():
+    store.recover_due_pods()
     if adapter.live:
         try:
             return {"items": adapter.pods(), "mode": "live"}
@@ -304,9 +306,7 @@ def approve(payload: AgentApprovalRequest):
     else:
         pod_name = action["pod_name"]
         mode = run_live_or_demo(lambda: adapter.delete_pod(pod_name), lambda: None)
-        for pod in store.pods:
-            if pod["name"] == pod_name:
-                pod["status"], pod["ready"] = "Terminating", False
+        store.mark_pod_deleted(pod_name)
         store.log("SUCCESS", f"Chaos injection approved: deleted {pod_name}; self-healing started", "chaos")
         result = action_result(f"已删除 {pod_name}，自愈流程已启动", mode)
     store.audit(action_id=payload.action_id, action_type=action["type"], target=action["target"], risk=action["risk"], decision="approved", operator=payload.operator, detail=f"mode={result.get('mode')}")

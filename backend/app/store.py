@@ -1,5 +1,6 @@
 from collections import deque
 from datetime import datetime, timezone
+from time import monotonic
 from uuid import uuid4
 
 
@@ -14,6 +15,10 @@ class RuntimeStore:
         self.audit_trail: deque[dict] = deque(maxlen=200)
         self.traffic: deque[float] = deque(maxlen=12)
         self.pending_actions: dict[str, dict] = {}
+        # Self-healing: a killed pod comes back after this many seconds. Kept as
+        # an attribute so tests can drive it down to 0.
+        self.pod_recovery_seconds = 5.0
+        self._recovering: dict[str, float] = {}
 
     def _make_pods(self) -> list[dict]:
         pods = []
@@ -31,6 +36,27 @@ class RuntimeStore:
         """Append one traffic sample and return the rolling window."""
         self.traffic.append(round(value, 1))
         return list(self.traffic)
+
+    def mark_pod_deleted(self, pod_name: str) -> None:
+        """Take a pod down and schedule its self-healing."""
+        for pod in self.pods:
+            if pod["name"] == pod_name:
+                pod["status"], pod["ready"] = "Terminating", False
+        self._recovering[pod_name] = monotonic() + self.pod_recovery_seconds
+
+    def recover_due_pods(self) -> list[str]:
+        """Self-heal pods whose restart delay elapsed. Returns recovered names."""
+        now = monotonic()
+        recovered: list[str] = []
+        for name in [n for n, due in self._recovering.items() if due <= now]:
+            self._recovering.pop(name, None)
+            for pod in self.pods:
+                if pod["name"] == name:
+                    pod["status"], pod["ready"] = "Running", True
+                    pod["restarts"] = pod.get("restarts", 0) + 1
+                    recovered.append(name)
+                    self.log("SUCCESS", f"Self-healing complete: {name} recovered (restarts={pod['restarts']})", "self-healing")
+        return recovered
 
     def audit(self, *, action_type: str, target: str, risk: str, decision: str, action_id: str | None = None, operator: str = "control-panel", detail: str = "") -> dict:
         """Record who decided what, on which target, and when.
