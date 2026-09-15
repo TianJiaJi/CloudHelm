@@ -48,9 +48,18 @@ docker build -t cloudhelm/frontend:demo frontend
 ```bash
 kubectl apply -f deploy/namespace.yaml
 kubectl apply -f deploy/rbac.yaml
+kubectl apply -f deploy/business-services.yaml   # 被托管的 4 个业务服务
 kubectl apply -f deploy/backend-deployment.yaml
 kubectl apply -f deploy/frontend-deployment.yaml
 ```
+
+业务服务清单（`deploy/business-services.yaml`）提供导览 / AI 智能体 / 数据大屏 / 小程序后端
+四个 **占位工作负载**（Deployment + Service，默认 1 副本，带健康检查、资源限制与 ConfigMap 环境变量）。
+真实的业务应用在各自仓库，这里只保证控制面有**可操作的真实对象**：
+没有它们，真实集群路径下面板看不到任何业务服务，所有按钮都会 404。
+
+> 关键约束：Deployment 名 = `app` 标签 = 容器名 = `ALLOWED_DEPLOYMENTS` 条目。
+> 镜像更新按容器名打补丁，Pod 范围校验按 `app` 标签比对白名单，三者必须一致。
 
 示例 RBAC 仅授权 `cloudhelm` 命名空间内的 Pod 查询/删除和 Deployment 扩缩容/更新，不授予任意命令执行权限。生产环境应进一步按实际服务标签和命名空间收紧。
 
@@ -79,6 +88,7 @@ kubectl apply -f deploy/frontend-deployment.yaml
 | 清空日志 | 浏览器点击后刷新页面 | 日志归零且**刷新后不再出现**（服务端同步清除），审计留痕 |
 | 指标环比箭头 | 浏览器读取 DOM | 由上一次采样实时计算（如 QPS ↓0.79% bad / 响应 ↓1.81% good），非写死 |
 | Pod 三态颜色 | 浏览器实测扩容瞬间 | 绿 `rgb(53,203,142)` / 黄 `rgb(224,178,63)` ContainerCreating / 红 `rgb(242,110,118)`，见图 `screenshot-pod-states.png` |
+| 部署配置对齐 | `test_deploy_config.py` 静态交叉校验 | 环境变量、端口、命名空间、白名单服务与容器名一致性均有断言（已做反向验证确认非空转） |
 
 未验证（受环境限制）：`docker compose up` 与真实 K8s 集群联调 —— 本机没有 Docker 与 kubeconfig。
 

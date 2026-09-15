@@ -69,6 +69,39 @@ def test_container_build_definitions_exist():
     assert (ROOT / "frontend" / "Dockerfile").is_file()
 
 
+def test_allowlisted_services_exist_as_real_workloads():
+    """Regression: the allowlist named services that were never deployed.
+
+    Without these workloads the real-Kubernetes path is dead: the dashboard
+    would list no business services and every operation would 404.
+    """
+    configmap = next(doc for doc in _docs("namespace.yaml") if doc["kind"] == "ConfigMap")
+    allowed = [name.strip() for name in configmap["data"]["ALLOWED_DEPLOYMENTS"].split(",") if name.strip()]
+    assert allowed, "ALLOWED_DEPLOYMENTS is empty"
+
+    docs = _docs("business-services.yaml")
+    deployments = {d["metadata"]["name"]: d for d in docs if d["kind"] == "Deployment"}
+    services = {d["metadata"]["name"] for d in docs if d["kind"] == "Service"}
+
+    for name in allowed:
+        assert name in deployments, f"allowlisted service {name} has no Deployment"
+        assert name in services, f"allowlisted service {name} has no Service"
+
+        deployment = deployments[name]
+        assert deployment["spec"]["replicas"] == 1, f"{name} should default to 1 replica"
+        assert deployment["metadata"]["labels"]["app"] == name, f"{name} must expose an app label the adapter can match"
+
+        containers = deployment["spec"]["template"]["spec"]["containers"]
+        # update_image patches the container by deployment name, so they must agree.
+        assert [c["name"] for c in containers] == [name], f"{name} container name must equal the deployment name"
+
+        container = containers[0]
+        assert "readinessProbe" in container, f"{name} needs a readiness probe"
+        assert "livenessProbe" in container, f"{name} needs a liveness probe"
+        assert "requests" in container["resources"] and "limits" in container["resources"], f"{name} needs resource limits"
+        assert container["envFrom"], f"{name} should take its environment from a ConfigMap"
+
+
 def test_every_setting_is_declared_in_both_deployment_paths():
     """Regression: PROMETHEUS_URL was missing from the K8s ConfigMap.
 

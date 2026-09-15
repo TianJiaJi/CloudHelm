@@ -1,0 +1,156 @@
+# Business services the ops console manages.
+#
+# These are *placeholder* workloads: the real 导览 / AI / 大屏 / 小程序
+# applications live in their own repositories. What matters here is that the
+# control plane has real targets to operate on, with the exact identity the
+# adapter expects:
+#
+#   * metadata.name  == app label == container name == ALLOWED_DEPLOYMENTS entry
+#     (update_image patches container by that name, and the pod scope check
+#      validates the `app` label against the allowlist)
+#   * 1 replica by default, health probes, and resource limits per spec 5.2/5.3
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: business-services-config
+  namespace: cloudhelm
+data:
+  APP_ENV: demo
+  LOG_LEVEL: info
+  GUIDE_CACHE_TTL: "60"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guide-service
+  namespace: cloudhelm
+  labels: { app: guide-service }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: guide-service }
+  template:
+    metadata:
+      labels: { app: guide-service }
+    spec:
+      containers:
+        - name: guide-service
+          image: nginx:1.27-alpine
+          ports: [{ containerPort: 80 }]
+          envFrom: [{ configMapRef: { name: business-services-config } }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, initialDelaySeconds: 3 }
+          livenessProbe: { httpGet: { path: /, port: 80 }, initialDelaySeconds: 8 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guide-service
+  namespace: cloudhelm
+spec:
+  selector: { app: guide-service }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-agent
+  namespace: cloudhelm
+  labels: { app: ai-agent }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ai-agent }
+  template:
+    metadata:
+      labels: { app: ai-agent }
+    spec:
+      containers:
+        - name: ai-agent
+          image: nginx:1.27-alpine
+          ports: [{ containerPort: 80 }]
+          envFrom: [{ configMapRef: { name: business-services-config } }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, initialDelaySeconds: 3 }
+          livenessProbe: { httpGet: { path: /, port: 80 }, initialDelaySeconds: 8 }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-agent
+  namespace: cloudhelm
+spec:
+  selector: { app: ai-agent }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-dashboard
+  namespace: cloudhelm
+  labels: { app: data-dashboard }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: data-dashboard }
+  template:
+    metadata:
+      labels: { app: data-dashboard }
+    spec:
+      containers:
+        - name: data-dashboard
+          image: nginx:1.27-alpine
+          ports: [{ containerPort: 80 }]
+          envFrom: [{ configMapRef: { name: business-services-config } }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, initialDelaySeconds: 3 }
+          livenessProbe: { httpGet: { path: /, port: 80 }, initialDelaySeconds: 8 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-dashboard
+  namespace: cloudhelm
+spec:
+  selector: { app: data-dashboard }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: miniapp-api
+  namespace: cloudhelm
+  labels: { app: miniapp-api }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: miniapp-api }
+  template:
+    metadata:
+      labels: { app: miniapp-api }
+    spec:
+      containers:
+        - name: miniapp-api
+          image: nginx:1.27-alpine
+          ports: [{ containerPort: 80 }]
+          envFrom: [{ configMapRef: { name: business-services-config } }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, initialDelaySeconds: 3 }
+          livenessProbe: { httpGet: { path: /, port: 80 }, initialDelaySeconds: 8 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: miniapp-api
+  namespace: cloudhelm
+spec:
+  selector: { app: miniapp-api }
+  ports: [{ port: 80, targetPort: 80 }]
