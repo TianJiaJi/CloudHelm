@@ -9,6 +9,7 @@ services:
       PROMETHEUS_URL: ""
       NAMESPACE: cloudhelm
       ALLOWED_DEPLOYMENTS: guide-service,ai-agent,data-dashboard,miniapp-api
+      IMAGE_REGISTRIES: cloudhelm,registry.local
     ports:
       - "8000:8000"
     healthcheck:

@@ -56,6 +56,9 @@ python scripts/preflight.py --deploy    # 额外把 K8s 清单应用到当前集
 - `DEMO_FALLBACK=true`：真实 K8s API 不可用或请求失败时使用连贯的演示状态。
 - `DEMO_FALLBACK=false`：K8s 不可用时返回错误，不伪造真实集群结果。
 - `ALLOWED_DEPLOYMENTS`：限制 AI 和控制台可操作的 Deployment 名称。
+- `IMAGE_REGISTRIES`：允许的镜像仓库（默认 `cloudhelm,registry.local`）。
+  镜像是按**完整引用**校验的（仓库 + 路径 + tag/digest），不是前缀匹配 ——
+  `cloudhelm/../evil:1`、`cloudhelm/ai:1; rm -rf /` 这类会被拒。
 - `PROMETHEUS_URL`：真实模式的 Prometheus 地址；真实模式关闭后备时必须配置，避免把固定演示指标当成真实数据。
 
 页面右上角可切换演示后备。模式和动作结果都会通过 API 响应及日志标记；CI/CD 测试状态当前明确标为 DEMO，不能作为真实流水线证据。真实模式下 Pod 计数和指标计数均来自实时集群/Prometheus。

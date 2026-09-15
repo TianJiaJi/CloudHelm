@@ -9,11 +9,16 @@ class Settings(BaseSettings):
     k8s_enabled: bool = True
     allowed_deployments: str = "guide-service,ai-agent,data-dashboard,miniapp-api"
     prometheus_url: str = ""
+    image_registries: str = "cloudhelm,registry.local"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_prefix="")
 
     @property
     def deployment_names(self) -> set[str]:
         return {item.strip() for item in self.allowed_deployments.split(",") if item.strip()}
+
+    @property
+    def approved_registries(self) -> set[str]:
+        return {item.strip() for item in self.image_registries.split(",") if item.strip()}
 
 
 @lru_cache

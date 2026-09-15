@@ -15,3 +15,4 @@ data:
   K8S_ENABLED: "true"
   PROMETHEUS_URL: ""
   ALLOWED_DEPLOYMENTS: guide-service,ai-agent,data-dashboard,miniapp-api
+  IMAGE_REGISTRIES: cloudhelm,registry.local

@@ -12,6 +12,7 @@ from .config import get_settings
 from .k8s import ClusterAdapter, K8sUnavailable
 from .models import AgentApprovalRequest, ChatRequest, ImageUpdateRequest, PodKillRequest, ScaleRequest, SettingsRequest
 from .store import store
+from .validation import parse_approved_image
 
 settings = get_settings()
 store.demo_fallback = settings.demo_fallback
@@ -331,8 +332,10 @@ def chaos_kill(payload: PodKillRequest, operator: str = "control-panel"):
 @app.post("/api/ai/update")
 def update_ai(payload: ImageUpdateRequest, operator: str = "control-panel"):
     ensure_allowed(payload.deployment)
-    if not (payload.image.startswith("cloudhelm/") or payload.image.startswith("registry.local/")):
-        raise HTTPException(400, "Image must come from an approved registry")
+    ok, reason = parse_approved_image(payload.image, settings.approved_registries)
+    if not ok:
+        store.log("WARN", f"Rejected image reference: {payload.image} ({reason})", "security")
+        raise HTTPException(400, f"Image rejected: {reason}")
     action_id = request_approval(action_type="ai_update", target=f"{payload.deployment} <- {payload.image}", operator=operator, deployment=payload.deployment, image=payload.image)
     return {"success": False, "requires_approval": True, "message": "AI 镜像更新属于高风险操作，需要二次确认", "mode": "live" if adapter.live else "demo", "action_id": action_id}
 
