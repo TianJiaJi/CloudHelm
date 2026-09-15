@@ -24,6 +24,32 @@ uvicorn app.main:app --reload --port 8000
 cd frontend && npm install && npm run dev
 ```
 
+## 启动自检
+
+在**任何机器**上都可以先跑一次自检。它对无法验证的链路明确报 `SKIP`
+（而不是假装通过）：
+
+```bash
+python scripts/preflight.py             # 只读静态检查（不需 Docker/K8s）
+python scripts/preflight.py --up        # 额外构建并启动 compose 并实测链路
+python scripts/preflight.py --deploy    # 额外把 K8s 清单应用到当前集群
+```
+
+静态部分覆盖：所需文件、compose 端口 vs nginx listen、nginx 代理、
+设置项与两条部署路径的声明一致性、白名单服务是否有可操作工作负载、
+命名空间统一性、后端测试。
+
+`--up` 会另测：Docker 守护进程、`compose config`、`compose up --build`、
+后端健康检查、前端首页、**nginx 代理 /api**、**WebSocket 日志推送**。
+
+`--deploy` 会另测：集群连通性、应用清单、rollout、
+**RBAC 是否允许 list/delete pods 与 patch deployments**、四个被管服务是否到位。
+
+退出码：0 = 无失败（允许 SKIP/WARN）；1 = 存在失败。
+
+> 在有 Docker 和集群的机器上请务必先跑 `--up --deploy`，
+> 这是目前唯一能真正验证容器与集群链路的途径。
+
 ## 运行模式
 
 - `K8S_ENABLED=true`：尝试读取 kubeconfig 或集群内 ServiceAccount。

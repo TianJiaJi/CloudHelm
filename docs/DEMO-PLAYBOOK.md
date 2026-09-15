@@ -10,10 +10,13 @@
 sh start.sh
 # 或 docker compose up
 
-# 2. 确认后端活着
+# 2. 自检（推荐：一次校验静态、容器、集群三段链路）
+python scripts/preflight.py --up --deploy
+
+# 3. 确认后端活着
 curl -s http://localhost:8000/api/health
 
-# 3. 确认前端可开
+# 4. 确认前端可开
 #    浏览器打开 http://localhost:5173
 ```
 
