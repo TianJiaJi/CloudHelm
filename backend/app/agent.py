@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Any, Callable
-from uuid import uuid4
 from .store import RuntimeStore
 
 
@@ -20,10 +19,13 @@ class OperationsAgent:
     The agent never invents metrics: it always reports the provenance of the
     numbers it uses, and refuses to answer health questions when no data source
     can be read instead of falling back to invented values.
+
+    The agent also never executes anything. It only *describes* a suggested
+    action; the API layer turns that description into an approval request so
+    that every high-risk action is audited in one place.
     """
 
-    def __init__(self, store: RuntimeStore, status_provider: Callable[[], dict[str, Any]] | None = None) -> None:
-        self.store = store
+    def __init__(self, status_provider: Callable[[], dict[str, Any]] | None = None) -> None:
         self.status_provider = status_provider
 
     def status(self) -> dict[str, Any]:
@@ -56,13 +58,20 @@ class OperationsAgent:
             )
 
         if any(word in text for word in ("瓶颈", "扩容", "压力")):
-            action_id = str(uuid4())
-            self.store.pending_actions[action_id] = {"type": "scale", "deployment": "guide-service", "replicas": 4}
             basis = f"当前就绪 Pod {status.get('ready_pods', '?')}/{status.get('total_pods', '?')}（{label}）" if mode != "unavailable" else "当前无法读取集群指标"
             return AgentReply(
                 f"{basis}，导览服务在流量峰值时接近容量上限，建议扩容至 4 个副本。该动作需要人工确认后执行。",
                 "warning",
-                {"action_id": action_id, "label": "扩容导览服务", "risk": "medium"},
+                {
+                    "label": "扩容导览服务",
+                    "risk": "medium",
+                    "request": {
+                        "action_type": "scale",
+                        "target": "guide-service -> 4 副本",
+                        "deployment": "guide-service",
+                        "replicas": 4,
+                    },
+                },
             )
 
         if any(word in text for word in ("报告", "report")):

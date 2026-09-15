@@ -75,12 +75,27 @@ kubectl apply -f deploy/frontend-deployment.yaml
 
 ## 演示流程
 
+完整的 40 分钟编排、现场提问清单与**降级方案**（出问题怎么办）见 [DEMO-PLAYBOOK.md](./DEMO-PLAYBOOK.md)。
+
+简要流程：
+
 1. 打开监控大屏，确认服务状态、指标和日志流。
 2. 执行一键部署，观察版本号和成功日志。
 3. 执行弹性扩容，再运行压测演练，观察副本和指标变化。
 4. 选择故障注入，完成两次确认，观察高风险拦截、自愈日志和状态变化。
 5. 在 AI 助手中询问健康度、瓶颈或报告；涉及扩容时必须人工批准。
 6. 切换关闭演示后备，可验证无 K8s 时系统明确返回失败，而不是伪造成功。
+
+## 审计日志
+
+所有状态变更操作都写入结构化审计轨迹，现场可查：
+
+```bash
+curl -s http://localhost:8000/api/audit
+```
+
+字段：`action_type` / `target` / `risk` / `decision`（pending、approved、rejected、executed）/ `operator` / `timestamp`。
+本 MVP 不含登录体系，`operator` 由调用方自报，默认 `control-panel`。
 
 ## 已知边界
 

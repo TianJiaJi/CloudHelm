@@ -3,6 +3,7 @@ import json
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 from urllib.request import urlopen
+from uuid import uuid4
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from .agent import OperationsAgent
@@ -25,6 +26,9 @@ def ensure_allowed(deployment: str) -> None:
         raise HTTPException(400, f"Deployment is outside the allowed scope: {deployment}")
 
 
+RISK_BY_ACTION = {"scale": "medium", "kill": "high", "ai_update": "high", "deploy": "medium", "rollback": "medium"}
+
+
 def run_live_or_demo(live_call, demo_call):
     if adapter.live:
         try:
@@ -38,6 +42,22 @@ def run_live_or_demo(live_call, demo_call):
         raise HTTPException(503, "Kubernetes API is unavailable and demo fallback is disabled")
     demo_call()
     return "demo"
+
+
+def request_approval(*, action_type: str, target: str, operator: str = "control-panel", **params) -> str:
+    """Park a high-risk action and write the pending audit record."""
+    action_id = str(uuid4())
+    risk = RISK_BY_ACTION.get(action_type, "unknown")
+    store.pending_actions[action_id] = {"type": action_type, "target": target, "risk": risk, **params}
+    store.audit(action_id=action_id, action_type=action_type, target=target, risk=risk, decision="pending", operator=operator)
+    store.log("WARN", f"High-risk action blocked pending approval by {operator}: {action_type} -> {target}", "security")
+    return action_id
+
+
+def audit_executed(action_type: str, target: str, operator: str = "control-panel", detail: str = "") -> None:
+    """Record a state-changing action that does not require approval."""
+    risk = RISK_BY_ACTION.get(action_type, "low")
+    store.audit(action_type=action_type, target=target, risk=risk, decision="executed", operator=operator, detail=detail)
 
 
 def build_metrics() -> dict:
@@ -77,7 +97,7 @@ def agent_status() -> dict:
         return {"mode": "unavailable", "detail": str(exc.detail)}
 
 
-agent = OperationsAgent(store, agent_status)
+agent = OperationsAgent(agent_status)
 
 
 @asynccontextmanager
@@ -134,13 +154,20 @@ def get_logs():
     return {"items": list(store.logs)}
 
 
+@app.get("/api/audit")
+def get_audit():
+    """Audit trail: who decided what, on which target, and when."""
+    return {"items": list(store.audit_trail)}
+
+
 @app.post("/api/deploy")
-def deploy():
+def deploy(operator: str = "control-panel"):
     ensure_allowed("guide-service")
     store.version += 1
     version = f"v3.{store.version}"
     mode = run_live_or_demo(lambda: adapter.deploy("guide-service", version), lambda: None)
     store.log("SUCCESS", f"Deployment completed: release {version}", "deployment")
+    audit_executed("deploy", f"guide-service @ {version}", operator, f"mode={mode}")
     return action_result(f"已部署版本 {version}", mode, version=version)
 
 
@@ -154,11 +181,9 @@ def execute_scale(payload: ScaleRequest):
 
 
 @app.post("/api/scale")
-def scale(payload: ScaleRequest):
+def scale(payload: ScaleRequest, operator: str = "control-panel"):
     ensure_allowed(payload.deployment)
-    action_id = str(__import__('uuid').uuid4())
-    store.pending_actions[action_id] = {"type": "scale", "deployment": payload.deployment, "replicas": payload.replicas}
-    store.log("WARN", f"Scale action blocked pending approval: {payload.deployment} -> {payload.replicas}", "security")
+    action_id = request_approval(action_type="scale", target=f"{payload.deployment} -> {payload.replicas} 副本", operator=operator, deployment=payload.deployment, replicas=payload.replicas)
     return {"success": False, "requires_approval": True, "message": "扩容属于变更操作，需要二次确认", "mode": "live" if adapter.live else "demo", "action_id": action_id}
 
 
@@ -170,10 +195,12 @@ def load_test():
 
 
 @app.post("/api/rollback")
-def rollback():
+def rollback(operator: str = "control-panel"):
+    previous = f"v3.{store.version}"
     if store.version > 1:
         store.version -= 1
-    store.log("SUCCESS", f"Rollback completed: release v3.{store.version}", "rollback")
+    store.log("SUCCESS", f"Rollback completed: {previous} -> v3.{store.version}", "rollback")
+    audit_executed("rollback", f"guide-service: {previous} -> v3.{store.version}", operator)
     return action_result(f"已回滚至版本 v3.{store.version}", "demo", version=f"v3.{store.version}")
 
 
@@ -197,21 +224,23 @@ def diagnostics():
 
 
 @app.post("/api/circuit-breaker")
-def circuit_breaker():
+def circuit_breaker(operator: str = "control-panel"):
     store.ai_available = False
     store.log("WARN", "AI service circuit opened; guide service switched to local cache", "resilience")
+    audit_executed("circuit_breaker", "ai-agent (open)", operator)
     return action_result("AI 服务已熔断，导览服务切换至本地缓存模式", "demo", fallback="local-cache")
 
 
 @app.post("/api/circuit-breaker/recover")
-def circuit_breaker_recover():
+def circuit_breaker_recover(operator: str = "control-panel"):
     store.ai_available = True
     store.log("SUCCESS", "AI service recovered; intelligent mode restored", "resilience")
+    audit_executed("circuit_breaker", "ai-agent (recovered)", operator)
     return action_result("AI 服务已恢复，智能模式重新启用", "demo", fallback="ai")
 
 
 @app.post("/api/chaos/kill")
-def chaos_kill(payload: PodKillRequest):
+def chaos_kill(payload: PodKillRequest, operator: str = "control-panel"):
     target = next((pod for pod in store.pods if pod["name"] == payload.pod_name), None)
     if target and target["deployment"] not in settings.deployment_names:
         raise HTTPException(403, "Pod is outside the allowed deployment scope")
@@ -223,27 +252,29 @@ def chaos_kill(payload: PodKillRequest):
             raise HTTPException(404, "Pod does not exist in the allowed namespace and deployment scope")
     elif not target:
         raise HTTPException(404, "Pod does not exist in the allowed scope")
-    action_id = str(__import__('uuid').uuid4())
-    store.pending_actions[action_id] = {"type": "kill", "pod_name": payload.pod_name}
-    store.log("WARN", f"High-risk action blocked pending approval: delete pod {payload.pod_name}", "security")
+    action_id = request_approval(action_type="kill", target=payload.pod_name, operator=operator, pod_name=payload.pod_name)
     return {"success": False, "requires_approval": True, "message": "故障注入属于高风险操作，需要二次确认", "mode": "live" if adapter.live else "demo", "action_id": action_id}
 
 
 @app.post("/api/ai/update")
-def update_ai(payload: ImageUpdateRequest):
+def update_ai(payload: ImageUpdateRequest, operator: str = "control-panel"):
     ensure_allowed(payload.deployment)
     if not (payload.image.startswith("cloudhelm/") or payload.image.startswith("registry.local/")):
         raise HTTPException(400, "Image must come from an approved registry")
-    action_id = str(__import__('uuid').uuid4())
-    store.pending_actions[action_id] = {"type": "ai_update", "deployment": payload.deployment, "image": payload.image}
-    store.log("WARN", f"AI image update blocked pending approval: {payload.image}", "security")
+    action_id = request_approval(action_type="ai_update", target=f"{payload.deployment} <- {payload.image}", operator=operator, deployment=payload.deployment, image=payload.image)
     return {"success": False, "requires_approval": True, "message": "AI 镜像更新属于高风险操作，需要二次确认", "mode": "live" if adapter.live else "demo", "action_id": action_id}
 
 
 @app.post("/api/ai/chat")
-def chat(payload: ChatRequest):
+def chat(payload: ChatRequest, operator: str = "control-panel"):
     reply = agent.chat(payload.question)
-    return {"answer": reply.answer, "severity": reply.severity, "suggested_action": reply.suggested_action}
+    suggested = None
+    if reply.suggested_action:
+        suggested = dict(reply.suggested_action)
+        request = suggested.pop("request", None)
+        if request:
+            suggested["action_id"] = request_approval(operator=operator, **request)
+    return {"answer": reply.answer, "severity": reply.severity, "suggested_action": suggested}
 
 
 @app.post("/api/agent/approve")
@@ -252,7 +283,8 @@ def approve(payload: AgentApprovalRequest):
     if not action:
         raise HTTPException(404, "Action approval has expired or does not exist")
     if not payload.approved:
-        store.log("INFO", f"High-risk action rejected: {action['type']}", "security")
+        store.audit(action_id=payload.action_id, action_type=action["type"], target=action["target"], risk=action["risk"], decision="rejected", operator=payload.operator)
+        store.log("INFO", f"High-risk action rejected by {payload.operator}: {action['type']} -> {action['target']}", "security")
         return action_result("已取消高风险操作", "demo")
     if action["type"] == "scale":
         result = execute_scale(ScaleRequest(deployment=action["deployment"], replicas=action["replicas"]))
@@ -268,6 +300,7 @@ def approve(payload: AgentApprovalRequest):
                 pod["status"], pod["ready"] = "Terminating", False
         store.log("SUCCESS", f"Chaos injection approved: deleted {pod_name}; self-healing started", "chaos")
         result = action_result(f"已删除 {pod_name}，自愈流程已启动", mode)
+    store.audit(action_id=payload.action_id, action_type=action["type"], target=action["target"], risk=action["risk"], decision="approved", operator=payload.operator, detail=f"mode={result.get('mode')}")
     return result
 
 

@@ -23,6 +23,7 @@ class ChatRequest(BaseModel):
 class AgentApprovalRequest(BaseModel):
     action_id: str = Field(min_length=1, max_length=64)
     approved: bool
+    operator: str = Field(default="control-panel", max_length=64)
 
 
 class SettingsRequest(BaseModel):

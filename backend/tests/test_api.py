@@ -78,3 +78,50 @@ def test_ai_update_requires_approval_and_registry_allowlist():
     assert pending.json()['requires_approval'] is True
     approved = client.post('/api/agent/approve', json={'action_id': pending.json()['action_id'], 'approved': True})
     assert approved.status_code == 200
+
+
+def _audit_for(action_id):
+    return next(item for item in client.get('/api/audit').json()['items'] if item['action_id'] == action_id)
+
+
+def test_audit_trail_records_target_risk_and_approver():
+    pending = client.post('/api/scale', json={'deployment': 'guide-service', 'replicas': 4}).json()
+    action_id = pending['action_id']
+
+    entry = _audit_for(action_id)
+    assert entry['decision'] == 'pending'
+    assert entry['action_type'] == 'scale'
+    assert entry['target'] == 'guide-service -> 4 副本'
+    assert entry['risk'] == 'medium'
+    assert entry['timestamp']
+
+    client.post('/api/agent/approve', json={'action_id': action_id, 'approved': True, 'operator': 'tian'})
+    decided = _audit_for(action_id)
+    assert decided['decision'] == 'approved'
+    assert decided['operator'] == 'tian'
+
+
+def test_audit_trail_records_rejection():
+    pending = client.post('/api/chaos/kill', json={'pod_name': 'guide-service-001'}).json()
+    action_id = pending['action_id']
+    client.post('/api/agent/approve', json={'action_id': action_id, 'approved': False, 'operator': 'reviewer'})
+    decided = _audit_for(action_id)
+    assert decided['decision'] == 'rejected'
+    assert decided['operator'] == 'reviewer'
+    assert decided['risk'] == 'high'
+
+
+def test_agent_suggested_action_is_audited():
+    reply = client.post('/api/ai/chat', json={'question': '当前系统有什么瓶颈？'}).json()
+    action_id = reply['suggested_action']['action_id']
+    entry = _audit_for(action_id)
+    assert entry['decision'] == 'pending'
+    assert entry['action_type'] == 'scale'
+
+
+def test_deploy_and_rollback_are_audited():
+    client.post('/api/deploy')
+    client.post('/api/rollback')
+    decisions = [(item['action_type'], item['decision']) for item in client.get('/api/audit').json()['items']]
+    assert ('deploy', 'executed') in decisions
+    assert ('rollback', 'executed') in decisions
