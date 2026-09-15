@@ -12,6 +12,7 @@ class RuntimeStore:
         self.pods = self._make_pods()
         self.logs: deque[dict] = deque(maxlen=300)
         self.audit_trail: deque[dict] = deque(maxlen=200)
+        self.traffic: deque[float] = deque(maxlen=12)
         self.pending_actions: dict[str, dict] = {}
 
     def _make_pods(self) -> list[dict]:
@@ -25,6 +26,11 @@ class RuntimeStore:
         entry = {"id": str(uuid4()), "timestamp": datetime.now(timezone.utc).isoformat(), "level": level, "message": message, "source": source}
         self.logs.appendleft(entry)
         return entry
+
+    def push_traffic(self, value: float) -> list[float]:
+        """Append one traffic sample and return the rolling window."""
+        self.traffic.append(round(value, 1))
+        return list(self.traffic)
 
     def audit(self, *, action_type: str, target: str, risk: str, decision: str, action_id: str | None = None, operator: str = "control-panel", detail: str = "") -> dict:
         """Record who decided what, on which target, and when.

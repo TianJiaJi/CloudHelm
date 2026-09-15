@@ -70,6 +70,10 @@ kubectl apply -f deploy/frontend-deployment.yaml
 | `/api` 代理 | `curl :5173/api/health` | 正确转发至后端 |
 | WebSocket 日志 | 经 Vite 代理连接 `/api/logs/ws` | 收到日志事件 |
 | 控制台交互 | 浏览器点击部署/排查/AI 问答 | 状态与日志按预期更新 |
+| 8 个控制按钮全流程 | 浏览器逐个实测（含两级弹窗） | 均正常，见 DEMO-PLAYBOOK |
+| 流量曲线动画 | 画布指纹两次采样对比 | 持续变化（非静态图） |
+| 扩容→指标联动 | UI 实测扩容后取指标 | QPS 1290→1346，响应 125.3→118.4ms，实例 5→6 |
+| 关闭后备后操作 | 浏览器点击部署 | API 503 + UI 报错，**无伪造成功日志** |
 
 未验证（受环境限制）：`docker compose up` 与真实 K8s 集群联调 —— 本机没有 Docker 与 kubeconfig。
 

@@ -51,6 +51,25 @@ def test_metrics_are_explicitly_demo_without_prometheus():
     assert response.json()['mode'] == 'demo'
 
 
+def test_traffic_series_accumulates_over_polls():
+    first = client.get('/api/metrics').json()['traffic']
+    second = client.get('/api/metrics').json()['traffic']
+    assert len(second) >= len(first)
+    assert len(second) >= 2
+    assert all(value > 0 for value in second)
+
+
+def test_scaling_out_visibly_improves_metrics():
+    before = client.get('/api/metrics').json()
+    pending = client.post('/api/scale', json={'deployment': 'guide-service', 'replicas': 5}).json()
+    client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+    after = client.get('/api/metrics').json()
+    assert after['total_pods'] > before['total_pods']
+    assert after['qps'] > before['qps']
+    assert after['latency_ms'] < before['latency_ms']
+    assert after['error_rate'] < before['error_rate']
+
+
 def test_pipeline_status_is_available():
     response = client.get('/api/pipeline')
     assert response.status_code == 200

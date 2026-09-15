@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 from urllib.request import urlopen
@@ -82,12 +83,20 @@ def build_metrics() -> dict:
             qps = round(query('sum(rate(http_requests_total[1m]))'), 2)
             latency = round(query('1000 * histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[1m])) by (le))'), 2)
             errors = round(query('100 * sum(rate(http_requests_total{status=~"5.."}[1m])) / sum(rate(http_requests_total[1m]))'), 3)
-            return {"mode": "live", "qps": qps, "latency_ms": latency, "error_rate": errors, "ready_pods": ready, "total_pods": len(pod_items), "traffic": [qps]}
+            return {"mode": "live", "qps": qps, "latency_ms": latency, "error_rate": errors, "ready_pods": ready, "total_pods": len(pod_items), "traffic": store.push_traffic(qps)}
         except Exception as exc:
             store.log("WARN", f"Prometheus metrics unavailable: {exc}", "metrics")
             if not store.demo_fallback:
                 raise HTTPException(503, "Prometheus metrics unavailable")
-    return {"mode": "demo", "qps": 1284, "latency_ms": 86, "error_rate": 0.18, "ready_pods": ready, "total_pods": len(pod_items), "traffic": [820, 910, 880, 1020, 1160, 1090, 1284]}
+
+    # Synthetic but *responsive* demo metrics: scaling out raises served
+    # throughput and lowers latency/error rate, so the dashboard visibly reacts.
+    # The per-replica delta is deliberately larger than the jitter so the
+    # direction is deterministic. Always reported as mode="demo".
+    qps = round(1050 + 48 * ready + random.uniform(-12, 12), 1)
+    latency = round(max(32.0, 160 - 7 * ready + random.uniform(-2, 2)), 1)
+    errors = round(max(0.04, 0.6 - 0.06 * ready + random.uniform(-0.015, 0.015)), 3)
+    return {"mode": "demo", "qps": qps, "latency_ms": latency, "error_rate": errors, "ready_pods": ready, "total_pods": len(pod_items), "traffic": store.push_traffic(qps)}
 
 
 def agent_status() -> dict:
