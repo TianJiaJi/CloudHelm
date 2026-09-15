@@ -9,7 +9,10 @@ let lastMode = null
 const metrics = ref({ qps: 0, latency_ms: 0, error_rate: 0, ready_pods: 0, total_pods: 0, traffic: [] })
 const health = ref({ k8s_connected: false }); const pipeline = ref(null)
 const pods = ref([]); const logs = ref([]); const messages = ref([]); const question = ref(''); const busy = ref(''); const demoFallback = ref(true); const chart = ref(null); let chartInstance; let refreshTimer; let logSocket; let reconnectTimer
-const modeLabel = computed(() => demoFallback.value ? '演示后备已开启' : '真实集群模式')
+const modeLabel = computed(() => {
+  if (demoFallback.value) return '演示后备已开启'
+  return health.value.k8s_connected ? '真实集群模式' : '后备已关闭 · 未连接集群'
+})
 const actionButtons = [{ key: 'deploy', label: '一键部署', icon: Rocket }, { key: 'scale', label: '弹性扩容', icon: Zap }, { key: 'load', label: '压测演练', icon: Gauge }, { key: 'chaos', label: '故障注入', icon: ShieldAlert, danger: true }, { key: 'rollback', label: '一键回滚', icon: RefreshCw }, { key: 'diagnostics', label: '故障排查', icon: Activity }, { key: 'circuit', label: '熔断降级', icon: ShieldAlert, danger: true }, { key: 'ai', label: '更新 AI 服务', icon: Bot }]
 async function refresh() { try { const [h, m, p, l, s, ci] = await Promise.all([api('/api/health'), api('/api/metrics'), api('/api/pods'), api('/api/logs'), api('/api/settings'), api('/api/pipeline')]); health.value = h; pipeline.value = ci; metrics.value = m; pods.value = p.items; logs.value = l.items; demoFallback.value = s.demo_fallback; await nextTick(); renderChart(m.traffic) } catch (error) { ElMessage.error(error.message) } }
 function renderChart(values) { if (!chart.value) return; chartInstance ||= echarts.init(chart.value); chartInstance.setOption({ animationDuration: 500, grid: { left: 8, right: 12, top: 18, bottom: 4, containLabel: true }, xAxis: { type: 'category', boundaryGap: false, data: values.map((_, i) => `${i * 2}s`), axisLine: { lineStyle: { color: '#334155' } }, axisLabel: { color: '#718096' } }, yAxis: { type: 'value', splitLine: { lineStyle: { color: '#1e293b' } }, axisLabel: { color: '#718096' } }, series: [{ data: values, type: 'line', smooth: true, symbol: 'none', lineStyle: { color: '#38bdf8', width: 3 }, areaStyle: { color: 'rgba(56,189,248,.12)' } }] }) }
