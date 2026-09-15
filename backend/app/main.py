@@ -227,6 +227,55 @@ def rollback(operator: str = "control-panel"):
     return action_result(f"已回滚至版本 v3.{store.version}", "demo", version=f"v3.{store.version}")
 
 
+@app.get("/api/integration-check")
+def integration_check(operator: str = "control-panel"):
+    """全端联调: verify every managed service is actually serving end to end.
+
+    A service counts as connected only when it has at least one ready replica,
+    and — in live mode — when its Service object exists so traffic has a route.
+    """
+    store.tick()
+    pod_items = store.pods
+    mode = "demo"
+    service_names: set[str] | None = None
+    if adapter.live:
+        try:
+            pod_items = adapter.pods()
+            service_names = adapter.service_names()
+            mode = "live"
+        except Exception as exc:
+            store.log("WARN", f"Integration check read fallback: {exc}", "integration")
+            if not store.demo_fallback:
+                raise HTTPException(503, "Cannot read cluster state for the integration check")
+
+    results = []
+    for name in sorted(settings.deployment_names):
+        pods = [pod for pod in pod_items if pod["deployment"] == name]
+        ready = [pod for pod in pods if pod["ready"]]
+        checks = {"replicas": len(pods) > 0, "ready": bool(ready)}
+        if service_names is not None:
+            checks["service"] = name in service_names
+        results.append({
+            "service": name,
+            "connected": all(checks.values()),
+            "ready": len(ready),
+            "total": len(pods),
+            "failed_checks": [key for key, passed in checks.items() if not passed],
+        })
+
+    passed = sum(1 for item in results if item["connected"])
+    failed = [item["service"] for item in results if not item["connected"]]
+    summary = f"全端联调通过：{passed}/{len(results)} 个服务已连通" if not failed else f"全端联调发现 {len(failed)} 个服务未连通：{', '.join(failed)}"
+
+    for item in results:
+        detail = f" (failed: {', '.join(item['failed_checks'])})" if item["failed_checks"] else ""
+        store.log("SUCCESS" if item["connected"] else "ERROR", f"Integration {item['service']}: {item['ready']}/{item['total']} ready{detail}", "integration")
+    store.log("SUCCESS" if not failed else "WARN", summary, "integration")
+    audit_executed("integration_check", f"{passed}/{len(results)} services", operator)
+
+    return {"success": True, "mode": mode, "passed": passed, "total": len(results), "services": results, "summary": summary}
+
+
 @app.get("/api/diagnostics")
 def diagnostics():
     pod_items = store.pods

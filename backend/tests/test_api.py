@@ -238,6 +238,47 @@ def test_agent_suggested_action_is_audited():
     assert entry['action_type'] == 'scale'
 
 
+def test_integration_check_reports_every_managed_service():
+    """六类核心流程之一的全端联调必须有真实实现, 而非旁白。"""
+    body = client.get('/api/integration-check').json()
+    assert body['success'] is True
+    assert body['mode'] == 'demo'
+    names = [item['service'] for item in body['services']]
+    assert names == sorted(['guide-service', 'ai-agent', 'data-dashboard', 'miniapp-api'])
+    assert body['passed'] == body['total'] == len(names)
+    assert all(item['connected'] for item in body['services'])
+    assert '全端联调通过' in body['summary']
+
+
+def test_integration_check_detects_a_broken_service():
+    from app.store import store
+
+    original = store.pod_recovery_seconds
+    store.pod_recovery_seconds = 60.0
+    try:
+        # Earlier tests may have scaled this service, so take down *all* its replicas.
+        targets = [p['name'] for p in store.pods if p['deployment'] == 'data-dashboard']
+        assert targets
+        for target in targets:
+            pending = client.post('/api/chaos/kill', json={'pod_name': target}).json()
+            client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+
+        body = client.get('/api/integration-check').json()
+        broken = next(item for item in body['services'] if item['service'] == 'data-dashboard')
+        assert broken['connected'] is False
+        assert 'ready' in broken['failed_checks']
+        assert body['passed'] < body['total']
+        assert '未连通' in body['summary']
+    finally:
+        store.pod_recovery_seconds = original
+
+
+def test_integration_check_is_audited():
+    client.get('/api/integration-check')
+    actions = [item['action_type'] for item in client.get('/api/audit').json()['items']]
+    assert 'integration_check' in actions
+
+
 def test_deploy_and_rollback_are_audited():
     client.post('/api/deploy')
     client.post('/api/rollback')

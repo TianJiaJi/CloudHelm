@@ -47,6 +47,11 @@ class ClusterAdapter:
         result = self.apps.list_namespaced_deployment(self.settings.namespace)
         return {item.metadata.name for item in result.items}
 
+    def service_names(self) -> set[str]:
+        self._require_live()
+        result = self.core.list_namespaced_service(self.settings.namespace)
+        return {item.metadata.name for item in result.items}
+
     def deploy(self, deployment: str, version: str) -> None:
         self._require_live()
         self.apps.patch_namespaced_deployment(deployment, self.settings.namespace, {"spec": {"template": {"metadata": {"annotations": {"cloudhelm.io/release": version}}}}})

@@ -89,6 +89,7 @@ kubectl apply -f deploy/frontend-deployment.yaml
 | 指标环比箭头 | 浏览器读取 DOM | 由上一次采样实时计算（如 QPS ↓0.79% bad / 响应 ↓1.81% good），非写死 |
 | Pod 三态颜色 | 浏览器实测扩容瞬间 | 绿 `rgb(53,203,142)` / 黄 `rgb(224,178,63)` ContainerCreating / 红 `rgb(242,110,118)`，见图 `screenshot-pod-states.png` |
 | 部署配置对齐 | `test_deploy_config.py` 静态交叉校验 | 环境变量、端口、命名空间、白名单服务与容器名一致性均有断言（已做反向验证确认非空转） |
+| 全端联调 | 浏览器点击 + 接口实测 | 4/4 通过；杀掉某服务全部副本后变为 3/4 并指出 `failed=['ready']` |
 
 未验证（受环境限制）：`docker compose up` 与真实 K8s 集群联调 —— 本机没有 Docker 与 kubeconfig。
 
