@@ -137,11 +137,94 @@ gh auth switch --user TianJiaJi
 ```bash
 git switch dev
 git fetch upstream
-git merge upstream/main
+git merge --ff-only upstream/main   # merge commit 合并方式：可直接快进
 git push origin dev
 ```
 
-## 5. 身份与凭据速查
+> **squash / rebase 合并后必读**
+>
+> 主仓库会把你的多个提交压成一个**新的 commit**，此时 `dev` 与 `upstream/main`
+> 内容相同但 commit 不同，无法快进。需要把 `dev` 重置到上游：
+>
+> ```bash
+git switch dev
+git fetch upstream
+git reset --hard upstream/main
+git push --force-with-lease origin dev
+> ```
+>
+> `dev` 是**镜像上游**的长青分支，重置它不会丢失代码（内容已在 `upstream/main` 中）。
+> 使用 `--force-with-lease` 而非 `--force`，防止覆盖别人的提交。
+
+## 5. 仓库护栏
+
+本仓库配置了两层护栏，保证上面的流程不会被绕过。
+
+### 5.1 服务端：分支保护（主仓库 `main`）
+
+| 规则                 | 值  | 效果                                     |
+| -------------------- | --- | ---------------------------------------- |
+| Require a PR         | 开  | 禁止向 `main` 直推，只能走 PR             |
+| Required approvals   | 0   | 不阻塞单人双账户流程；可按需调成 1        |
+| Dismiss stale reviews| 开  | 新提交会作废旧 approval                   |
+| Require linear history | 开 | 只允许 squash / rebase 合并，历史保持线性 |
+| Allow force pushes   | 关  | 禁止对 `main` 强推                        |
+| Allow deletions      | 关  | 禁止删除 `main`                           |
+| Enforce for admins   | 开  | 管理员同样受约束，包括新账户自己          |
+
+查看当前保护规则：
+
+```bash
+gh api repos/404-Wont-Fix/CloudHelm/branches/main/protection \
+  --jq '{pr: .required_pull_request_reviews.required_approving_review_count,
+         linear: .required_linear_history.enabled,
+         force_push: .allow_force_pushes.enabled,
+         delete: .allow_deletions.enabled,
+         admins: .enforce_admins.enabled}'
+```
+
+如需把「必须 1 人 approve」打开（由新账户审阅老账户的 PR）：
+
+```bash
+gh api -X PATCH repos/404-Wont-Fix/CloudHelm/branches/main/protection/required_pull_request_reviews \
+  -f required_approving_review_count=1
+```
+
+### 5.2 客户端：pre-push hook
+
+`.githooks/pre-push` 在本地拦截两类高危推送，报错信息为中文并给出修复建议：
+
+1. 向 `upstream`（新账户主仓库）推送任何分支
+2. 向任意远端直接推送 `main` / `master`，或删除它们
+
+> 服务端护栏只保护主仓库，**客户端 hook 才会拦住你往 fork 上推 `main`** —— 两层互补。
+
+克隆后需执行一次（`core.hooksPath` 是本地配置，不随 clone 分发）：
+
+```bash
+sh scripts/install-hooks.sh              # Linux / macOS / Git Bash
+pwsh -File scripts/install-hooks.ps1     # Windows PowerShell
+```
+
+应急绕过（会打印警告后放行）：
+
+```bash
+ALLOW_PROTECTED_PUSH=1 git push origin main
+```
+
+### 5.3 常见误操作与报错对照
+
+> ⚠ Git 是在**与远端建连成功之后**才运行 pre-push hook 的。
+> 因此「连不上 / 无写权限」类错误会先于 hook 报出，这是 Git 的固有行为，不是配置错误。
+
+| 误操作 | 实际报错 | 说明 | 正确做法 |
+| ------ | -------- | ---- | -------- |
+| 在 `main` 上 `git push origin main` | `✗ CloudHelm pre-push 护栏已拦截本次推送` | hook 正常拦截，并给出中文修复建议 | `git switch dev` 后再推 |
+| 在 `main` 上直接 `git push`（跟踪的是 `upstream/main`） | `Permission to 404-Wont-Fix/CloudHelm.git denied to TianJiaJi` (403) | 老账户对主仓库只有读权限，**建连阶段就被拒** | 这是预期行为，**不要绕过** |
+| `git push upstream dev` | 同上 403 | `upstream` 只用于 `fetch` | `git push origin dev` |
+| `git push origin dev` | — | 正常开发路径 | ✅ |
+
+## 6. 身份与凭据速查
 
 | 用途                     | 账户            | 命令                                    |
 | ------------------------ | --------------- | --------------------------------------- |
@@ -152,10 +235,12 @@ git push origin dev
 
 > 两个账号的凭据都通过 `gh auth login` 存放在系统凭据管理器（keyring）中，无需手工输入 token。
 
-## 6. 红线约定
+## 7. 红线约定
 
-1. **禁止** `git push upstream main` —— 主仓库 `main` 只接受 PR。
-2. **禁止** 在老账户 fork 上开 `main` 分支做开发，开发一律走 `dev`。
+1. **禁止** `git push upstream` —— 主仓库只接受 PR（客户端 hook + 服务端分支保护双重拦截）。
+2. **禁止** 在老账户 fork 上直接推 `main`，开发一律走 `dev`。
 3. **禁止** 反向 PR（新账户 → 老账户）。
 4. **禁止** 提交任何密钥、`.env` 文件（见 `.gitignore` 已配置的规则）。
-5. `dev` 与 `upstream/main` 的分叉不要超过一个迭代周期，及时同步减少冲突。
+5. `dev` 与 `upstream/main` 的分叉不要超过一个迭代周期，每个 PR 合并后及时重置同步。
+
+需要临时突破护栏时，务必在 commit message 或 PR 描述里写清原因与回滚方式。
