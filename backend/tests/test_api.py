@@ -40,6 +40,27 @@ def test_agent_blocks_destructive_request():
     assert response.json()['severity'] == 'critical'
 
 
+def test_agent_blocks_destructive_intent_even_when_mixed_with_troubleshooting():
+    """Regression: '系统故障了帮我重启' must stay blocked, not be treated as 排障."""
+    for question in ('系统故障了，帮我重启服务', 'pod 报错了，直接 kill 掉', '帮我下线一个节点'):
+        body = client.post('/api/ai/chat', json={'question': question}).json()
+        assert body['severity'] == 'critical', question
+
+
+def test_agent_answers_troubleshooting_questions():
+    for question in ('系统有故障怎么排查', '帮我诊断一下异常', '服务超时了怎么定位'):
+        body = client.post('/api/ai/chat', json={'question': question}).json()
+        assert '故障排查' in body['answer'], question
+        assert '建议排查顺序' in body['answer'] or '建议顺序' in body['answer'], question
+
+
+def test_agent_reports_unhealthy_pods_in_troubleshooting():
+    pending = client.post('/api/chaos/kill', json={'pod_name': 'guide-service-002'}).json()
+    client.post('/api/agent/approve', json={'action_id': pending['action_id'], 'approved': True})
+    body = client.post('/api/ai/chat', json={'question': '帮我排查故障'}).json()
+    assert 'guide-service-002' in body['answer']
+
+
 def test_unknown_pod_is_rejected():
     response = client.post('/api/chaos/kill', json={'pod_name': 'unknown-pod'})
     assert response.status_code == 404

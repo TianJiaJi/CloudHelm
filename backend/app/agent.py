@@ -42,6 +42,15 @@ class OperationsAgent:
         mode = status.get("mode", "unavailable")
         label = MODE_LABEL.get(mode, MODE_LABEL["unavailable"])
 
+        # Destructive intent is evaluated first so that mixed phrasing such as
+        # "系统故障了，帮我重启" is still blocked instead of matched as a
+        # troubleshooting or health question.
+        if any(word in text for word in ("删 pod", "删除 pod", "杀 pod", "kill", "重启", "restart", "下线")):
+            return AgentReply(
+                "该请求涉及破坏性集群操作，已被安全策略拦截。请在控制面板中选择目标并完成二次确认；我不会代为执行。",
+                "critical",
+            )
+
         if any(word in text for word in ("健康", "health", "状态")):
             if mode == "unavailable":
                 return AgentReply(
@@ -84,7 +93,27 @@ class OperationsAgent:
                 f"- 数据来源：**{label}**，扩容/回滚/压测等动作在演示后备下为模拟执行。"
             )
 
-        if any(word in text for word in ("删 pod", "删除 pod", "杀 pod", "kill", "重启")):
-            return AgentReply("该请求涉及破坏性集群操作，已被安全策略拦截。请在控制面板中选择目标并完成二次确认。", "critical")
+        if any(word in text for word in ("排障", "排查", "故障", "异常", "诊断", "定位", "报错", "超时", "oom")):
+            if mode == "unavailable":
+                return AgentReply("## 故障排查\n**无法读取集群状态**，因此无法定位问题。请先恢复集群连接或在设置中开启演示后备。", "warning")
+            unhealthy = status.get("unhealthy_pods") or []
+            if unhealthy:
+                return AgentReply(
+                    f"## 故障排查（{label}）\n"
+                    f"- 异常 Pod（{len(unhealthy)}）：{', '.join(unhealthy)}\n"
+                    f"- 就绪：{status.get('ready_pods', '?')}/{status.get('total_pods', '?')}\n"
+                    f"- 错误率：{status.get('error_rate', '?')}%，P95：{status.get('latency_ms', '?')} ms\n\n"
+                    f"**建议顺序**：1) 看实时日志定位报错 2) 重启异常 Pod 恢复 3) 扩容分摊负载\n"
+                    f"重启/扩容属于变更操作，需在控制面板二次确认。",
+                    "warning",
+                )
+            return AgentReply(
+                f"## 故障排查（{label}）\n"
+                f"- 未发现异常 Pod，{status.get('ready_pods', '?')}/{status.get('total_pods', '?')} 就绪\n"
+                f"- 错误率 {status.get('error_rate', '?')}%，P95 {status.get('latency_ms', '?')} ms\n\n"
+                f"**建议排查顺序**：1) 看实时日志有无 ERROR/WARN 2) 执行「故障排查」拉全量诊断 "
+                f"3) 关注错误率与延迟趋势是否抬头\n"
+                f"如需进一步定位，请告诉我具体现象（如哪个服务、什么报错）。"
+            )
 
         return AgentReply("我可以帮助分析健康度、瓶颈、生成报告和排查故障。涉及扩容、重启、删除 Pod 等操作时，我会先给出建议并等待人工确认。")
