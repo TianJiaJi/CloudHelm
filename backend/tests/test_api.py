@@ -207,3 +207,14 @@ def test_deploy_and_rollback_are_audited():
     decisions = [(item['action_type'], item['decision']) for item in client.get('/api/audit').json()['items']]
     assert ('deploy', 'executed') in decisions
     assert ('rollback', 'executed') in decisions
+
+
+def test_clear_logs_empties_buffer_and_is_audited():
+    client.post('/api/load-test')
+    assert client.get('/api/logs').json()['items']
+    cleared = client.delete('/api/logs').json()
+    assert cleared['success'] is True
+    assert cleared['cleared'] > 0
+    assert client.get('/api/logs').json()['items'] == []
+    actions = [(item['action_type'], item['decision']) for item in client.get('/api/audit').json()['items']]
+    assert ('clear_logs', 'executed') in actions

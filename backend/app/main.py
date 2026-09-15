@@ -165,6 +165,15 @@ def get_logs():
     return {"items": list(store.logs)}
 
 
+@app.delete("/api/logs")
+def clear_logs(operator: str = "control-panel"):
+    """Clear the log buffer. Recorded in the audit trail (which is separate)."""
+    cleared = len(store.logs)
+    store.logs.clear()
+    audit_executed("clear_logs", f"log buffer ({cleared} entries)", operator)
+    return {"success": True, "cleared": cleared}
+
+
 @app.get("/api/audit")
 def get_audit():
     """Audit trail: who decided what, on which target, and when."""
