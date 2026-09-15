@@ -1,16 +1,28 @@
-# 协作工作流（双账户）
+# 协作工作流（双仓库）
 
-老账户 `TianJiaJi` 的仓库可以理解为新账户 `404-Wont-Fix` 主仓库的一个克隆副本：
-**日常在 `dev` 上开发、推送到老账户；需要同步到主仓库时再走 PR。**
+## 0. 先弄清楚：本项目有两个仓库
 
-除 GitHub 自身的权限外，本仓库**没有设置任何额外限制**（无分支保护、无 pre-push hook）。
+| 角色         | 仓库                     | 地址                                          | 本地 remote | 权限                  |
+| ------------ | ------------------------ | --------------------------------------------- | ----------- | --------------------- |
+| **总仓库**   | `404-Wont-Fix/CloudHelm` | https://github.com/404-Wont-Fix/CloudHelm     | `upstream`  | **只读**，push 会 403 |
+| **开发仓库** | `TianJiaJi/CloudHelm`    | https://github.com/TianJiaJi/CloudHelm        | `origin`    | 读写，日常 push 目标  |
+
+- **日常开发在开发仓库**：提交到 `dev`，`git push` 推 `origin`
+- **总仓库只吸收 PR**：开发仓库发起 PR → 合并到总仓库 `main`
+- 开发账户对总仓库**没有写权限**，`git push upstream` 会在建连阶段直接 403（预期行为，不是配置错误）
+
+> 换句话说：开发仓库是总仓库的一个**可自由提交的副本**，
+> 总仓库则是那个**只读的稳定发布点**。
+
+除 GitHub 自身的仓库权限外，本项目**没有设置任何额外限制**
+（无分支保护、无 pre-push hook、无 `core.hooksPath`）。
 
 ## 1. 远端
 
-| 远端       | 仓库                        | 用途                            |
-| ---------- | --------------------------- | ------------------------------- |
-| `origin`   | `TianJiaJi/CloudHelm`       | 老账户，日常 `push` / `fetch`   |
-| `upstream` | `404-Wont-Fix/CloudHelm`    | 新账户主仓库，**无写权限**，仅供拉取 |
+| 远端       | 仓库                     | 用途                            |
+| ---------- | ------------------------ | ------------------------------- |
+| `origin`   | `TianJiaJi/CloudHelm`    | 开发仓库，日常 `push` / `fetch` |
+| `upstream` | `404-Wont-Fix/CloudHelm` | 总仓库，**无写权限**，仅供拉取   |
 
 ```bash
 git remote -v
@@ -18,10 +30,10 @@ git remote -v
 
 ## 2. 分支
 
-| 分支  | 位置       | 说明                          |
-| ----- | ---------- | ----------------------------- |
-| `main` | 主仓库     | 稳定分支，跟踪 `upstream/main` |
-| `dev`  | 老账户     | 日常开发集成分支，跟踪 `origin/dev` |
+| 分支   | 所在仓库 | 说明                           |
+| ------ | -------- | ------------------------------ |
+| `main` | 总仓库   | 稳定分支，跟踪 `upstream/main`  |
+| `dev`  | 开发仓库 | 日常开发集成分支，跟踪 `origin/dev` |
 
 ## 3. 日常开发
 
@@ -56,9 +68,9 @@ git push origin dev
 git fetch upstream && git reset --hard upstream/main && git push origin dev
 ```
 
-## 5. 把老账户的改动送到新账户（PR）
+## 5. 把开发仓库的改动送进总仓库（PR）
 
-由于老账户对主仓库**没有写权限**，只能用 PR 合并：
+由于开发账户对总仓库**没有写权限**，只能用 PR 合并：
 
 ```bash
 # 1) 用老账户发起 PR（--head 的 "TianJiaJi:" 前缀是跨 fork 的关键）
@@ -99,13 +111,13 @@ git push --force-with-lease origin dev
 
 ## 7. 已知限制与网络
 
-**老账户对主仓库无写权限** —— `git push upstream ...` 会在建连阶段直接 403：
+**开发账户对总仓库无写权限** —— `git push upstream ...` 会在建连阶段直接 403：
 
 ```
 remote: Permission to 404-Wont-Fix/CloudHelm.git denied to TianJiaJi.
 ```
 
-如需真正的「直推主仓库」，把老账户加为 collaborator 即可（一次性）：
+如需真正的「直推总仓库」，把开发账户加为 collaborator 即可（一次性）：
 
 ```bash
 gh auth switch --user 404-Wont-Fix
@@ -125,5 +137,5 @@ git config --local http.proxy http://127.0.0.1:6740
 
 代理端口变化时需要同步修改，否则 `git push` / `fetch` 会连接超时。
 
-**护栏现状** —— 无。分支保护已关闭，pre-push hook 已移除。
+**护栏现状** —— 无。分支保护已关闭，pre-push hook 已移除，`core.hooksPath` 未设置。
 如需恢复，可参考 git 历史中的 commit `6a53e1e`（hook）与 `WORKFLOW.md` 早期版本。
