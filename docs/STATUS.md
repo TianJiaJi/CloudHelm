@@ -20,7 +20,7 @@
 
 临时 localhost SSH 服务验证了主机指纹、真实 PTY、安装确认、人工接管与 SFTP 恢复副本。另有真实 Pi SDK → 本地 OpenAI 流式协议 fixture → WorkerServer → 本地 SSH/SFTP 的多轮测试，覆盖调查、独立审核、文件写入、读回验证、模型切换与验收报告；该测试使用模拟模型响应，不代表真实模型部署质量。
 
-macOS arm64 目录包已成功构建和启动。跨平台 CI 配置已落库，但本次没有远程 CI 运行结果。在 macOS 尝试 Windows x64 目录包时，better-sqlite3 构建被 node-gyp 的原生模块交叉编译限制阻止，须在 Windows runner 上构建。
+本机完整检查通过 279 项测试，并通过 UI、Markdown 和真实 Electron 打包启动检查。macOS arm64 目录包已成功构建和启动。跨平台构建在 GitHub Actions 的原生 runner 执行，最新运行结果与安装包见 [CI 记录](https://github.com/qmgcbcAiden/CloudHelm/actions/workflows/ci.yml)。在 macOS 尝试 Windows x64 目录包时，better-sqlite3 构建被 node-gyp 的原生模块交叉编译限制阻止，因此 Windows 安装包由 Windows runner 构建。
 
 ## 尚需真实环境验收
 
