@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { HostDraft, HostView, ReviewMode } from '@cloudhelm/contracts';
 import { capture, Icon } from './ui-helpers.js';
+import { HostConnectionTestStatus, useHostConnectionTest } from './host-connection-test.js';
 import styles from './ui.module.css';
 
 type DialogProps = { close(): void; report(value: string): void };
@@ -12,6 +13,7 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
   const [secret, setSecret] = useState('');
   const [saving, setSaving] = useState(false);
   const [selectingKey, setSelectingKey] = useState(false);
+  const connectionTest = useHostConnectionTest(draft, secret, editing?.id, report);
   const update = (change: Partial<HostDraft>) => setDraft((current) => ({ ...current, ...change }));
   async function selectPrivateKey(): Promise<void> {
     setSelectingKey(true);
@@ -23,6 +25,7 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
     } finally { setSelectingKey(false); }
   }
   async function save(): Promise<void> {
+    if (connectionTest.testing || selectingKey || saving) return;
     setSaving(true);
     await capture(async () => {
       if (editing) await window.cloudhelm.editHost(editing.id, draft, secret || undefined);
@@ -34,10 +37,12 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
     }, report);
     setSaving(false);
   }
-  return <div className={styles.scrim}><form className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="host-title"
+  return <div className={styles.scrim}><form className={`${styles.dialog} ${styles.hostDialog}`} role="dialog" aria-modal="true" aria-labelledby="host-title"
     onSubmit={(event) => { event.preventDefault(); void save(); }}>
     <div className={styles.dialogHead}><h2 id="host-title">{editing ? '编辑 SSH 主机' : '添加 SSH 主机'}</h2><button type="button" aria-label="关闭" onClick={close}><Icon name="close" /></button></div>
+    <div className={styles.hostBody}>
     {editing && <p className={styles.notice}>连接配置只对新连接生效。保存后，请关闭原终端并重新连接；正在运行的对话仍使用原连接。</p>}
+    <fieldset className={styles.hostFields} disabled={connectionTest.testing || saving}>
     <label>名称<input required autoFocus maxLength={80} value={draft.label} onChange={(event) => update({ label: event.target.value })} placeholder="例如：生产服务器" /></label>
     <label>服务器地址<input required value={draft.address} onChange={(event) => update({ address: event.target.value })} placeholder="192.0.2.10 或 example.com" /></label>
     <div className={styles.formRow}><label>端口<input type="number" required min="1" max="65535" value={draft.port} onChange={(event) => update({ port: Number(event.target.value) })} /></label>
@@ -55,7 +60,15 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
     {draft.auth !== 'agent' && <label>{draft.auth === 'password' ? 'SSH 密码' : '私钥口令（如有）'}
       <input type="password" autoComplete="new-password" required={draft.auth === 'password' && (!editing || editing.auth !== 'password')}
         value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={editing && editing.auth === draft.auth ? '留空保留现有凭据' : ''} /></label>}
-    <div className={styles.dialogActions}><button type="button" onClick={close}>取消</button><button className={styles.primary} disabled={saving || selectingKey}>{saving ? '保存中…' : '保存'}</button></div>
+    </fieldset>
+    <HostConnectionTestStatus testing={connectionTest.testing} result={connectionTest.result}
+      confirm={(id) => void connectionTest.test(id)} dismiss={connectionTest.dismiss} />
+    </div>
+    <div className={styles.dialogActions}><button type="button" className={styles.testHostButton}
+      disabled={saving || selectingKey || connectionTest.testing} onClick={(event) => {
+        if (event.currentTarget.form?.reportValidity()) void connectionTest.test();
+      }}>{connectionTest.testing ? '正在测试…' : '测试连接'}</button>
+      <button type="button" onClick={close}>取消</button><button className={styles.primary} disabled={saving || selectingKey || connectionTest.testing}>{saving ? '保存中…' : '保存'}</button></div>
   </form></div>;
 }
 

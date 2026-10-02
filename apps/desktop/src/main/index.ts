@@ -7,6 +7,7 @@ import type { AppEvent, DesktopAPI, HostDraft, LocalScope, ReviewMode } from '@c
 import { AppState } from './app-state.js';
 import { registerConversationIpc } from './conversation-ipc.js';
 import { RuntimeBridge } from './runtime-bridge.js';
+import { HostConnectionTester } from './host-connection-test.js';
 
 if (process.env.CLOUDHELM_USER_DATA) app.setPath('userData', process.env.CLOUDHELM_USER_DATA);
 let quitting = false;
@@ -70,6 +71,8 @@ async function connectOnce(hostId: string): Promise<void> {
 }
 
 function registerIpc(): void {
+  const hostTester = new HostConnectionTester(state, (host, jump) => runtime.call({ method: 'test-host', host, jump }));
+  ipcMain.handle('cloudhelm:test-host', (_event, input: Parameters<DesktopAPI['testHostConnection']>[0]) => hostTester.test(input));
   registerConversationIpc({ state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
   ipcMain.handle('cloudhelm:snapshot', () => state.snapshot());
   ipcMain.handle('cloudhelm:add-host', (_event, host: HostDraft) => state.addHost(host));

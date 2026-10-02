@@ -72,6 +72,7 @@ const api: DesktopAPI = {
   listModelProviders: async () => [{ id: 'openai', name: 'OpenAI', defaultBaseUrl: 'https://api.openai.com/v1', models: [{ id: 'gpt-5.4', name: 'GPT-5.4' }] }],
   modelProviderSettings: async () => ({ hasKey: true }),
   testModelConnection: async () => ({ latencyMs: 12 }),
+  testHostConnection: async (input) => { calls.push({ kind: 'test-host', input }); return { status: 'success', latencyMs: 42 }; },
   saveModelProfile: async (profile) => { calls.push({ kind: 'profile', profile }); },
   saveReviewSettings: async (settings) => { calls.push({ kind: 'review-settings', settings }); },
   resumeConversation: unsupported, acceptConversation: unsupported, stopOperation: unsupported,

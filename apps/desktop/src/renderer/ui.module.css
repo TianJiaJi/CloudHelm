@@ -158,6 +158,12 @@
 .dialogHead button { padding: 4px; }
 .dialogActions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 3px; }
 .dialogActions button { border: 1px solid var(--border); padding: 8px 14px; font-size: 12px; }
+.hostDialog { overflow: hidden; }
+.hostDialog > .dialogHead, .hostDialog > .dialogActions { flex: none; }
+.hostBody { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 13px; }
+.hostBody > * { flex: none; }
+.hostFields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 13px; }
+.testHostButton { margin-right: auto; }
 .formRow { display: flex; gap: 10px; }
 .formRow label:first-child { width: 100px; }
 .formRow label:last-child { flex: 1; }

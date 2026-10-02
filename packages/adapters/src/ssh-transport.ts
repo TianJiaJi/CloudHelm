@@ -35,7 +35,8 @@ export interface SshLoginPrompt {
 
 export type SshLoginChallenge = (prompt: SshLoginPrompt) => Promise<string | null>;
 
-async function connectClient(host: SshHost, secret: AuthMaterial, socket?: ClientChannel, challenge?: SshLoginChallenge): Promise<Client> {
+async function connectClient(host: SshHost, secret: AuthMaterial, socket?: ClientChannel, challenge?: SshLoginChallenge, signal?: AbortSignal): Promise<Client> {
+  signal?.throwIfAborted();
   let observed: string | undefined;
   const config: ConnectConfig = {
     host: host.address, port: host.port, username: host.username, sock: socket,
@@ -74,17 +75,38 @@ async function connectClient(host: SshHost, secret: AuthMaterial, socket?: Clien
       })().catch(() => finish([]));
     });
     const fail = (error: Error) => {
+      signal?.removeEventListener('abort', abort);
       client.on('error', () => {});
       client.end();
       reject(observed && observed !== host.fingerprint ? new HostKeyError(observed, host.fingerprint) : error);
     };
+    const abort = () => fail(new Error('SSH connection timed out'));
     client.once('ready', () => {
+      signal?.removeEventListener('abort', abort);
       client.removeListener('error', fail);
       client.on('error', () => client.end());
       resolve(client);
     });
     client.once('error', fail);
-    client.connect(config);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) { abort(); return; }
+    try { client.connect(config); }
+    catch (error) { fail(error instanceof Error ? error : new Error('SSH connection failed')); }
+  });
+}
+
+async function forwardSocket(client: Client, host: SshHost, signal?: AbortSignal): Promise<ClientChannel> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const abort = () => { settled = true; reject(new Error('SSH connection timed out')); };
+    signal?.addEventListener('abort', abort, { once: true });
+    client.forwardOut('127.0.0.1', 0, host.address, host.port, (error, channel) => {
+      signal?.removeEventListener('abort', abort);
+      if (settled) { channel?.end(); return; }
+      settled = true;
+      if (error) reject(error); else resolve(channel);
+    });
   });
 }
 
@@ -94,20 +116,23 @@ export class SshTransport {
 
   constructor(private readonly onDisconnected: (hostId: string) => void = () => {}) {}
 
-  async connect(host: SshHost, secret: AuthMaterial, jump?: { host: SshHost; secret: AuthMaterial }, challenge?: SshLoginChallenge): Promise<void> {
+  async connect(host: SshHost, secret: AuthMaterial, jump?: { host: SshHost; secret: AuthMaterial }, challenge?: SshLoginChallenge, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     this.disconnect(host.id);
     let socket: ClientChannel | undefined;
     if (jump) {
       let jumpClient = this.connections.get(jump.host.id);
       if (!jumpClient) {
-        jumpClient = await connectClient(jump.host, jump.secret, undefined, challenge);
+        jumpClient = await connectClient(jump.host, jump.secret, undefined, challenge, signal);
+        if (signal?.aborted) { jumpClient.end(); signal.throwIfAborted(); }
         this.registerConnection(jump.host.id, jumpClient);
       }
-      socket = await new Promise<ClientChannel>((resolve, reject) => {
-        jumpClient!.forwardOut('127.0.0.1', 0, host.address, host.port, (error, channel) => error ? reject(error) : resolve(channel));
-      });
+      socket = await forwardSocket(jumpClient, host, signal);
     }
-    const client = await connectClient(host, secret, socket, challenge);
+    let client: Client;
+    try { client = await connectClient(host, secret, socket, challenge, signal); }
+    catch (error) { socket?.end(); throw error; }
+    if (signal?.aborted) { client.end(); signal.throwIfAborted(); }
     this.registerConnection(host.id, client);
   }
 

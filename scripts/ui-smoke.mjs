@@ -1,5 +1,6 @@
 /* global window, document, navigator, structuredClone */
 import assert from 'node:assert/strict';
+import { checkHostTestControls } from './host-test-ui-probe.mjs';
 import console from 'node:console';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -244,6 +245,7 @@ async function exerciseHostControls() {
   await dialog.getByRole('button', { name: '选择文件' }).click();
   await dialog.getByRole('button', { name: '选择文件' }).waitFor();
   assert.equal(await keyPath.inputValue(), '/Users/demo/.ssh/server key', 'Cancel must preserve the selected path');
+  await checkHostTestControls(page, dialog);
   await screenshot('host-private-key-dark.png');
   await page.emulateMedia({ colorScheme: 'light' });
   await page.setViewportSize({ width: 980, height: 640 });
@@ -251,6 +253,10 @@ async function exerciseHostControls() {
   const bounds = await dialog.boundingBox();
   assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 980 && bounds.y + bounds.height <= 640);
   assert.equal(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth), false);
+  assert.equal(await dialog.getByRole('button', { name: '测试连接', exact: true }).evaluate((button) => {
+    const bounds = button.getBoundingClientRect();
+    return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+  }), true, 'Test connection remains visible at the bottom of a small window');
   await screenshot('host-private-key-light-small.png');
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
   assert.deepEqual(await page.evaluate(() => window.fixture.savedHost.draft.privateKeyPath), '/Users/demo/.ssh/server key');

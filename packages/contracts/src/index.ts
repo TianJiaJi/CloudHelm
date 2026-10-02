@@ -11,6 +11,13 @@ export const HostDraftSchema = Type.Object({
 });
 
 export type HostDraft = Static<typeof HostDraftSchema>;
+export interface HostConnectionTestInput { host: HostDraft; editingHostId?: string; secret?: string; trustRequestId?: string }
+export type HostTestFailure = 'auth' | 'credentials' | 'agent' | 'key-file' | 'timeout' | 'network' | 'interactive' | 'unknown';
+export type HostConnectionTestResult =
+  | { status: 'success'; latencyMs: number }
+  | { status: 'failed'; code: HostTestFailure; stage: 'host' | 'jump' }
+  | { status: 'trust-required'; requestId: string; stage: 'host' | 'jump'; address: string; port: number;
+    fingerprint: string; expectedFingerprint?: string; expiresAt: number };
 export type ReviewMode = 'ask' | 'ai-review' | 'permissive';
 export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'human-control' | 'recovering' | 'paused' | 'answered' | 'ready-for-review' | 'accepted' | 'failed';
 export interface ModelChoice { provider: string; modelId: string }
@@ -128,6 +135,7 @@ export interface DesktopAPI {
   snapshot(): Promise<AppSnapshot>;
   addHost(host: HostDraft): Promise<HostView>;
   editHost(hostId: string, host: HostDraft, newSecret?: string): Promise<HostView>;
+  testHostConnection(input: HostConnectionTestInput): Promise<HostConnectionTestResult>;
   setHostSecret(hostId: string, secret: string): Promise<void>;
   updateHostSafety(hostId: string, mode: ReviewMode, protectedPaths: string[]): Promise<void>;
   listModelProviders(): Promise<ModelProviderView[]>;

@@ -9,6 +9,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from '@playwright/test';
 import { checkPrivateKeyPicker } from './private-key-picker-probe.mjs';
+import { checkHostConnectionTest } from './host-connection-probe.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = path.join(root, 'apps/desktop');
@@ -55,6 +56,7 @@ try {
   assert.equal(boundary.conversationCount, 0);
   assert.ok(boundary.providers > 0);
   await checkPrivateKeyPicker(application, page);
+  await checkHostConnectionTest(page, path.join(desktop, 'package.json'));
   const runtime = await application.evaluate(async ({ app, safeStorage, utilityProcess }, input) => {
     const appPath = app.getAppPath();
     const grammarPath = input.packaged ? `${process.resourcesPath}/tree-sitter-bash.wasm` : input.grammarPath;

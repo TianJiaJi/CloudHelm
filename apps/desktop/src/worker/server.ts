@@ -8,6 +8,7 @@ import { TaskRunner } from './task-runner.js';
 import { OperationInputBridge } from './operation-input-bridge.js';
 import { testModelConnection } from './conversation-model.js';
 import { FileOperationExecutor } from './file-operation-executor.js';
+import { testHostConnection } from './host-connection-test.js';
 
 export class WorkerServer {
   private readonly logRequests = new Map<string, { resolve(value: LogPage): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
@@ -67,6 +68,7 @@ export class WorkerServer {
         this.ssh.disconnect(call.hostId);
         return;
       case 'connect': return this.connect(call.host, call.jump);
+      case 'test-host': return testHostConnection(call.host, call.jump);
       case 'update-host-safety':
         for (const [id, pending] of this.pendingApprovals) {
           if (pending.hostId === call.hostId) this.cancelApproval(id);

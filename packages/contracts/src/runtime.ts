@@ -1,11 +1,14 @@
-import type { AppEvent, ConversationMessage, ApprovalView, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
+import type { AppEvent, ConversationMessage, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
 
 export interface RuntimeHost extends HostView { secret?: string }
+export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 'trust-required' }>
+  | { status: 'trust-required'; stage: 'host' | 'jump'; fingerprint: string; expectedFingerprint?: string };
 export interface RuntimeProfile { provider: string; modelId: string; baseUrl?: string; apiKey: string; credentialRevision?: string; jevKey?: string }
 
 export type RuntimeCall =
   | { method: 'restore-operations'; operations: Array<{ id: string; hostId: string }> }
   | { method: 'connect'; host: RuntimeHost; jump?: RuntimeHost }
+  | { method: 'test-host'; host: RuntimeHost; jump?: RuntimeHost }
   | { method: 'disconnect'; hostId: string }
   | { method: 'set-review-key'; jevKey?: string }
   | { method: 'test-model'; profile: RuntimeProfile }

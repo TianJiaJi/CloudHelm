@@ -5,6 +5,7 @@
 ## 已接通
 
 - 主机编辑与安全菜单、连接配置修订提示、分主机对话历史、可关闭普通/Agent 终端、只读 SFTP 与报告页。Agent 终端不会自动抢焦点；暂停 AI、停止命令、接管和断开分别处理。
+- 主机菜单使用不受侧栏滚动裁切的浮层；私钥路径可通过系统文件选择器选择。添加／编辑主机支持测试未保存的连接配置，使用独立临时 SSH 连接，不保存配置、不打开终端、不影响已连接会话。首次或变化的指纹需核对，确认绑定当前配置、单次使用且两分钟后失效；跳板机和目标主机分别核对。测试最多约 45 秒，需要额外交互认证时提示保存后正常连接。
 - Pi SDK 工具循环、结构化计划与验收报告、真实 SSH PTY 命令回显、SFTP 写入/上传/删除恢复副本，以及用户显式选定的本地资料访问。
 - 统一审核入口、硬禁令、完整低风险判断、sudo/env/su 等包装递归分析、主机保护路径、审批与执行前的权限复核。第二档无 Jev Key 时使用主模型独立审核；已配置 Jev 故障时转人工，不悄悄降级。
 - 操作专属认证通道：sudo askpass、受限 util-linux su、APT 安装确认与 SSH keyboard-interactive。密码不进入普通 PTY、模型、日志或剪贴板。人工接管、断线、超时和操作结束使输入请求失效。
@@ -20,7 +21,9 @@
 
 临时 localhost SSH 服务验证了主机指纹、真实 PTY、安装确认、人工接管与 SFTP 恢复副本。另有真实 Pi SDK → 本地 OpenAI 流式协议 fixture → WorkerServer → 本地 SSH/SFTP 的多轮测试，覆盖调查、独立审核、文件写入、读回验证、模型切换与验收报告；该测试使用模拟模型响应，不代表真实模型部署质量。
 
-本机完整检查通过 279 项测试，并通过 UI、Markdown 和真实 Electron 打包启动检查。macOS arm64 目录包已成功构建和启动。跨平台构建在 GitHub Actions 的原生 runner 执行，最新运行结果与安装包见 [CI 记录](https://github.com/qmgcbcAiden/CloudHelm/actions/workflows/ci.yml)。在 macOS 尝试 Windows x64 目录包时，better-sqlite3 构建被 node-gyp 的原生模块交叉编译限制阻止，因此 Windows 安装包由 Windows runner 构建。
+当前标准检查通过 297 项测试，3 项依赖显式 localhost SSH 服务的集成测试默认跳过；新增无需外部服务的真实本地 SSH 握手测试，验证连接测试的指纹确认、密码认证、连接清理和既有连接隔离。UI 回归覆盖菜单点击、私钥选择／取消、测试连接的未保存配置、确认失效和友好结果。真实 Electron 打包启动检查也通过窄 IPC 测试临时本地 SSH 服务，确认不新增主机或终端。macOS 原生私钥选择窗口已实际打开核对；Windows 文件选择窗口尚未手动实测，自动对话框测试使用替身。
+
+macOS arm64 目录包已成功构建和启动。跨平台构建在 GitHub Actions 的原生 runner 执行，最新运行结果与安装包见 [CI 记录](https://github.com/qmgcbcAiden/CloudHelm/actions/workflows/ci.yml)。Windows 安装包由 Windows runner 构建；自动构建与启动检查不代表安装后的人工验收。
 
 ## 尚需真实环境验收
 

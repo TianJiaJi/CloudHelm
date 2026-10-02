@@ -31,6 +31,8 @@ const rules: ErrorRule[] = [
     description: '请启动本机 SSH Agent 并加载私钥，或在主机设置中改用私钥文件或密码连接。', severity: 'warning' },
   { code: 'ssh-credentials', pattern: /SSH password is required|Private key path is required|All configured authentication methods failed|Authentication failed|Cannot parse privateKey|Invalid private key|Encrypted private/iu,
     title: 'SSH 身份验证未通过', description: '请打开主机的“编辑主机”，核对账户、认证方式和凭据，再重新连接。', severity: 'warning' },
+  { code: 'ssh-test-expired', pattern: /Host connection test confirmation expired/iu,
+    title: '本次测试确认已失效', description: '连接配置已变化或确认已超时，请点击“测试连接”重新核对。', severity: 'warning' },
   { code: 'ssh-fingerprint-expired', pattern: /Fingerprint is no longer pending/iu,
     title: '主机指纹确认已失效', description: '连接状态已变化。请重新连接主机，核对这次连接显示的指纹后再继续。', severity: 'warning' },
   { code: 'ssh-fingerprint', pattern: /Verify SSH host key|Host key verification failed|host key mismatch|主机指纹发生变化/iu,
