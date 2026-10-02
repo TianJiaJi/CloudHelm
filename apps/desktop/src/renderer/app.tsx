@@ -10,6 +10,7 @@ import { FilesPage, ReportPage } from './workspace-pages.js';
 import { capture, Icon, statusLabel } from './ui-helpers.js';
 import { ErrorDialog } from './error-dialog.js';
 import { useErrorNotices } from './use-error-notices.js';
+import { AnchoredMenu } from './anchored-menu.js';
 import styles from './ui.module.css';
 
 type Confirmation = { title: string; message: string; label: string; action(): Promise<void> };
@@ -26,7 +27,7 @@ export function App(): React.JSX.Element {
   const ui = useUi();
   const { snapshot, terminals, tabs, activeTabId, activeHostId, selectedConversationId, settingsOpen, agentPanelOpen } = ui;
   const [dialog, setDialog] = useState<Dialog>(null);
-  const [hostMenu, setHostMenu] = useState<string | null>(null);
+  const [hostMenu, setHostMenu] = useState<{ hostId: string; anchor: HTMLButtonElement } | null>(null);
   const { current: error, report: setError, dismiss: dismissError } = useErrorNotices();
   const [fingerprint, setFingerprint] = useState<{ hostId: string; value: string } | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -131,14 +132,15 @@ export function App(): React.JSX.Element {
             <Icon name="server" /><span>{host.label}<small>{connecting.includes(host.id) ? '正在连接…' : working ? statusLabel[working.status] : `${host.username}@${host.address}`}</small></span>
             <i className={`${styles.dot} ${host.status === 'connected' ? styles.online : ''}`} />
           </button>
-          <button className={styles.hostMore} aria-label={`${host.label} 更多操作`} title="主机操作" onClick={() => setHostMenu(hostMenu === host.id ? null : host.id)}><Icon name="more" /></button>
-          {hostMenu === host.id && <><button className={styles.menuDismiss} aria-label="关闭主机菜单" onClick={() => setHostMenu(null)} /><div className={styles.hostMenu}>
-            <button onClick={() => navigate(() => { setHostMenu(null); setDialog({ kind: 'host', hostId: host.id }); })}><Icon name="settings" />编辑主机</button>
-            <button onClick={() => navigate(() => { setHostMenu(null); setDialog({ kind: 'safety', hostId: host.id }); })}><Icon name="shield" />安全设置</button>
-            <button onClick={() => navigate(() => { setHostMenu(null); void connectHost(host.id, true); })}><Icon name="terminal" />新终端</button>
-            <button onClick={() => navigate(() => disconnect(host))}><Icon name="disconnect" />断开 SSH</button>
-            <button className={styles.dangerText} onClick={() => { setHostMenu(null); setConfirmation({ title: `移除 ${host.label}？`, message: '从主机列表移除该连接配置，历史对话和审计记录会保留。不会删除服务器上的数据。', label: '移除主机', action: () => window.cloudhelm.deleteHost(host.id) }); }}>移除主机</button>
-          </div></>}
+          <button className={styles.hostMore} aria-label={`${host.label} 更多操作`} title="主机操作" aria-haspopup="menu" aria-expanded={hostMenu?.hostId === host.id}
+            onClick={(event) => setHostMenu(hostMenu?.hostId === host.id ? null : { hostId: host.id, anchor: event.currentTarget })}><Icon name="more" /></button>
+          {hostMenu?.hostId === host.id && <AnchoredMenu anchor={hostMenu.anchor} label={`${host.label} 主机操作`} close={() => setHostMenu(null)}>
+            <button role="menuitem" onClick={() => navigate(() => { setHostMenu(null); setDialog({ kind: 'host', hostId: host.id }); })}><Icon name="settings" />编辑主机</button>
+            <button role="menuitem" onClick={() => navigate(() => { setHostMenu(null); setDialog({ kind: 'safety', hostId: host.id }); })}><Icon name="shield" />安全设置</button>
+            <button role="menuitem" onClick={() => navigate(() => { setHostMenu(null); void connectHost(host.id, true); })}><Icon name="terminal" />新终端</button>
+            <button role="menuitem" onClick={() => navigate(() => disconnect(host))}><Icon name="disconnect" />断开 SSH</button>
+            <button role="menuitem" className={styles.dangerText} onClick={() => { setHostMenu(null); setConfirmation({ title: `移除 ${host.label}？`, message: '从主机列表移除该连接配置，历史对话和审计记录会保留。不会删除服务器上的数据。', label: '移除主机', action: () => window.cloudhelm.deleteHost(host.id) }); }}>移除主机</button>
+          </AnchoredMenu>}
         </div>;
       })}{!hosts.length && <button className={styles.addHostEmpty} onClick={() => navigate(() => setDialog({ kind: 'host' }))}><Icon name="plus" />添加第一台主机</button>}</div>
       <div className={styles.sectionHead}><span>AI 对话历史</span><button title="新的自由对话" aria-label="新的自由对话" onClick={() => navigate(() => useUi.getState().newConversation(null))}><Icon name="plus" /></button></div>

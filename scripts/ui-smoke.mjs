@@ -109,7 +109,7 @@ async function exerciseNavigation() {
   await page.getByRole('heading', { name: '远程文件' }).waitFor();
   await page.getByRole('button', { name: '关闭 生产服务器 · 文件' }).click();
   await page.getByRole('button', { name: '生产服务器 更多操作' }).click();
-  await page.getByRole('button', { name: '编辑主机', exact: true }).click();
+  await page.getByRole('menuitem', { name: '编辑主机', exact: true }).click();
   await page.getByRole('dialog', { name: '编辑 SSH 主机' }).waitFor();
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -196,12 +196,81 @@ async function exerciseAsyncErrors() {
   assert.equal(await page.getByRole('alertdialog').count(), 0);
 }
 
+async function exerciseHostControls() {
+  await page.getByRole('button', { name: '生产服务器 更多操作' }).waitFor();
+  await page.evaluate(async () => {
+    window.fixture.originalHostSnapshot = await window.cloudhelm.snapshot();
+    const singleHost = structuredClone(window.fixture.originalHostSnapshot);
+    singleHost.hosts = singleHost.hosts.slice(0, 1);
+    window.fixture.inject({ type: 'snapshot', value: singleHost });
+    window.fixture.originalPickKey = window.cloudhelm.selectPrivateKey;
+    window.fixture.originalEditHost = window.cloudhelm.editHost;
+    window.cloudhelm.editHost = async (id, draft) => { window.fixture.savedHost = { id, draft }; };
+  });
+  const trigger = page.getByRole('button', { name: '生产服务器 更多操作' });
+  await trigger.click();
+  const menu = page.getByRole('menu', { name: '生产服务器 主机操作' });
+  await menu.waitFor();
+  assert.equal(await menu.getByRole('menuitem').count(), 5);
+  assert.equal(await menu.getByRole('menuitem').evaluateAll((items) => items.every((item) => {
+    const bounds = item.getBoundingClientRect();
+    return item.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+  })), true, 'All menu actions must be hit-testable beyond the short host list');
+  await screenshot('host-menu-dark.png');
+  await page.keyboard.press('End');
+  assert.equal(await page.getByRole('menuitem', { name: '移除主机' }).evaluate((element) => element === document.activeElement), true);
+  await page.keyboard.press('Enter');
+  await page.getByRole('alertdialog', { name: '移除 生产服务器？' }).waitFor();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await trigger.click();
+  await menu.waitFor();
+  await page.keyboard.press('Escape');
+  await menu.waitFor({ state: 'detached' });
+  assert.equal(await trigger.evaluate((element) => element === document.activeElement), true);
+  await trigger.click();
+  await menu.waitFor();
+  await page.getByRole('heading', { name: '你的服务器，随时连接' }).click();
+  await menu.waitFor({ state: 'detached' });
+  await trigger.click();
+  await page.getByRole('menuitem', { name: '编辑主机' }).click();
+  const dialog = page.getByRole('dialog', { name: '编辑 SSH 主机' });
+  await dialog.getByLabel('认证方式').selectOption('private-key');
+  const keyPath = dialog.getByLabel('私钥路径');
+  await keyPath.fill('/Users/demo/.ssh/original');
+  await dialog.getByRole('button', { name: '选择文件' }).click();
+  await page.waitForFunction(() => document.getElementById('private-key-path').value === '/Users/demo/.ssh/server key');
+  assert.equal(await page.evaluate(() => window.fixture.savedHost), undefined, 'Picking a key must not save the host automatically');
+  await page.evaluate(() => { window.cloudhelm.selectPrivateKey = async () => null; });
+  await dialog.getByRole('button', { name: '选择文件' }).click();
+  await dialog.getByRole('button', { name: '选择文件' }).waitFor();
+  assert.equal(await keyPath.inputValue(), '/Users/demo/.ssh/server key', 'Cancel must preserve the selected path');
+  await screenshot('host-private-key-dark.png');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.setViewportSize({ width: 980, height: 640 });
+  await keyPath.scrollIntoViewIfNeeded();
+  const bounds = await dialog.boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 980 && bounds.y + bounds.height <= 640);
+  assert.equal(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth), false);
+  await screenshot('host-private-key-light-small.png');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.fixture.savedHost.draft.privateKeyPath), '/Users/demo/.ssh/server key');
+  await dialog.waitFor({ state: 'detached' });
+  await page.evaluate(() => {
+    window.cloudhelm.selectPrivateKey = window.fixture.originalPickKey;
+    window.cloudhelm.editHost = window.fixture.originalEditHost;
+    window.fixture.inject({ type: 'snapshot', value: window.fixture.originalHostSnapshot });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.emulateMedia({ colorScheme: 'dark' });
+}
+
 try {
   browser = await chromium.launch({ headless: true, ...(process.env.CLOUDHELM_SMOKE_BROWSER_CHANNEL ? { channel: process.env.CLOUDHELM_SMOKE_BROWSER_CHANNEL } : {}) });
   page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
+  await exerciseHostControls();
   await exerciseErrors();
   await exerciseConversation();
   await exerciseNavigation();

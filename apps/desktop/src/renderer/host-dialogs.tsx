@@ -11,7 +11,17 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
     : { label: '', address: '', port: 22, username: '', auth: 'agent' });
   const [secret, setSecret] = useState('');
   const [saving, setSaving] = useState(false);
-  const update = (change: Partial<HostDraft>) => setDraft({ ...draft, ...change });
+  const [selectingKey, setSelectingKey] = useState(false);
+  const update = (change: Partial<HostDraft>) => setDraft((current) => ({ ...current, ...change }));
+  async function selectPrivateKey(): Promise<void> {
+    setSelectingKey(true);
+    try {
+      await capture(async () => {
+        const path = await window.cloudhelm.selectPrivateKey();
+        if (path !== null) update({ privateKeyPath: path });
+      }, report);
+    } finally { setSelectingKey(false); }
+  }
   async function save(): Promise<void> {
     setSaving(true);
     await capture(async () => {
@@ -35,14 +45,17 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
     <label>认证方式<select value={draft.auth} onChange={(event) => update({ auth: event.target.value as HostDraft['auth'], privateKeyPath: undefined })}>
       <option value="agent">SSH Agent</option><option value="private-key">私钥</option><option value="password">密码</option>
     </select></label>
-    {draft.auth === 'private-key' && <label>私钥路径<input required value={draft.privateKeyPath ?? ''} onChange={(event) => update({ privateKeyPath: event.target.value })} placeholder="/Users/you/.ssh/id_ed25519" /></label>}
+    {draft.auth === 'private-key' && <div><label htmlFor="private-key-path">私钥路径</label><div className={styles.privateKeyField}>
+      <input id="private-key-path" required value={draft.privateKeyPath ?? ''} onChange={(event) => update({ privateKeyPath: event.target.value })} placeholder="选择私钥文件，或输入完整路径" />
+      <button type="button" disabled={selectingKey || saving} onClick={() => void selectPrivateKey()}><Icon name="folder" size={14} />{selectingKey ? '选择中…' : '选择文件'}</button>
+    </div></div>}
     <label>跳板机<select value={draft.jumpHostId ?? ''} onChange={(event) => update({ jumpHostId: event.target.value || undefined })}>
       <option value="">直连（不使用跳板机）</option>{hosts.filter((host) => !host.jumpHostId && host.id !== editing?.id).map((host) => <option key={host.id} value={host.id}>{host.label}</option>)}
     </select></label>
     {draft.auth !== 'agent' && <label>{draft.auth === 'password' ? 'SSH 密码' : '私钥口令（如有）'}
       <input type="password" autoComplete="new-password" required={draft.auth === 'password' && (!editing || editing.auth !== 'password')}
         value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={editing && editing.auth === draft.auth ? '留空保留现有凭据' : ''} /></label>}
-    <div className={styles.dialogActions}><button type="button" onClick={close}>取消</button><button className={styles.primary} disabled={saving}>{saving ? '保存中…' : '保存'}</button></div>
+    <div className={styles.dialogActions}><button type="button" onClick={close}>取消</button><button className={styles.primary} disabled={saving || selectingKey}>{saving ? '保存中…' : '保存'}</button></div>
   </form></div>;
 }
 

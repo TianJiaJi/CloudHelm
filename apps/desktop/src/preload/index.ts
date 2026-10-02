@@ -22,6 +22,7 @@ const api: DesktopAPI = {
   openTerminal: (hostId) => invoke('open-terminal', hostId),
   closeTerminal: (terminalId) => invoke('close-terminal', terminalId),
   selectLocalPath: (kind) => invoke('select-local-path', kind),
+  selectPrivateKey: () => invoke('select-private-key'),
   terminalInput: (terminalId, data) => invoke('terminal-input', terminalId, data),
   terminalProtocolResponse: (terminalId, data) => invoke('terminal-protocol', terminalId, data),
   takeOver: (terminalId) => invoke('take-over', terminalId),

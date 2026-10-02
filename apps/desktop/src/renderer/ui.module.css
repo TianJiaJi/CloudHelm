@@ -32,7 +32,7 @@
 .addHostEmpty { width: 100%; min-height: 60px; border: 1px dashed var(--border) !important; color: var(--muted) !important; font-size: 11px; }
 .menuDismiss { position: fixed; inset: 0; z-index: 19; border-radius: 0 !important; cursor: default; background: transparent !important; }
 .hostMenu, .attachMenu { position: absolute; z-index: 20; min-width: 150px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); box-shadow: 0 8px 24px #0005; }
-.hostMenu { right: 0; top: 36px; }
+.hostMenu { position: fixed; inset: auto; margin: 0; min-width: 170px; max-height: calc(100vh - 16px); overflow-y: auto; color: var(--text); }
 .hostMenu button, .attachMenu button { display: flex; justify-content: flex-start; width: 100%; padding: 8px 10px; font-size: 12px; }
 .dangerText { color: #dfa299 !important; }
 .historyList { min-height: 0; overflow: auto; flex: 1; padding: 0 8px 12px; }
@@ -161,6 +161,9 @@
 .formRow { display: flex; gap: 10px; }
 .formRow label:first-child { width: 100px; }
 .formRow label:last-child { flex: 1; }
+.privateKeyField { display: flex; gap: 8px; min-width: 0; margin-top: 7px; }
+.privateKeyField input { flex: 1; min-width: 0; }
+.privateKeyField button { flex: none; padding: 8px 10px; border: 1px solid var(--border); font-size: 12px; }
 .notice { padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--canvas); font-size: 11px !important; color: var(--muted); line-height: 1.7; }
 .note { color: var(--muted); font-size: 11px; line-height: 1.7; }
 .fingerprint { display: block; padding: 12px; background: var(--canvas); border-radius: 6px; overflow-wrap: anywhere; font-size: 12px; }

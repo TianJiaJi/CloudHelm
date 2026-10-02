@@ -143,6 +143,7 @@ export interface DesktopAPI {
   openTerminal(hostId: string): Promise<string>;
   closeTerminal(terminalId: string): Promise<void>;
   selectLocalPath(kind: LocalScope['kind']): Promise<{ token: string; scope: LocalScope } | null>;
+  selectPrivateKey(): Promise<string | null>;
   terminalInput(terminalId: string, data: string): Promise<void>;
   terminalProtocolResponse(terminalId: string, data: string): Promise<void>;
   takeOver(terminalId: string): Promise<void>;

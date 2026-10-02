@@ -113,6 +113,13 @@ function registerIpc(): void {
     return runtime.call<string>({ method: 'open-terminal', hostId });
   });
   ipcMain.handle('cloudhelm:close-terminal', (_event, terminalId: string) => runtime.call({ method: 'close-terminal', terminalId }));
+  ipcMain.handle('cloudhelm:select-private-key', async () => {
+    // Selecting an SSH credential does not grant the Agent local file access.
+    const options: Electron.OpenDialogOptions = { title: '选择 SSH 私钥', buttonLabel: '使用此私钥',
+      defaultPath: join(app.getPath('home'), '.ssh'), properties: ['openFile', 'showHiddenFiles', 'dontAddToRecent'] };
+    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
   ipcMain.handle('cloudhelm:select-local-path', async (_event, kind: LocalScope['kind']) => {
     if (kind !== 'file' && kind !== 'directory') throw new Error('Invalid local selection type');
     const options: Electron.OpenDialogOptions = { properties: [kind === 'file' ? 'openFile' : 'openDirectory'] };

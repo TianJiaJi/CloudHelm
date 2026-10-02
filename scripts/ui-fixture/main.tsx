@@ -60,6 +60,7 @@ const api: DesktopAPI = {
   setConversationModel: async (id, model) => { calls.push({ kind: 'model', id, model }); Object.assign(view.conversations.find((item) => item.id === id)!, model); sync(); },
   readTerminalLog: async () => 'ubuntu@prod:~$ docker ps\nCONTAINER ID   IMAGE\nabc123        service:latest',
   selectLocalPath: async (kind) => ({ token: `local-${kind}`, scope: { path: '/Users/demo/service', kind } }),
+  selectPrivateKey: async () => { calls.push({ kind: 'select-private-key' }); return '/Users/demo/.ssh/server key'; },
   pauseConversation: async (id) => { calls.push({ kind: 'pause', id }); view.conversations.find((item) => item.id === id)!.status = 'paused'; sync(); },
   takeOver: async (id) => {
     calls.push({ kind: 'takeover', id }); const terminal = view.terminals.find((item) => item.id === id)!; terminal.state = 'human'; terminalEvent(terminal);
