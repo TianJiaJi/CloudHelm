@@ -1,0 +1,177 @@
+/* global window, document, navigator */
+import assert from 'node:assert/strict';
+import console from 'node:console';
+import { mkdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+import { chromium } from '@playwright/test';
+import { createServer } from 'vite';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const desktopRequire = createRequire(path.join(root, 'apps/desktop/package.json'));
+const output = path.join(root, '.cache/ui-smoke');
+await mkdir(output, { recursive: true });
+const server = await createServer({
+  root: path.join(root, 'scripts/ui-fixture'), configFile: false, cacheDir: path.join(root, '.cache/ui-smoke-vite'),
+  server: { host: '127.0.0.1', port: 0, fs: { allow: [root] } },
+  esbuild: { jsx: 'automatic' },
+  resolve: { alias: {
+    react: path.dirname(desktopRequire.resolve('react/package.json')),
+    'react-dom': path.dirname(desktopRequire.resolve('react-dom/package.json'))
+  } }
+});
+await server.listen();
+let browser;
+let page;
+const calls = () => page.evaluate(() => window.fixture.calls);
+const screenshot = (name) => page.screenshot({ path: path.join(output, name), fullPage: true });
+
+async function exerciseErrors() {
+  await page.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
+  await page.evaluate(() => {
+    window.fixture.restoreErrorMethods = { startConversation: window.cloudhelm.startConversation,
+      testModelConnection: window.cloudhelm.testModelConnection, saveModelProfile: window.cloudhelm.saveModelProfile };
+    window.cloudhelm.startConversation = async () => { throw new Error("Error invoking remote method 'cloudhelm:start-conversation': Error: 请先配置所选供应商的 API Key"); };
+  });
+  await page.getByRole('textbox', { name: '给 AI 的消息' }).fill('缺少模型配置时给出可操作提示');
+  await page.getByRole('button', { name: '发送消息' }).click();
+  const missingKey = page.getByRole('alertdialog', { name: '请先配置模型' });
+  await missingKey.waitFor();
+  assert.equal(await missingKey.locator('details').getAttribute('open'), null);
+  assert.equal((await missingKey.innerText()).includes('Error invoking'), false);
+  await screenshot('friendly-model-error.png');
+  await missingKey.getByRole('button', { name: '去配置模型' }).click();
+  await page.getByRole('heading', { name: '模型设置', exact: true }).waitFor();
+  await page.evaluate(() => {
+    window.cloudhelm.testModelConnection = async () => { throw new Error("Error invoking remote method 'cloudhelm:test-model': Error: Invalid API key: sk-fixture-never-display-this-key"); };
+    window.cloudhelm.saveModelProfile = async () => { throw new Error("Error invoking remote method 'cloudhelm:save-model-profile': Error: OS credential encryption is unavailable; password=fixture-sensitive-answer"); };
+  });
+  await page.getByRole('button', { name: '测试连接' }).click();
+  await page.getByRole('alert').filter({ hasText: '模型身份验证未通过' }).waitFor();
+  assert.equal(await page.getByRole('alertdialog').count(), 0);
+  assert.equal((await page.locator('body').innerText()).includes('sk-fixture'), false);
+  await page.getByRole('button', { name: '保存为默认' }).click();
+  const saveError = page.getByRole('alertdialog', { name: '系统凭据存储暂不可用' });
+  await saveError.waitFor();
+  await saveError.getByText('查看技术详情', { exact: true }).click();
+  assert.equal((await saveError.innerText()).includes('fixture-sensitive'), false);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async (text) => { window.fixture.copiedDetails = text; }
+    } });
+  });
+  await saveError.getByRole('button', { name: '复制脱敏详情' }).click();
+  await saveError.getByText('已复制脱敏详情', { exact: true }).waitFor();
+  assert.equal((await page.evaluate(() => window.fixture.copiedDetails)).includes('fixture-sensitive'), false);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.getByRole('alertdialog').count(), 0);
+  // Repeated background-style failures should not stack or immediately reopen.
+  await page.getByRole('button', { name: '保存为默认' }).click();
+  await page.getByRole('alert').filter({ hasText: '系统凭据存储暂不可用' }).waitFor();
+  assert.equal(await page.getByRole('alertdialog').count(), 0);
+  await page.evaluate(() => Object.assign(window.cloudhelm, window.fixture.restoreErrorMethods));
+  await page.getByRole('button', { name: '返回终端' }).click();
+}
+
+async function exerciseConversation() {
+  await page.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
+  assert.equal(await page.getByText('创建任务').count(), 0);
+  assert.equal(await page.getByText('新建任务').count(), 0);
+  await page.getByRole('button', { name: /生产服务器 ubuntu@/ }).click();
+  await page.getByText('生产服务器 · SSH 终端').waitFor();
+  await page.getByRole('textbox', { name: '给 AI 的消息' }).fill('帮我把这个服务装成 Docker 并启动');
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await page.getByText('正在处理', { exact: true }).first().waitFor();
+  assert.equal((await calls()).find((call) => call.kind === 'start').input.hostId, 'prod');
+  await page.evaluate(() => window.fixture.inject({ type: 'terminal-state', terminalId: 'agent1', hostId: 'prod', taskId: 'chat2', state: 'agent' }));
+  assert.equal(await page.getByText('生产服务器 · SSH 终端').count(), 1);
+  await page.evaluate(() => window.fixture.decorate());
+  await page.getByText('需要你确认安装系统依赖').waitFor();
+  assert.equal(await page.getByRole('dialog').count(), 0);
+  await screenshot('main-dark.png');
+  await page.getByRole('button', { name: '批准这次操作' }).click();
+  assert.equal((await calls()).find((call) => call.kind === 'approval').approved, true);
+  await page.getByRole('combobox', { name: '对话模型' }).selectOption('anthropic/claude-sonnet');
+  assert.equal((await calls()).find((call) => call.kind === 'model').model.provider, 'anthropic');
+  await page.getByRole('combobox', { name: '对话模型' }).selectOption('__reapply__');
+  assert.equal((await calls()).filter((call) => call.kind === 'model').at(-1).model.provider, 'anthropic');
+  await page.getByRole('textbox', { name: '给 AI 的消息' }).fill('草稿不会丢');
+  await page.getByRole('button', { name: /开发服务器 deployer@/ }).click();
+  assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).inputValue(), '');
+  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).inputValue(), '草稿不会丢');
+}
+
+async function exerciseNavigation() {
+  await page.getByRole('button', { name: '文件', exact: true }).click();
+  await page.getByRole('heading', { name: '远程文件' }).waitFor();
+  await page.getByRole('button', { name: '关闭 生产服务器 · 文件' }).click();
+  await page.getByRole('button', { name: '生产服务器 更多操作' }).click();
+  await page.getByRole('button', { name: '编辑主机', exact: true }).click();
+  await page.getByRole('dialog', { name: '编辑 SSH 主机' }).waitFor();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('heading', { name: '模型设置', exact: true }).waitFor();
+  await screenshot('settings.png');
+  assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).count(), 0);
+  await page.locator('#model-base-url').fill('https://proxy.example.com/v1');
+  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  await page.getByRole('dialog', { name: '还有未保存的更改' }).waitFor();
+  await page.getByRole('button', { name: '继续编辑' }).click();
+  assert.equal(await page.locator('#model-base-url').inputValue(), 'https://proxy.example.com/v1');
+  await page.getByRole('button', { name: '返回终端' }).click();
+  await page.getByRole('button', { name: '放弃更改' }).click();
+}
+
+async function exerciseInputIsolation() {
+  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  await page.getByRole('button', { name: '打开 AI 专用终端' }).click();
+  await page.evaluate(() => window.fixture.inject({ type: 'terminal-data', terminalId: 'agent1', data: '\u001b[6n' }));
+  await page.waitForFunction(() => window.fixture.calls.some((call) => call.kind === 'protocol'));
+  assert.equal((await calls()).filter((call) => call.kind === 'takeover').length, 0);
+  await page.locator('.xterm-helper-textarea').pressSequentially('pwd');
+  await page.waitForFunction(() => window.fixture.calls.some((call) => call.kind === 'input'));
+  const keyboardCalls = await calls();
+  assert.equal(keyboardCalls.filter((call) => call.kind === 'takeover').length, 1);
+  assert.ok(keyboardCalls.findIndex((call) => call.kind === 'takeover') < keyboardCalls.findIndex((call) => call.kind === 'input'));
+  await page.evaluate(() => window.fixture.running());
+  await page.getByRole('button', { name: '关闭 生产服务器 · AI', exact: true }).click();
+  await page.getByRole('alertdialog').waitFor();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await page.evaluate(() => window.fixture.addInput());
+  await page.getByRole('dialog', { name: '安装 Docker 需要管理员权限' }).waitFor();
+  await page.getByLabel('密码', { exact: true }).fill('test-sensitive-answer');
+  await page.getByRole('button', { name: '安全提交', exact: true }).click();
+  assert.equal((await calls()).find((call) => call.kind === 'answer').answer, 'test-sensitive-answer');
+  assert.equal((await calls()).filter((call) => call.kind === 'input').some((call) => call.data.includes('test-sensitive-answer')), false);
+}
+
+try {
+  browser = await chromium.launch({ headless: true, ...(process.env.CLOUDHELM_SMOKE_BROWSER_CHANNEL ? { channel: process.env.CLOUDHELM_SMOKE_BROWSER_CHANNEL } : {}) });
+  page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
+  await exerciseErrors();
+  await exerciseConversation();
+  await exerciseNavigation();
+  await exerciseInputIsolation();
+  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  await page.getByRole('button', { name: '关闭 生产服务器', exact: true }).click();
+  assert.equal((await calls()).filter((call) => call.kind === 'close').length, 1);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await screenshot('main-light.png');
+  await page.setViewportSize({ width: 980, height: 700 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  await screenshot('main-minimum-width.png');
+  assert.deepEqual(errors, []);
+  console.log(`UI smoke passed. Fake SSH/models only; screenshots: ${output}`);
+} catch (error) {
+  if (page && !page.isClosed()) await screenshot('failure.png').catch(() => {});
+  throw error;
+} finally {
+  await browser?.close();
+  await server.close();
+}
