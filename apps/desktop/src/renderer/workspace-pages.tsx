@@ -3,6 +3,7 @@ import type { OperationView, TaskView } from '@cloudhelm/contracts';
 import { capture, Icon, statusLabel } from './ui-helpers.js';
 import { useUi } from './store.js';
 import { MarkdownMessage } from './markdown-message.js';
+import { presentError } from './error-presentation.js';
 import styles from './ui.module.css';
 
 export function FilesPage({ hostId, host, report }: { hostId: string; host: string; report(error: string): void }): React.JSX.Element {
@@ -55,11 +56,13 @@ export function OperationCard({ operation, report }: { operation: OperationView;
 
 export function VerificationCard({ conversation, report }: { conversation: TaskView; report(error: string): void }): React.JSX.Element {
   const verified = conversation.status === 'ready-for-review' && !!conversation.report?.evidenceOperationIds.length;
+  const failure = conversation.status === 'failed' ? presentError(conversation.summary) : null;
   return <section className={`${styles.reviewCard} ${styles.verificationCard}`}>
-    <div className={styles.cardTitle}><Icon name={verified || conversation.status === 'accepted' ? 'check' : 'shield'} /><strong>{statusLabel[conversation.status]}</strong></div>
-    <p>{conversation.report?.summary ?? conversation.summary ?? '还需要补充验证证据，请查看对话中的说明。'}</p>
-    {conversation.report?.access.map((address) => <code className={styles.access} key={address}>{address}</code>)}
-    <div className={styles.cardActions}><button onClick={() => useUi.getState().openReport(conversation.id)}>查看完整报告</button>
+    <div className={styles.cardTitle}><Icon name={verified || conversation.status === 'accepted' ? 'check' : 'shield'} /><strong>{failure?.title ?? statusLabel[conversation.status]}</strong></div>
+    <p>{failure?.description ?? conversation.report?.summary ?? conversation.summary ?? '还需要补充验证证据，请查看对话中的说明。'}</p>
+    {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
+      : conversation.report?.access.map((address) => <code className={styles.access} key={address}>{address}</code>)}
+    <div className={styles.cardActions}><button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
       {verified && <button className={styles.primary} onClick={() => void capture(() => window.cloudhelm.acceptConversation(conversation.id), report)}>验收完成</button>}
     </div>
   </section>;
@@ -70,6 +73,7 @@ export function ReportPage({ conversation, operations, report }: { conversation:
   const messages = snapshot?.messages.filter((message) => message.taskId === conversation.id) ?? [];
   return <section className={styles.reportPage}>
     <div className={styles.pageHead}><div><small>AI 对话详情</small><h2>{conversation.goal}</h2></div><span className={styles.pill}>{statusLabel[conversation.status]}</span></div>
+    {!conversation.report && conversation.status === 'failed' && <VerificationCard conversation={conversation} report={report} />}
     {conversation.report && <>
       <VerificationCard conversation={conversation} report={report} />
       <h3>变更</h3><ul>{conversation.report.changes.map((item) => <li key={item}>{item}</li>)}</ul>

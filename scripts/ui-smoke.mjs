@@ -1,4 +1,4 @@
-/* global window, document, navigator */
+/* global window, document, navigator, structuredClone */
 import assert from 'node:assert/strict';
 import console from 'node:console';
 import { mkdir } from 'node:fs/promises';
@@ -148,6 +148,54 @@ async function exerciseInputIsolation() {
   assert.equal((await calls()).filter((call) => call.kind === 'input').some((call) => call.data.includes('test-sensitive-answer')), false);
 }
 
+async function exerciseAsyncErrors() {
+  // The main process projects task-status into snapshots before renderer delivery.
+  // Introducing a historical failure must not be mistaken for a fresh failure.
+  await page.evaluate(async () => {
+    const snapshot = await window.cloudhelm.snapshot();
+    snapshot.conversations.push({ ...snapshot.conversations[0], id: 'historical-failure', goal: '曾经失败的历史对话',
+      status: 'failed', summary: 'Error: Unauthorized; password=history-secret-never-render', createdAt: 1, updatedAt: 1 });
+    window.fixture.asyncErrorSnapshot = snapshot;
+    window.fixture.inject({ type: 'snapshot', value: snapshot });
+  });
+  await page.getByRole('button', { name: /曾经失败的历史对话/ }).click();
+  assert.equal(await page.getByRole('alertdialog').count(), 0);
+  await page.getByText('模型身份验证未通过', { exact: true }).waitFor();
+  await page.getByText('查看错误详情', { exact: true }).click();
+  assert.equal((await page.locator('body').textContent()).includes('history-secret-never-render'), false);
+  await page.getByRole('button', { name: '查看对话记录', exact: true }).click();
+  assert.equal(await page.getByRole('alertdialog').count(), 0);
+  assert.equal((await page.locator('body').textContent()).includes('history-secret-never-render'), false);
+  // A newly delivered failure of the running conversation does notify the user.
+  await page.evaluate(() => {
+    const snapshot = structuredClone(window.fixture.asyncErrorSnapshot);
+    snapshot.conversations[0].status = 'failed';
+    snapshot.conversations[0].summary = 'Error: Host is not connected; apiKey=async-secret-never-render';
+    window.fixture.asyncErrorSnapshot = snapshot;
+    window.fixture.inject({ type: 'snapshot', value: snapshot });
+  });
+  const failure = page.getByRole('alertdialog', { name: 'SSH 连接已断开' });
+  await failure.waitFor();
+  await failure.getByText('查看技术详情', { exact: true }).click();
+  assert.equal((await page.locator('body').textContent()).includes('async-secret-never-render'), false);
+  await failure.getByRole('button', { name: '知道了' }).click();
+  await page.evaluate(() => window.fixture.inject({ type: 'snapshot', value: structuredClone(window.fixture.asyncErrorSnapshot) }));
+  await page.getByRole('button', { name: /帮我把这个服务装成 Docker 并启动/ }).click();
+  await page.getByText('SSH 连接已断开', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('alertdialog').count(), 0);
+  assert.equal((await page.locator('body').textContent()).includes('async-secret-never-render'), false);
+  // Successful reports containing diagnostic words are ordinary content.
+  await page.evaluate(() => {
+    const snapshot = structuredClone(window.fixture.asyncErrorSnapshot);
+    snapshot.conversations[0].status = 'ready-for-review';
+    snapshot.conversations[0].summary = '已经完成 Unauthorized 错误排查。';
+    snapshot.conversations[0].report = { summary: '已经完成 Unauthorized 错误排查，服务正常。', access: [], evidenceOperationIds: [], changes: [], recovery: [] };
+    window.fixture.inject({ type: 'snapshot', value: snapshot });
+  });
+  await page.getByText('已经完成 Unauthorized 错误排查，服务正常。', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('alertdialog').count(), 0);
+}
+
 try {
   browser = await chromium.launch({ headless: true, ...(process.env.CLOUDHELM_SMOKE_BROWSER_CHANNEL ? { channel: process.env.CLOUDHELM_SMOKE_BROWSER_CHANNEL } : {}) });
   page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
@@ -166,6 +214,7 @@ try {
   await page.setViewportSize({ width: 980, height: 700 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   await screenshot('main-minimum-width.png');
+  await exerciseAsyncErrors();
   assert.deepEqual(errors, []);
   console.log(`UI smoke passed. Fake SSH/models only; screenshots: ${output}`);
 } catch (error) {

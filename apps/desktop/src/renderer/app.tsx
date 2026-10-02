@@ -47,7 +47,21 @@ export function App(): React.JSX.Element {
   const pendingCount = (snapshot?.approvals.length ?? 0) + (snapshot?.inputs.length ?? 0);
 
   useEffect(() => {
-    const unsubscribe = window.cloudhelm.onEvent(useUi.getState().applyEvent);
+    const unsubscribe = window.cloudhelm.onEvent((event) => {
+      const previous = useUi.getState().snapshot;
+      useUi.getState().applyEvent(event);
+      // Main projects worker task-status events into snapshots. Only a new
+      // failure of an already known conversation should interrupt the user;
+      // restoring historical failed conversations must stay quiet.
+      if (event.type !== 'snapshot' || !previous) return;
+      const previousStatuses = new Map(previous.conversations.map((item) => [item.id, item.status]));
+      for (const conversation of event.value.conversations) {
+        const before = previousStatuses.get(conversation.id);
+        if (before && before !== 'failed' && conversation.status === 'failed') {
+          setError(conversation.summary || 'Unknown conversation failure');
+        }
+      }
+    });
     void window.cloudhelm.snapshot().then(useUi.getState().setSnapshot).catch((cause: unknown) => setError(String(cause)));
     return unsubscribe;
   }, [setError]);
