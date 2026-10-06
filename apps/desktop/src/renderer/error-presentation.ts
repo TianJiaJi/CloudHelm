@@ -43,6 +43,8 @@ const rules: ErrorRule[] = [
     title: '这次授权已失效', description: '操作内容、策略或终端控制权发生了变化。请查看最新操作并重新审核后再继续。', severity: 'warning' },
   { code: 'human-control', pattern: /Return terminal control to the Agent|not a human-controlled Agent session|taken over/iu,
     title: '请先确认终端控制权', description: '终端控制状态已经变化。请在终端顶部查看当前状态，需要继续 AI 时手动交还终端。', severity: 'warning' },
+  { code: 'ssh-handshake-closed', pattern: /Connection lost before handshake/iu,
+    title: 'SSH 握手前连接被关闭', description: '连接在身份验证之前已中断，尚未验证密码或私钥。请核对地址和端口，并检查 VPN／代理分流、服务器防火墙及 SSH 服务的访问限制。', severity: 'warning' },
   { code: 'disconnected', pattern: /Host is not connected|Not connected|ECONNRESET|EPIPE|Connection (?:lost|closed)|Terminal not found|disconnected/iu,
     title: 'SSH 连接已断开', description: '请从左侧重新连接主机。已启动的远端命令可能仍在运行，继续前需要核验结果。', severity: 'warning' },
   { code: 'connection-refused', pattern: /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|Connection refused/iu,

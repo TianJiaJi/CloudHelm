@@ -1,5 +1,5 @@
 import { HostSerialExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
-import { HostKeyError, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
+import { HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import type { RawTerminal } from '@cloudhelm/core';
 import type { ApprovalView, InputRequestView } from '@cloudhelm/contracts';
@@ -212,8 +212,9 @@ export class WorkerServer {
   }
 
   private async openTerminal(hostId: string, taskId?: string): Promise<string> {
-    const probe = taskId ? await this.ssh.execFixed(hostId, 'test -x /bin/bash && pwd -P') : undefined;
-    if (probe && (probe.exitCode !== 0 || !probe.output.trim().startsWith('/') || probe.output.trim().includes('\n'))) throw new Error('无法核验 Agent Bash 和登录目录');
+    const probe = taskId ? await this.ssh.execFixed(hostId, 'pwd -P') : undefined;
+    if (probe && (probe.exitCode !== 0 || !probe.output.trim().startsWith('/') || probe.output.trim().includes('\n'))) throw new Error('无法核验 Agent 登录目录');
+    if (taskId) return this.terminal.open(hostId, new SshCommandTerminal(this.ssh, hostId), taskId, probe!.output.trim());
     const channel = await this.ssh.shell(hostId);
     const raw: RawTerminal = {
       write: (data) => channel.write(data),

@@ -8,6 +8,8 @@
 }
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; width: 100%; height: 100%; }
+/* The desktop shell stays in the viewport; individual panels own scrolling. */
+html, body, #root { overflow: hidden; }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .45; }

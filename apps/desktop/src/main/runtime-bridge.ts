@@ -21,18 +21,15 @@ export class RuntimeBridge {
     this.child = utilityProcess.fork(join(import.meta.dirname, 'runtime.js'), [], { serviceName: 'CloudHelm Agent and SSH runtime' });
     this.child.on('message', (message: RuntimeMessage) => this.receive(message));
     this.child.on('exit', () => {
+      if (this.stopped) return;
       this.stopped = true;
-      for (const pending of this.pending.values()) {
-        clearTimeout(pending.timeout);
-        pending.reject(new Error('Agent runtime stopped; remote command outcomes require verification'));
-      }
-      this.pending.clear();
+      this.rejectPending();
       if (!this.closing) this.onStopped();
     });
   }
 
   async call<T = unknown>(call: RuntimeCall): Promise<T> {
-    if (this.stopped) throw new Error('AI 运行进程已停止，请重新打开 CloudHelm 并核验远端状态。');
+    if (this.stopped || this.closing) throw new Error('AI 运行进程已停止，请重新打开 CloudHelm 并核验远端状态。');
     const id = randomUUID();
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -40,11 +37,17 @@ export class RuntimeBridge {
         reject(new Error('Runtime request timed out'));
       }, call.method === 'connect' ? 180_000 : call.method === 'test-host' ? 60_000 : 30_000);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timeout });
-      this.child.postMessage({ id, call });
+      try { this.child.postMessage({ id, call }); }
+      catch {
+        this.pending.delete(id);
+        clearTimeout(timeout);
+        reject(new Error('AI 运行进程不可用，请重新打开 CloudHelm 并核验远端状态。'));
+      }
     });
   }
 
   private receive(message: RuntimeMessage): void {
+    if (this.closing || this.stopped) return;
     if ('readLog' in message) {
       const query = message.readLog;
       try { this.child.postMessage({ logResult: { id: query.id, value: this.readLog(query.taskId, query.operationId, query.cursor) } }); }
@@ -64,5 +67,18 @@ export class RuntimeBridge {
     } else pending.resolve('result' in message ? message.result : undefined);
   }
 
-  close(): void { this.closing = true; this.child.kill(); }
+  private rejectPending(): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('Agent runtime stopped; remote command outcomes require verification'));
+    }
+    this.pending.clear();
+  }
+
+  close(): void {
+    if (this.closing) return;
+    this.closing = true;
+    this.rejectPending();
+    if (!this.stopped) this.child.kill();
+  }
 }

@@ -175,6 +175,31 @@ export class SshTransport {
     });
   }
 
+  /** Installs only the fixed process transport, never model-authored scripts or secrets. */
+  async prepareCommandProgram(hostId: string, source: string, assertAuthorized: () => void): Promise<string> {
+    assertAuthorized();
+    const result = await this.execFixed(hostId, 'command -v python3 && mktemp -d /tmp/cloudhelm-run.XXXXXXXX');
+    const lines = result.output.trim().split(/\r?\n/u);
+    const directory = lines[1];
+    if (result.exitCode !== 0 || lines.length !== 2 || !lines[0]?.startsWith('/')
+      || !directory || !/^\/tmp\/cloudhelm-run\.[A-Za-z0-9]+$/u.test(directory)) {
+      throw new Error('Direct command execution requires Python 3 on the host; no command was sent.');
+    }
+    const script = `${directory}/process.py`;
+    try {
+      await this.withSftp(hostId, (sftp) => this.writeSftpFile(sftp, script, Buffer.from(source), 0o700, assertAuthorized));
+      return script;
+    } catch (error) {
+      await this.removeCommandProgram(hostId, script).catch(() => {});
+      throw error;
+    }
+  }
+
+  async removeCommandProgram(hostId: string, script: string): Promise<void> {
+    if (!/^\/tmp\/cloudhelm-run\.[A-Za-z0-9]+\/process\.py$/u.test(script)) throw new Error('Invalid command transport path');
+    await this.execFixed(hostId, `rm -f -- ${script}; rmdir -- ${path.posix.dirname(script)}`);
+  }
+
   async shell(hostId: string, cols = 100, rows = 30): Promise<ClientChannel> {
     const client = this.connections.get(hostId);
     if (!client) throw new Error('Host is not connected');

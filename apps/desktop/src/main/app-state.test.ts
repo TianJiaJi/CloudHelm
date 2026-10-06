@@ -147,3 +147,30 @@ describe('conversation credential binding', () => {
     expect(store.get('settings', 'model-provider:cloudhelm-custom')).toBeUndefined();
   });
 });
+
+describe('state disposal', () => {
+  it('flushes logs once and ignores late worker events after the database is closed', () => {
+    vi.useFakeTimers();
+    try {
+      const { state, store, events } = setup();
+      const append = vi.spyOn(store, 'appendLog');
+      state.record({ type: 'terminal-data', terminalId: 'terminal', data: 'final output' });
+      state.close();
+      expect(append).toHaveBeenCalledOnce();
+      const accesses = [vi.spyOn(store, 'get'), vi.spyOn(store, 'put'), vi.spyOn(store, 'cleanupLogs'), append];
+      for (const access of accesses) {
+        access.mockClear();
+        access.mockImplementation(() => { throw new Error('The database connection is not open'); });
+      }
+      events.length = 0;
+      expect(() => {
+        state.record({ type: 'task-message', taskId: 'task', role: 'agent', text: 'late result', createdAt: 1 });
+        state.record({ type: 'terminal-data', terminalId: 'terminal', data: 'late output' });
+        state.runtimeStopped(); state.publish(); state.close();
+        vi.advanceTimersByTime(24 * 60 * 60_000);
+      }).not.toThrow();
+      for (const access of accesses) expect(access).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    } finally { vi.useRealTimers(); }
+  });
+});

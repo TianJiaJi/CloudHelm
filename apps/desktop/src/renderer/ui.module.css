@@ -64,6 +64,7 @@
 .terminalToolbar button { flex: none; padding: 4px; font-size: 10px; }
 .terminalNotice { padding: 7px 13px; font-size: 10px; color: var(--muted); border-bottom: 1px solid var(--border); line-height: 1.5; }
 .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 12px; background: var(--terminalBg); }
+.terminalViewport { width: 100%; height: 100%; min-height: 0; overflow: hidden; }
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: var(--muted); padding: 30px; text-align: center; }
 .emptyGlyph { display: grid; place-items: center; width: 76px; height: 76px; border: 1px solid var(--border); border-radius: 19px; background: var(--raised); color: var(--accent); }
 .empty h1 { margin: 24px 0 8px; font-size: 21px; font-weight: 550; color: var(--text); }
@@ -106,7 +107,6 @@
 .planCard li { display: flex; gap: 9px; color: var(--muted); padding: 5px 0; }
 .planCard li[data-state=running] { color: var(--text); }
 .planCard li[data-state=done] > span { color: var(--accent); }
-.operationList > .sectionHead { padding: 10px 0; }
 .operationCard, .reviewCard { border: 1px solid var(--border); border-radius: 9px; margin: 0 0 12px; padding: 12px; background: var(--canvas); overflow: hidden; }
 .cardTitle { display: flex; gap: 7px; align-items: center; font-size: 11px; }
 .cardTitle strong { font-weight: 600; }

@@ -33,6 +33,32 @@ function literalArgument(node: SyntaxNode): string {
   return shellWord(source);
 }
 
+/** Flatten only foreground literal lists. Never split shell source on punctuation. */
+function literalSteps(root: SyntaxNode): CommandAnalysis['steps'] {
+  const steps: NonNullable<CommandAnalysis['steps']> = [];
+  let condition: 'always' | 'success' | 'failure' = 'always';
+  const visit = (node: SyntaxNode): boolean => {
+    if (node.type === 'program' || node.type === 'list') return node.children.every(visit);
+    if ([';', '&&', '||', '\n'].includes(node.type)) {
+      condition = node.type === '&&' ? 'success' : node.type === '||' ? 'failure' : 'always';
+      return true;
+    }
+    if (node.type === 'comment') return true;
+    if (node.type !== 'command') return false;
+    const name = node.childForFieldName('name');
+    if (!name || node.namedChildren.some((child) => isDynamic(child) || /assignment|redirect/u.test(child.type))) return false;
+    const call: CommandCall = { name: literalArgument(name),
+      args: node.children.flatMap((child, index) => node.fieldNameForChild(index) === 'argument' ? [literalArgument(child)] : []),
+      dynamic: false, redirects: false };
+    // Builtins can change shell state; these must retain native shell evaluation.
+    if (['cd', 'export', 'unset', 'source', '.', 'ulimit', 'umask', 'alias', 'unalias', 'type', 'command', 'eval', 'exec', 'exit', 'read', 'set'].includes(call.name)) return false;
+    steps.push({ call, condition });
+    condition = 'always';
+    return true;
+  };
+  return visit(root) && steps.length ? steps : undefined;
+}
+
 function collect(node: SyntaxNode, analysis: CommandAnalysis, depth: number, parser: Parser): void {
   if (depth > MAX_NESTING) {
     analysis.hasError = true;
@@ -113,6 +139,7 @@ export class BashAnalyzer implements CommandAnalyzer {
         || tree.rootNode.namedChildren.some((node) => node.type !== 'command')
         || tree.rootNode.children.some((node) => ['&', ';', '&&', '||'].includes(node.type));
       collect(tree.rootNode, analysis, 0, parser);
+      analysis.steps = literalSteps(tree.rootNode);
       if (analysis.calls.length > 1) analysis.hasCompound = true;
       return analysis;
     } finally {

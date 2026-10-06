@@ -28,6 +28,8 @@ export interface CommandCall {
 
 export interface CommandAnalysis {
   calls: CommandCall[];
+  /** Literal foreground commands in shell evaluation order; absent for opaque syntax. */
+  steps?: Array<{ call: CommandCall; condition: 'always' | 'success' | 'failure' }>;
   redirectTargets: string[];
   hasExpansion: boolean;
   hasPipeline: boolean;
@@ -55,6 +57,8 @@ export interface OperationResult {
   stdoutTail: string;
   logRef?: string;
   cwd?: string;
+  /** Authentication or an unsupported interaction requires an explicit user decision. */
+  requiresUserAction?: boolean;
   /** Runtime-only evidence that a handed-over PTY command actually left the foreground. */
   remoteCompletion?: Promise<'exited' | 'unknown'>;
 }

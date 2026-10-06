@@ -1,6 +1,10 @@
 /* global window, document, navigator, structuredClone */
 import assert from 'node:assert/strict';
 import { checkHostTestControls } from './host-test-ui-probe.mjs';
+import { checkConversationTimeline } from './check-conversation-timeline.mjs';
+import { checkViewportLayout } from './check-viewport-layout.mjs';
+import { checkUserMessageActions } from './check-user-message-actions.mjs';
+import { checkTerminalLayout } from './check-terminal-layout.mjs';
 import console from 'node:console';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -272,13 +276,18 @@ async function exerciseHostControls() {
 
 try {
   browser = await chromium.launch({ headless: true, ...(process.env.CLOUDHELM_SMOKE_BROWSER_CHANNEL ? { channel: process.env.CLOUDHELM_SMOKE_BROWSER_CHANNEL } : {}) });
-  page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark',
+    deviceScaleFactor: Number(process.env.CLOUDHELM_SMOKE_DEVICE_SCALE_FACTOR ?? 1) });
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
   await exerciseHostControls();
   await exerciseErrors();
   await exerciseConversation();
+  await checkConversationTimeline(page, screenshot);
+  await checkViewportLayout(page, screenshot);
+  await checkUserMessageActions(page, screenshot);
+  await checkTerminalLayout(page, screenshot);
   await exerciseNavigation();
   await exerciseInputIsolation();
   await page.getByRole('button', { name: '生产服务器', exact: true }).click();

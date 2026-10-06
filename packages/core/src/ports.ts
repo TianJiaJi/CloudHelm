@@ -41,6 +41,14 @@ export interface TerminalLease {
 }
 
 export interface RawTerminal {
+  /** Separate process/control channel; command text is never rewritten as terminal input. */
+  execute?(command: string, cwd: string, isAuthorized: () => boolean): Promise<void>;
+  onExit?(listener: (exitCode: number | undefined) => void): void;
+  /** Prompt/command echo for the terminal only, separate from captured command output. */
+  onDisplay?(listener: (data: string) => void): void;
+  onAuthentication?(listener: (challenge: { id: string; prompt?: string }) => void): void;
+  answerAuthentication?(id: string, answer: string | null): boolean;
+  takeOver?(): void;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   close(): void;

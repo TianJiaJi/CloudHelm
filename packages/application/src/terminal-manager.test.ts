@@ -7,6 +7,11 @@ class FakeTerminal implements RawTerminal {
   writes: string[] = [];
   private data?: (text: string) => void;
   private closed?: () => void;
+  private exited?: (code: number | undefined) => void;
+  commands: Array<{ command: string; cwd: string }> = [];
+  async execute(command: string, cwd: string): Promise<void> { this.commands.push({ command, cwd }); }
+  onExit(listener: (code: number | undefined) => void): void { this.exited = listener; }
+  complete(code = 0): void { this.exited?.(code); }
   write(text: string): void { this.writes.push(text); }
   resize(): void {}
   close(): void { this.closed?.(); }
@@ -34,33 +39,48 @@ describe('real PTY ownership', () => {
     expect(channel.writes).toEqual(['pwd\n']);
   });
 
-  it('shows the approved command in the remote PTY and records its marker result', async () => {
+  it('runs the original command directly and records the process exit result', async () => {
     const channel = new FakeTerminal();
     const manager = new TerminalManager({ data() {}, state() {} });
     const id = manager.open('host', channel, 'task');
     const proposed = operation('one', manager.currentGeneration(id));
     proposed.scope.terminalId = id;
     const result = manager.execute(proposed, operationFingerprint(proposed));
-    expect(channel.writes[0]).toContain('echo hi');
-    const marker = /(__CLOUDHELM_DONE_[a-f\d]+__)/u.exec(channel.writes[0] ?? '')?.[1];
-    channel.emit(`hi\r\n${marker}:0\r\n`);
+    expect(channel.commands).toEqual([{ command: 'echo hi', cwd: '/srv/app' }]);
+    expect(channel.writes).toEqual([]);
+    channel.emit('hi\r\n'); channel.complete();
     expect((await result).status).toBe('succeeded');
   });
 
-  it('keeps observing the remote marker after human takeover', async () => {
+  it('keeps observing process completion after human takeover', async () => {
     const channel = new FakeTerminal();
     const manager = new TerminalManager({ data() {}, state() {} });
     const id = manager.open('host', channel, 'task');
     const proposed = operation('takeover', manager.currentGeneration(id));
     proposed.scope.terminalId = id;
     const running = manager.execute(proposed, operationFingerprint(proposed));
-    const marker = /(__CLOUDHELM_DONE_[a-f\d]+__)/u.exec(channel.writes[0] ?? '')?.[1];
     manager.takeOver(id);
     const handedOver = await running;
     expect(handedOver.status).toBe('handed-over');
     expect(handedOver.remoteCompletion).toBeDefined();
-    channel.emit(`${marker}:0\r\n`);
+    channel.complete();
     expect(await handedOver.remoteCompletion).toBe('exited');
+  });
+
+  it('sends no wrappers or status markers and preserves literal output', async () => {
+    const channel = new FakeTerminal();
+    const data: Array<{ text: string; operationId?: string }> = [];
+    const manager = new TerminalManager({ data(_id, text, operationId) { data.push({ text, operationId }); }, state() {} });
+    const id = manager.open('host', channel, 'task');
+    const proposed = operation('clean', manager.currentGeneration(id));
+    proposed.scope.terminalId = id;
+    const result = manager.execute(proposed, operationFingerprint(proposed));
+    expect(channel.commands).toEqual([{ command: 'echo hi', cwd: '/srv/app' }]);
+    expect(channel.writes).toEqual([]);
+    channel.emit('hi\r\n'); channel.complete();
+    expect((await result).stdoutTail).toBe('hi\r\n');
+    expect(data.filter((event) => event.operationId).map((event) => event.text).join('')).toBe('hi\r\n');
+    expect(data.map((event) => event.text).join('')).toBe('$ echo hi\r\nhi\r\n');
   });
 
   it('invalidates a running Agent operation when its terminal is closed', async () => {

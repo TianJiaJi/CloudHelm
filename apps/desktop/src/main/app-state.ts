@@ -21,6 +21,7 @@ export class AppState {
   private logFlushTimer?: ReturnType<typeof setTimeout>;
   private readonly retentionTimer: ReturnType<typeof setInterval>;
   private profile: ProfileRecord;
+  private closed = false;
 
   constructor(private readonly store: SqliteStore, private readonly emit: (event: AppEvent) => void) {
     for (const host of store.list<HostView>('hosts')) this.hosts.set(host.id, { ...host, status: 'disconnected', policyRevision: host.policyRevision ?? 1 });
@@ -303,6 +304,7 @@ export class AppState {
     | { type: 'input-open'; value: InputRequestView } | { type: 'input-close'; id: string }
     | { type: 'task-status'; taskId: string; status: TaskView['status']; summary?: string; requestCount?: number }
     | { type: 'host-status'; hostId: string; status: HostView['status'] }): void {
+    if (this.closed) return;
     switch (event.type) {
       case 'operation':
         if (event.value.logRef && ['succeeded', 'failed'].includes(event.value.status)) {
@@ -377,9 +379,10 @@ export class AppState {
     if (event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
   }
 
-  publish(): void { this.emit({ type: 'snapshot', value: this.snapshot() }); }
+  publish(): void { if (!this.closed) this.emit({ type: 'snapshot', value: this.snapshot() }); }
 
   runtimeStopped(): void {
+    if (this.closed) return;
     for (const host of this.hosts.values()) if (host.status === 'connected' || host.status === 'connecting') {
       this.updateHost(host.id, { status: 'disconnected' });
     }
@@ -395,6 +398,7 @@ export class AppState {
   }
 
   close(): void {
+    if (this.closed) return;
     if (this.logFlushTimer) clearTimeout(this.logFlushTimer);
     clearInterval(this.retentionTimer);
     for (const [id, redactor] of this.redactors) {
@@ -402,9 +406,11 @@ export class AppState {
     }
     this.redactors.clear();
     this.flushLogs();
+    this.closed = true;
   }
 
   private flushLogs(): void {
+    if (this.closed) return;
     if (this.logFlushTimer) clearTimeout(this.logFlushTimer);
     this.logFlushTimer = undefined;
     for (const [id, data] of this.logBuffer) if (data) this.store.appendLog(id, data);

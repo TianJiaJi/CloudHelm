@@ -59,7 +59,7 @@ pnpm test:ui
 pnpm test:markdown
 ```
 
-`test:ui` 使用假 SSH、假模型、文档地址和假凭据，不连接用户服务器；覆盖主机菜单、私钥选择、未保存配置测试、对话切换、审批、接管及友好错误。截图在 `.cache/ui-smoke/`。
+`test:ui` 使用假 SSH、假模型、文档地址和假凭据，不连接用户服务器；覆盖主机菜单、私钥选择、未保存配置测试、对话时间线、用户消息复制／编辑、窗口与终端尺寸、审批、接管及友好错误。截图在 `.cache/ui-smoke/`。
 
 `test:markdown` 验证 GFM、代码复制、原始 HTML 禁用、外链协议和图片隐私，截图在 `.cache/markdown-smoke/`。本机可用 `CLOUDHELM_SMOKE_BROWSER_CHANNEL=chrome` 选择已安装的 Chrome；Windows PowerShell 设置环境变量时使用 `$env:CLOUDHELM_SMOKE_BROWSER_CHANNEL = 'chrome'`。
 
@@ -76,6 +76,20 @@ pnpm test:desktop:packaged
 测试使用独立临时 `userData`，验证 preload 隔离、SQLite、Tree-sitter WASM、safeStorage 加解密和窗口渲染。连接测试探针启动临时 loopback SSH 服务，通过 renderer → main → worker 验证指纹、密码认证、连接清理，以及不保存主机、不打开 Shell。私钥选择器的自动测试使用原生对话框替身，不读取真实私钥。
 
 截图写入 `.cache/desktop-smoke/`。可以通过 `--executable=/absolute/path/to/executable` 指定待检查的打包程序。原生模块发生 ABI 不匹配时，应为当前 Electron 重新构建依赖；不要复制另一平台的 `node_modules` 代替构建。
+
+### 远端命令执行组件
+
+Agent 命令需要远端 Python 3。固定组件通过 SFTP 放置在私有临时目录，仅负责启动目标程序、回传输出和退出码及隔离 sudo 密码通道。普通人工 SSH 终端不依赖此组件。缺少 Python 3 时提示并暂停，不自动安装或换用复杂 Shell 包装。
+
+sudo 支持可静态解析的前台命令列表（`;`、换行、`&&`、`||`），每条实际执行前复核授权。只有 sudo 发出 askpass 请求时才弹出密码输入。终端完整显示远端用户名、主机、工作目录、原始命令和输出；提示符及命令回显与操作输出分开，PTY 从启动时采用当前窗口尺寸。AI 提示符采用标准 Bash 样式，不加载用户自定义 PS1。人工接管立即打开原生交互 Shell，可按需执行 `su -`。
+
+sudo 的默认回归测试可单独运行：
+
+```sh
+pnpm exec vitest run apps/desktop/src/worker/sudo-terminal.integration.test.ts packages/adapters/src/ssh-command-terminal.test.ts packages/adapters/src/remote-command-program.test.ts
+```
+
+其中真实本地进程／PTY 测试使用 sudo 替身验证 askpass 密码隔离、免密和取消路径，不连接生产服务器，也不修改本机 sudo 策略。真实服务器验收和剩余兼容性边界见 [STATUS.md](STATUS.md)。
 
 ### 可选真实 SSH／Pi 协议集成
 

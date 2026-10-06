@@ -44,7 +44,7 @@ const api: DesktopAPI = {
   },
   terminalInput: async (id, data) => { calls.push({ kind: 'input', id, data }); },
   terminalProtocolResponse: async (id, data) => { calls.push({ kind: 'protocol', id, data }); },
-  resizeTerminal: async () => {},
+  resizeTerminal: async (id, cols, rows) => { calls.push({ kind: 'resize', id, cols, rows }); },
   startConversation: async (input) => {
     calls.push({ kind: 'start', input });
     const conversation = { id: `chat${++sequence}`, goal: input.message, hostIds: input.hostId ? [input.hostId] : [], localScopes: [],

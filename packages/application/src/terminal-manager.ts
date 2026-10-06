@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
-import { commandEnvelope } from './command-envelope.js';
 import { operationFingerprint } from '@cloudhelm/core';
 
 type Owner = 'agent' | 'human' | 'suspended' | 'closed';
 
 interface PendingCommand {
-  marker: string;
   output: string;
   settle(result: OperationResult): void;
   remoteCompletion: Promise<'exited' | 'unknown'>;
@@ -45,7 +43,9 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     };
     this.terminals.set(terminal.id, terminal);
     channel.onData((data) => this.receive(terminal, data));
+    channel.onDisplay?.((data) => this.events.data(terminal.id, data));
     channel.onClose(() => this.closeRecord(terminal));
+    channel.onExit?.((code) => this.complete(terminal, code));
     this.events.state(terminal.id, terminal.owner);
     return terminal.id;
   }
@@ -66,6 +66,25 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     };
   }
 
+  subscribeAuthentication(id: string, listener: (challenge: { id: string; prompt?: string }) => void): () => void {
+    const channel = this.require(id).channel;
+    channel.onAuthentication?.(listener);
+    return () => channel.onAuthentication?.(() => {});
+  }
+
+  answerAuthentication(id: string, operationId: string, challengeId: string, answer: string | null): boolean {
+    const terminal = this.require(id);
+    if (terminal.pending?.operationId !== operationId || (answer !== null && terminal.owner !== 'agent')) return false;
+    return terminal.channel.answerAuthentication?.(challengeId, answer) ?? false;
+  }
+
+  confirmInput(id: string, operationId: string, answer: string): boolean {
+    const terminal = this.require(id);
+    if (terminal.pending?.operationId !== operationId || terminal.owner !== 'agent') return false;
+    terminal.channel.write(answer);
+    return true;
+  }
+
   input(id: string, data: string, humanIntent: boolean): void {
     const terminal = this.require(id);
     if (humanIntent && (terminal.owner === 'agent' || terminal.owner === 'suspended')) this.takeOver(id);
@@ -78,6 +97,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     if (terminal.owner !== 'agent' && terminal.owner !== 'suspended') return;
     terminal.generation++;
     terminal.owner = 'human';
+    terminal.channel.takeOver?.();
     if (terminal.pending && !terminal.pending.reported) {
       const pending = terminal.pending;
       pending.reported = true;
@@ -143,11 +163,11 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       || operationFingerprint(operation) !== fingerprint || signal?.aborted || terminal.pending || options?.isAuthorized?.() === false) {
       throw new Error('Agent terminal authorization expired');
     }
-    const marker = `__CLOUDHELM_DONE_${randomUUID().replace(/-/gu, '')}__`;
+    if (!terminal.channel.execute) throw new Error('This terminal does not support direct process execution');
     return new Promise<OperationResult>((resolve) => {
       let completeRemote!: (state: 'exited' | 'unknown') => void;
       const remoteCompletion = new Promise<'exited' | 'unknown'>((done) => { completeRemote = done; });
-      const pending: PendingCommand = { marker, output: '', operationId: operation.id, settle: resolve,
+      const pending: PendingCommand = { output: '', operationId: operation.id, settle: resolve,
         remoteCompletion, completeRemote, reported: false };
       terminal.pending = pending;
       signal?.addEventListener('abort', () => {
@@ -161,24 +181,33 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
             logRef: terminal.id, remoteCompletion });
         }
       }, { once: true });
-      terminal.channel.write(commandEnvelope(operation.command, operation.scope, terminal.home, marker));
+      const current = () => !signal?.aborted && terminal.owner === 'agent'
+        && terminal.generation === operation.scope.terminalGeneration && options?.isAuthorized?.() !== false;
+      if (!terminal.channel.onDisplay) this.events.data(terminal.id, `$ ${operation.command}\r\n`);
+      void terminal.channel.execute!(operation.command, operation.scope.cwd, current).catch((error: unknown) => {
+        this.receive(terminal, error instanceof Error ? error.message : 'Command transport failed');
+        this.complete(terminal, undefined);
+      });
     });
   }
 
   private receive(terminal: TerminalRecord, data: string): void {
-    this.events.data(terminal.id, data, terminal.pending?.operationId);
+    const pending = terminal.pending;
+    this.events.data(terminal.id, data, pending?.operationId);
+    if (pending) pending.output = (pending.output + data).slice(-65_536);
     for (const listener of this.listeners.get(terminal.id) ?? []) listener(data);
+  }
+
+  private complete(terminal: TerminalRecord, exitCode: number | undefined): void {
     const pending = terminal.pending;
     if (!pending) return;
-    pending.output = (pending.output + data).slice(-65_536);
-    const match = new RegExp(`${pending.marker}:(\\d+)`).exec(pending.output);
-    if (!match) return;
     terminal.pending = undefined;
-    const exitCode = Number(match[1]);
-    pending.completeRemote('exited');
-    this.events.completed?.({ operationId: pending.operationId, status: exitCode === 0 ? 'succeeded' : 'failed', exitCode, stdoutTail: pending.output.slice(-16_384), logRef: terminal.id });
-    if (!pending.reported) pending.settle({ operationId: pending.operationId,
-      status: exitCode === 0 ? 'succeeded' : 'failed', exitCode, stdoutTail: pending.output.slice(-16_384), logRef: terminal.id });
+    pending.completeRemote(exitCode === undefined ? 'unknown' : 'exited');
+    const result: OperationResult = { operationId: pending.operationId,
+      status: exitCode === undefined ? 'unknown' : exitCode === 0 ? 'succeeded' : 'failed',
+      exitCode, stdoutTail: pending.output.slice(-16_384), logRef: terminal.id };
+    this.events.completed?.(result);
+    if (!pending.reported) pending.settle(result);
   }
 
   private closeRecord(terminal: TerminalRecord): void {

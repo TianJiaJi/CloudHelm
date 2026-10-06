@@ -68,4 +68,15 @@ https://user:${secrets[2]}@example.com/v1?access_token=${secrets[3]}`;
     expect(value.description).toContain('核验结果');
     expect(value.action).toBeUndefined();
   });
+
+  it('preserves pre-authentication handshake failures without exposing raw error content', () => {
+    const value = presentError(new Error("Error invoking remote method 'cloudhelm:connect-host': Error: Connection lost before handshake; private key with spaces"));
+    expect(value.code).toBe('ssh-handshake-closed');
+    expect(value.title).toBe('SSH 握手前连接被关闭');
+    expect(value.description).toContain('尚未验证密码或私钥');
+    expect(value.description).toContain('VPN／代理分流');
+    expect(value.details).toContain('识别到的原因：Connection lost before handshake');
+    expect(JSON.stringify(value)).not.toContain('private key with spaces');
+    expect(value.description).not.toContain('已启动的远端命令');
+  });
 });

@@ -84,6 +84,13 @@ try {
   assert.deepEqual(rendererErrors, []);
   assert.doesNotMatch(stderr, /CloudHelm startup failed|NODE_MODULE_VERSION|Cannot find module|ERR_MODULE_NOT_FOUND/u);
   await page.screenshot({ path: path.join(output, 'window.png'), fullPage: true });
+  // before-quit can repeat or be canceled by window handlers. SQLite must remain open until will-quit.
+  await application.evaluate(({ app }) => {
+    app.emit('before-quit', { preventDefault() {} });
+    app.emit('before-quit', { preventDefault() {} });
+  });
+  const afterCanceledQuit = await page.evaluate(() => window.cloudhelm.snapshot());
+  assert.ok(afterCanceledQuit.profile, 'Application state must remain readable after a canceled/repeated quit');
   console.log(JSON.stringify({ check: 'desktop-smoke', ...boundary, ...runtime }, null, 2));
 } catch (error) {
   if (page && !page.isClosed()) await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});

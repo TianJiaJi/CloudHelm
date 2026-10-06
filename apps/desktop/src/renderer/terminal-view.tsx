@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useUi } from './store.js';
+import { fitTerminal } from './terminal-fit.js';
 import styles from './ui.module.css';
 
 export function TerminalView({ terminalId, report }: { terminalId: string; report(error: string): void }): React.JSX.Element {
@@ -57,16 +58,11 @@ export function TerminalView({ terminalId, report }: { terminalId: string; repor
         return undefined;
       }).catch(showError);
     });
-    const observer = new ResizeObserver(() => {
-      const cols = Math.max(20, Math.floor((element.clientWidth - 24) / 7.83));
-      const rows = Math.max(4, Math.floor((element.clientHeight - 24) / 15.6));
-      if (xterm.cols === cols && xterm.rows === rows) return;
-      xterm.resize(cols, rows);
+    const stopFitting = fitTerminal(xterm, element, (cols, rows) => {
       void window.cloudhelm.resizeTerminal(terminalId, cols, rows).catch(showError);
     });
-    observer.observe(element);
     return () => {
-      observer.disconnect(); dispose.dispose(); media.removeEventListener('change', updateTheme); xterm.dispose(); terminal.current = null; shown.current = 0;
+      stopFitting(); dispose.dispose(); media.removeEventListener('change', updateTheme); xterm.dispose(); terminal.current = null; shown.current = 0;
       element.removeEventListener('keydown', onKey, true); element.removeEventListener('paste', markHuman, true);
       element.removeEventListener('compositionstart', markHuman, true); element.removeEventListener('beforeinput', markHuman, true);
     };
@@ -81,5 +77,5 @@ export function TerminalView({ terminalId, report }: { terminalId: string; repor
     shown.current = tab.offset + tab.buffer.length;
   }, [terminalId, tab?.buffer, tab?.offset]);
 
-  return <div className={styles.terminal} ref={holder} aria-label="SSH terminal" />;
+  return <div className={styles.terminal} aria-label="SSH terminal"><div className={styles.terminalViewport} ref={holder} /></div>;
 }

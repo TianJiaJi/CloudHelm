@@ -4,6 +4,8 @@ import { useUi } from './store.js';
 import { ApprovalCard, InputCard } from './interaction-cards.js';
 import { OperationCard, VerificationCard } from './workspace-pages.js';
 import { MarkdownMessage } from './markdown-message.js';
+import { UserMessage } from './user-message.js';
+import { conversationTimeline } from './conversation-timeline.js';
 import { capture, Icon, reviewLabel, statusLabel } from './ui-helpers.js';
 import styles from './ui.module.css';
 
@@ -21,6 +23,7 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
   const scroll = useRef<HTMLDivElement>(null);
   const messages = snapshot.messages.filter((message) => message.taskId === conversation?.id);
   const operations = snapshot.operations.filter((operation) => operation.taskId === conversation?.id);
+  const timeline = conversationTimeline(messages, operations.slice(-6));
   const approvals = snapshot.approvals.filter((approval) => approval.taskId === conversation?.id);
   const inputs = snapshot.inputs.filter((input) => input.taskId === conversation?.id);
   const terminal = useUi((state) => {
@@ -51,17 +54,20 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
         {host && <div className={styles.suggestions}><span>你可以这样说</span><p>检查这台服务器的磁盘占用</p><p>帮我把这个服务装成 Docker 并启动</p></div>}
       </div>}
       {!!conversation?.plan?.length && <details className={styles.planCard} open><summary>执行计划</summary><ol>{conversation.plan.map((step) => <li key={step.id} data-state={step.status}><span>{step.status === 'done' ? '✓' : step.status === 'running' ? '•' : '○'}</span>{step.title}</li>)}</ol></details>}
-      {messages.map((message, index) => <article key={`${message.createdAt}:${index}`} className={`${styles.message} ${message.role === 'user' ? styles.userMessage : ''}`}>
-        <strong>{message.role === 'agent' ? 'CloudHelm' : message.role === 'user' ? '你' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}
-        {message.model && <small>{message.model.provider} · {message.model.modelId}</small>}
-      </article>)}
+      {operations.length > 6 && <button className={styles.textButton} onClick={() => conversation && useUi.getState().openReport(conversation.id)}>查看更早的操作</button>}
+      {timeline.map((entry) => {
+        if (entry.kind === 'operation') return <OperationCard key={entry.key} operation={entry.value} report={report} />;
+        const message = entry.value;
+        if (message.role === 'user') return <UserMessage key={`${message.taskId}:${entry.key}`} message={message} canEdit={(conversation?.hostIds.length ?? 0) <= 1} report={report} />;
+        return <article key={entry.key} className={styles.message}>
+          <strong>{message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}
+          {message.model && <small>{message.model.provider} · {message.model.modelId}</small>}
+        </article>;
+      })}
+      {running && !hasRunningOperation && timeline.at(-1)?.kind === 'operation' && <p className={styles.note} role="status">AI 正在处理执行结果…</p>}
       {approvals.map((approval) => <ApprovalCard key={approval.id} approval={approval} host={hostName(approval.hostId)} report={report} />)}
       {inputs.filter((input) => input.kind !== 'secret' && input.kind !== 'otp').map((input) => <InputCard key={input.id} input={input} host={hostName(input.hostId)} report={report} />)}
       {inputs.filter((input) => (input.kind === 'secret' || input.kind === 'otp') && hiddenInputs.includes(input.id)).map((input) => <button className={styles.pendingInput} key={input.id} onClick={() => openInput(input.id)}><Icon name="shield" />{input.title} · 填写</button>)}
-      {!!operations.length && <div className={styles.operationList}><div className={styles.sectionHead}>命令与结果 <span>{operations.length}</span></div>
-        {operations.slice(-6).map((operation) => <OperationCard key={operation.id} operation={operation} report={report} />)}
-        {operations.length > 6 && <button className={styles.textButton} onClick={() => conversation && useUi.getState().openReport(conversation.id)}>查看更早的操作</button>}
-      </div>}
       {terminal && <button className={styles.agentTerminalLink} onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 专用终端<Icon name="chevron" size={12} /></button>}
       {conversation && ['ready-for-review', 'accepted', 'failed'].includes(conversation.status) && <VerificationCard conversation={conversation} report={report} />}
     </div>

@@ -8,10 +8,9 @@ import { AppState } from './app-state.js';
 import { registerConversationIpc } from './conversation-ipc.js';
 import { RuntimeBridge } from './runtime-bridge.js';
 import { HostConnectionTester } from './host-connection-test.js';
+import { AppShutdown } from './app-shutdown.js';
 
 if (process.env.CLOUDHELM_USER_DATA) app.setPath('userData', process.env.CLOUDHELM_USER_DATA);
-let quitting = false;
-let exitPrompt = false;
 
 let window: BrowserWindow | null = null;
 let store: SqliteStore;
@@ -36,7 +35,7 @@ function restoreLocalSelections(tokens: string[], scopes: LocalScope[]): void {
 }
 
 function publish(event: AppEvent): void {
-  window?.webContents.send('cloudhelm:event', event);
+  if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('cloudhelm:event', event);
 }
 
 async function connectHost(hostId: string): Promise<void> {
@@ -186,28 +185,23 @@ void app.whenReady().then(async () => {
   createWindow();
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 }).catch((error: unknown) => {
+  if (shutdown.isClosed) return;
   const message = error instanceof Error ? error.stack ?? error.message : String(error);
   console.error('CloudHelm startup failed:', message);
   dialog.showErrorBox('CloudHelm 无法启动', message);
 });
 
-app.on('before-quit', (event) => {
-  const snapshot = state?.snapshot();
-  const active = snapshot?.conversations.some((conversation) => ['running', 'waiting-review', 'human-control'].includes(conversation.status))
-    || snapshot?.operations.some((operation) => ['running', 'unknown'].includes(operation.status)
-      && snapshot.terminals.some((terminal) => terminal.id === operation.logRef));
-  if (active && !quitting) {
-    event.preventDefault();
-    if (exitPrompt) return;
-    exitPrompt = true;
-    void dialog.showMessageBox({ type: 'warning', title: '退出 CloudHelm',
+const shutdown = new AppShutdown({
+  snapshot: () => state?.snapshot(),
+  confirmExit: async () => {
+    const { response } = await dialog.showMessageBox({ type: 'warning', title: '退出 CloudHelm',
       message: 'AI 或远端命令仍可能在运行', detail: '退出会断开 SSH。远端进程是否停止需要在下次打开时核验。',
-      buttons: ['继续使用', '退出并下次核验'], defaultId: 0, cancelId: 0 }).then(({ response }) => {
-        exitPrompt = false;
-        if (response === 1) { quitting = true; app.quit(); }
-      });
-    return;
-  }
-  runtime?.close(); state?.close(); store?.close();
+      buttons: ['继续使用', '退出并下次核验'], defaultId: 0, cancelId: 0 });
+    return response === 1;
+  },
+  quit: () => app.quit(),
+  close: () => { runtime?.close(); state?.close(); store?.close(); }
 });
+app.on('before-quit', (event) => shutdown.beforeQuit(event));
+app.on('will-quit', () => shutdown.willQuit());
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
