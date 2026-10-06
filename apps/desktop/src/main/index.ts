@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron';
 import { SqliteStore, listModelProviders } from '@cloudhelm/adapters';
 import type { AppEvent, DesktopAPI, HostDraft, LocalScope, ReviewMode } from '@cloudhelm/contracts';
 import { AppState } from './app-state.js';
@@ -169,6 +169,8 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(async () => {
+  // Remove Electron's default Windows menu before creating any windows.
+  if (process.platform === 'win32') Menu.setApplicationMenu(null);
   store = new SqliteStore(join(app.getPath('userData'), 'cloudhelm.sqlite'));
   state = new AppState(store, publish);
   runtime = new RuntimeBridge((event) => {
