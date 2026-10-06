@@ -1,10 +1,14 @@
 /* global window, document, navigator, structuredClone */
+import { checkClarification } from './check-clarification.mjs';
+import { checkMiddleClick } from './check-middle-click.mjs';
 import assert from 'node:assert/strict';
 import { checkHostTestControls } from './host-test-ui-probe.mjs';
 import { checkConversationTimeline } from './check-conversation-timeline.mjs';
 import { checkViewportLayout } from './check-viewport-layout.mjs';
 import { checkUserMessageActions } from './check-user-message-actions.mjs';
 import { checkTerminalLayout } from './check-terminal-layout.mjs';
+import { checkErrorControl } from './check-error-control.mjs';
+import { checkTerminalControl } from './check-terminal-control.mjs';
 import console from 'node:console';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -135,12 +139,12 @@ async function exerciseInputIsolation() {
   await page.getByRole('button', { name: '打开 AI 专用终端' }).click();
   await page.evaluate(() => window.fixture.inject({ type: 'terminal-data', terminalId: 'agent1', data: '\u001b[6n' }));
   await page.waitForFunction(() => window.fixture.calls.some((call) => call.kind === 'protocol'));
-  assert.equal((await calls()).filter((call) => call.kind === 'takeover').length, 0);
+  await page.locator('.xterm-helper-textarea').press('Control+c');
+  await page.waitForFunction(() => window.fixture.calls.some((call) => call.kind === 'stop-terminal'));
   await page.locator('.xterm-helper-textarea').pressSequentially('pwd');
   await page.waitForFunction(() => window.fixture.calls.some((call) => call.kind === 'input'));
   const keyboardCalls = await calls();
-  assert.equal(keyboardCalls.filter((call) => call.kind === 'takeover').length, 1);
-  assert.ok(keyboardCalls.findIndex((call) => call.kind === 'takeover') < keyboardCalls.findIndex((call) => call.kind === 'input'));
+  assert.ok(keyboardCalls.findIndex((call) => call.kind === 'stop-terminal') < keyboardCalls.findIndex((call) => call.kind === 'input'));
   await page.evaluate(() => window.fixture.running());
   await page.getByRole('button', { name: '关闭 生产服务器 · AI', exact: true }).click();
   await page.getByRole('alertdialog').waitFor();
@@ -299,6 +303,10 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   await screenshot('main-minimum-width.png');
   await exerciseAsyncErrors();
+  await checkErrorControl(page, screenshot);
+  await checkTerminalControl(page, screenshot);
+  await checkMiddleClick(page, screenshot);
+  await checkClarification(page, screenshot);
   assert.deepEqual(errors, []);
   console.log(`UI smoke passed. Fake SSH/models only; screenshots: ${output}`);
 } catch (error) {

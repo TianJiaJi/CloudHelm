@@ -13,7 +13,10 @@ export function restoredConversationMessages(task: Pick<TaskView, 'id' | 'goal' 
   history: ConversationMessage[]): AgentMessage[] {
   const records = history.filter((message) => message.taskId === task.id);
   const original = records.findIndex((message) => message.role === 'user' && message.text === task.goal);
+  const controls = new Set(records.flatMap((message, index) => message.interruption ? [index] : []));
+  const clarifications = new Set(records.flatMap((message, index) => message.role === 'user' && message.text.startsWith('[需求澄清回答]') ? [index] : []));
   const recent = new Set(records.flatMap((message, index) => message.role === 'user' && index !== original ? [index] : []).slice(-2));
+  for (const index of [...clarifications, ...controls]) recent.add(index);
   const excerpts = records.filter((_, index) => index !== original && !recent.has(index)).slice(-12)
     .map((message) => ({ role: message.role, createdAt: message.createdAt,
       text: message.text.slice(0, 400), excerpt: message.text.length > 400 }));
@@ -24,7 +27,9 @@ export function restoredConversationMessages(task: Pick<TaskView, 'id' | 'goal' 
     messages.push(recalled);
   }
   for (const [index, message] of records.entries()) if (recent.has(index)) {
-    messages.push({ role: 'user', content: message.text, timestamp: message.createdAt });
+    messages.push(message.interruption
+      ? { role: 'system', content: `${message.text}\nUser interruption metadata: ${JSON.stringify(message.interruption)}`, timestamp: message.createdAt }
+      : { role: 'user', content: message.text, timestamp: message.createdAt });
   }
   return messages;
 }
@@ -91,14 +96,16 @@ function messageGroups(messages: AgentMessage[]): MessageGroup[] {
     const key = root(index);
     const group = groups.get(key) ?? { indices: [], protected: false };
     group.indices.push(index);
-    group.protected ||= message.role === 'system' || required.has(index);
+    group.protected ||= message.role === 'system' || required.has(index)
+      || (message.role === 'toolResult' && message.toolName === 'ask_user')
+      || (message.role === 'user' && typeof message.content === 'string' && message.content.startsWith('[需求澄清回答]'));
     groups.set(key, group);
   }
   return [...groups.values()];
 }
 
 function shortenResult(message: AgentMessage, limit: number): AgentMessage {
-  if (message.role !== 'toolResult') return message;
+  if (message.role !== 'toolResult' || message.toolName === 'ask_user') return message;
   let changed = false;
   const content = message.content.map((part) => {
     if (part.type !== 'text' || part.text.length <= limit) return part;

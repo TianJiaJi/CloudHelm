@@ -9,13 +9,7 @@ export function TerminalView({ terminalId, report }: { terminalId: string; repor
   const holder = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const shown = useRef(0);
-  const humanIntent = useRef(false);
-  const takeover = useRef<Promise<boolean> | null>(null);
   const tab = useUi((state) => state.terminals[terminalId]);
-
-  useEffect(() => {
-    if (tab?.state === 'agent' || tab?.state === 'suspended') { humanIntent.current = false; takeover.current = null; }
-  }, [tab?.state]);
 
   useEffect(() => {
     const element = holder.current;
@@ -29,42 +23,31 @@ export function TerminalView({ terminalId, report }: { terminalId: string; repor
     const updateTheme = () => { xterm.options.theme = theme(); };
     media.addEventListener('change', updateTheme);
     terminal.current = xterm;
-    humanIntent.current = false;
-    takeover.current = null;
     xterm.open(element);
     const showError = (error: unknown): void => report(error instanceof Error ? error.message : String(error));
-    const markHuman = (): void => {
-      const current = useUi.getState().terminals[terminalId];
-      if (!current?.taskId || current.state === 'human' || humanIntent.current) return;
-      humanIntent.current = true;
-      takeover.current = window.cloudhelm.takeOver(terminalId).then(() => true, (error: unknown) => {
-        humanIntent.current = false; showError(error); return false;
-      });
-    };
-    const onKey = (event: KeyboardEvent): void => { if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) markHuman(); };
-    element.addEventListener('keydown', onKey, true);
-    element.addEventListener('paste', markHuman, true);
-    element.addEventListener('compositionstart', markHuman, true);
-    element.addEventListener('beforeinput', markHuman, true);
-    const dispose = xterm.onData((data) => {
-      const current = useUi.getState().terminals[terminalId];
-      if (!current || current.state === 'closed') return;
-      if (current.taskId && current.state !== 'human' && !humanIntent.current) {
-        void window.cloudhelm.terminalProtocolResponse(terminalId, data).catch(showError);
-        return;
+    xterm.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'c' && !xterm.hasSelection()) {
+        const current = useUi.getState().terminals[terminalId];
+        if (current?.taskId) {
+          event.preventDefault();
+          void window.cloudhelm.stopTerminal(terminalId).catch(showError);
+          return false;
+        }
       }
-      void (takeover.current ?? Promise.resolve(true)).then((granted) => {
-        if (granted) return window.cloudhelm.terminalInput(terminalId, data);
-        return undefined;
-      }).catch(showError);
+      return true;
+    });
+    const dispose = xterm.onData((data) => {
+      // Device responses use a dedicated, backend-validated protocol route. Every
+      // user input is checked by the worker against authoritative task/PTY state.
+      const protocol = /^(?:\u001b\[(?:\?|>)[\d;]*c|\u001b\[\d+;\d+R)$/u.test(data);
+      void (protocol ? window.cloudhelm.terminalProtocolResponse(terminalId, data)
+        : window.cloudhelm.terminalInput(terminalId, data)).catch(showError);
     });
     const stopFitting = fitTerminal(xterm, element, (cols, rows) => {
       void window.cloudhelm.resizeTerminal(terminalId, cols, rows).catch(showError);
     });
     return () => {
       stopFitting(); dispose.dispose(); media.removeEventListener('change', updateTheme); xterm.dispose(); terminal.current = null; shown.current = 0;
-      element.removeEventListener('keydown', onKey, true); element.removeEventListener('paste', markHuman, true);
-      element.removeEventListener('compositionstart', markHuman, true); element.removeEventListener('beforeinput', markHuman, true);
     };
   }, [terminalId, report]);
 

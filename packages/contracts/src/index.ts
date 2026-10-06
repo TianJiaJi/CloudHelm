@@ -19,13 +19,28 @@ export type HostConnectionTestResult =
   | { status: 'trust-required'; requestId: string; stage: 'host' | 'jump'; address: string; port: number;
     fingerprint: string; expectedFingerprint?: string; expiresAt: number };
 export type ReviewMode = 'ask' | 'ai-review' | 'permissive';
-export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'human-control' | 'recovering' | 'paused' | 'answered' | 'ready-for-review' | 'accepted' | 'failed';
+export interface ClarificationQuestion {
+  id: string;
+  prompt: string;
+  options?: Array<{ value: string; label: string; description?: string; recommended?: boolean }>;
+}
+export interface ClarificationAnswer { id: string; value: string; custom?: boolean }
+export interface ClarificationRequest {
+  id: string; taskId: string; toolCallId: string; generation: string;
+  questions: ClarificationQuestion[]; createdAt: number; expiresAt: number;
+  status: 'pending' | 'answered' | 'cancelled' | 'expired';
+  answers?: ClarificationAnswer[];
+}
+
+export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'waiting-user' | 'human-control' | 'recovering' | 'paused' | 'answered' | 'ready-for-review' | 'accepted' | 'failed';
 export interface ModelChoice { provider: string; modelId: string }
 export interface ModelProfileDraft extends ModelChoice { baseUrl?: string; apiKey?: string }
 export interface PlanStep { id: string; title: string; status: 'pending' | 'running' | 'done' | 'blocked' }
 export interface VerificationReport { summary: string; access: string[]; evidenceOperationIds: string[]; changes: string[]; recovery: string[] }
-export interface ConversationMessage { taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
-export interface TerminalViewState { id: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed' }
+export type InterruptionSource = 'stop-button' | 'ctrl-c' | 'terminal-close';
+export interface UserInterruption { source: InterruptionSource; requestedAt: number; operationIds: string[] }
+export interface ConversationMessage { interruption?: UserInterruption; taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
+export interface TerminalViewState { id: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed'; replacementTerminalId?: string }
 export interface ConversationStart { hostId: string | null; message: string; model?: ModelChoice; localSelectionTokens: string[] }
 export interface LocalScope { path: string; kind: 'file' | 'directory' }
 
@@ -60,6 +75,7 @@ export interface TaskView {
 }
 
 export interface OperationView {
+  interruption?: UserInterruption;
   id: string;
   taskId: string;
   hostId: string;
@@ -105,6 +121,7 @@ export interface AppSnapshot {
   operations: OperationView[];
   approvals: ApprovalView[];
   inputs: InputRequestView[];
+  clarifications?: ClarificationRequest[];
   messages: ConversationMessage[];
   profile: { provider: string; modelId: string; baseUrl?: string; hasKey: boolean; hasJevKey: boolean };
 }
@@ -123,9 +140,11 @@ export interface ModelProviderSettings {
 }
 
 export type AppEvent =
+  | { type: 'clarification'; value: ClarificationRequest }
   | { type: 'snapshot'; value: AppSnapshot }
   | { type: 'terminal-data'; terminalId: string; data: string; operationId?: string }
   | { type: 'terminal-state'; terminalId: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed' }
+  | { type: 'terminal-replaced'; previousTerminalId: string; terminalId: string }
   | ({ type: 'task-message' } & ConversationMessage)
   | { type: 'model-request'; taskId: string; model: ModelChoice; request: number; createdAt: number }
   | { type: 'work-progress'; taskId: string; plan: PlanStep[] }
@@ -154,12 +173,13 @@ export interface DesktopAPI {
   selectPrivateKey(): Promise<string | null>;
   terminalInput(terminalId: string, data: string): Promise<void>;
   terminalProtocolResponse(terminalId: string, data: string): Promise<void>;
-  takeOver(terminalId: string): Promise<void>;
-  handBack(terminalId: string): Promise<void>;
+  stopTerminal(terminalId: string): Promise<void>;
   resizeTerminal(terminalId: string, cols: number, rows: number): Promise<void>;
   startConversation(input: ConversationStart): Promise<TaskView>;
   sendMessage(conversationId: string, message: string, localSelectionTokens?: string[]): Promise<void>;
   setConversationModel(conversationId: string, model: ModelChoice): Promise<void>;
+  answerClarification(taskId: string, requestId: string, answers: ClarificationAnswer[]): Promise<void>;
+  cancelClarification(taskId: string, requestId: string): Promise<void>;
   stopOperation(conversationId: string): Promise<void>;
   decideApproval(approvalId: string, approved: boolean): Promise<void>;
   answerInput(requestId: string, answer: string): Promise<void>;

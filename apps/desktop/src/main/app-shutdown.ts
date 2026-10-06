@@ -20,7 +20,7 @@ export class AppShutdown {
     if (this.phase !== 'open') return;
     if (this.prompting) { event.preventDefault(); return; }
     const snapshot = this.deps.snapshot();
-    const active = snapshot?.conversations.some((conversation) => ['running', 'waiting-review', 'human-control'].includes(conversation.status))
+    const active = snapshot?.conversations.some((conversation) => ['running', 'waiting-review', 'waiting-user', 'human-control'].includes(conversation.status))
       || snapshot?.operations.some((operation) => ['running', 'unknown'].includes(operation.status)
         && snapshot.terminals.some((terminal) => terminal.id === operation.logRef));
     if (!active) return;

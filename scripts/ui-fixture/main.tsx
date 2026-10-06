@@ -42,7 +42,14 @@ const api: DesktopAPI = {
     view.terminals = view.terminals.filter((item) => item.id !== id);
     terminalEvent({ ...terminal, state: 'closed' });
   },
-  terminalInput: async (id, data) => { calls.push({ kind: 'input', id, data }); },
+  terminalInput: async (id, data) => {
+    const terminal = view.terminals.find((item) => item.id === id);
+    const task = view.conversations.find((item) => item.id === terminal?.taskId);
+    if (task && ['running', 'waiting-review', 'waiting-user'].includes(task.status)) {
+      calls.push({ kind: 'blocked-input', id }); throw new Error('AI 正在运行，请先停止再输入');
+    }
+    calls.push({ kind: 'input', id, data });
+  },
   terminalProtocolResponse: async (id, data) => { calls.push({ kind: 'protocol', id, data }); },
   resizeTerminal: async (id, cols, rows) => { calls.push({ kind: 'resize', id, cols, rows }); },
   startConversation: async (input) => {
@@ -62,10 +69,18 @@ const api: DesktopAPI = {
   selectLocalPath: async (kind) => ({ token: `local-${kind}`, scope: { path: '/Users/demo/service', kind } }),
   selectPrivateKey: async () => { calls.push({ kind: 'select-private-key' }); return '/Users/demo/.ssh/server key'; },
   pauseConversation: async (id) => { calls.push({ kind: 'pause', id }); view.conversations.find((item) => item.id === id)!.status = 'paused'; sync(); },
-  takeOver: async (id) => {
-    calls.push({ kind: 'takeover', id }); const terminal = view.terminals.find((item) => item.id === id)!; terminal.state = 'human'; terminalEvent(terminal);
+  stopTerminal: async (id) => {
+    calls.push({ kind: 'stop-terminal', id });
+    const terminal = view.terminals.find((item) => item.id === id);
+    if (terminal?.taskId) await api.stopOperation(terminal.taskId);
   },
-  handBack: async (id) => { const terminal = view.terminals.find((item) => item.id === id)!; terminal.state = 'agent'; terminalEvent(terminal); },
+  stopOperation: async (id) => {
+    calls.push({ kind: 'stop', id });
+    const task = view.conversations.find((item) => item.id === id);
+    if (task) task.status = 'paused';
+    for (const terminal of view.terminals) if (terminal.taskId === id) { terminal.state = 'human'; terminalEvent(terminal); }
+    sync();
+  },
   listRemote: async () => [{ name: 'service', isDirectory: true, size: 0 }, { name: 'README.md', isDirectory: false, size: 512 }],
   decideApproval: async (id, approved) => { calls.push({ kind: 'approval', id, approved }); view.approvals = view.approvals.filter((item) => item.id !== id); sync(); },
   answerInput: async (id, answer) => { calls.push({ kind: 'answer', id, answer }); view.inputs = view.inputs.filter((item) => item.id !== id); sync(); },
@@ -75,7 +90,8 @@ const api: DesktopAPI = {
   testHostConnection: async (input) => { calls.push({ kind: 'test-host', input }); return { status: 'success', latencyMs: 42 }; },
   saveModelProfile: async (profile) => { calls.push({ kind: 'profile', profile }); },
   saveReviewSettings: async (settings) => { calls.push({ kind: 'review-settings', settings }); },
-  resumeConversation: unsupported, acceptConversation: unsupported, stopOperation: unsupported,
+  resumeConversation: unsupported, acceptConversation: unsupported,
+  answerClarification: unsupported, cancelClarification: unsupported,
   cancelInput: unsupported, addHost: unsupported, editHost: unsupported, updateHostSafety: unsupported,
   disconnectHost: unsupported, deleteHost: unsupported, trustHostKey: unsupported, setHostSecret: unsupported
 };

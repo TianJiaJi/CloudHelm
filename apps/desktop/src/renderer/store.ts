@@ -80,6 +80,17 @@ export const useUi = create<UiState>((set) => ({
   setSnapshot: (snapshot) => set((state) => projectSnapshot(state, snapshot)),
   applyEvent: (event) => set((state) => {
     if (event.type === 'snapshot') return projectSnapshot(state, event.value);
+    if (event.type === 'terminal-replaced') {
+      const previous = state.terminals[event.previousTerminalId];
+      const replacement = state.terminals[event.terminalId];
+      if (!previous || !replacement || !previous.taskId || previous.taskId !== replacement.taskId || previous.hostId !== replacement.hostId) return {};
+      const terminals = { ...state.terminals, [previous.id]: { ...previous, replacementTerminalId: replacement.id } };
+      const tab: WorkspaceTab = { id: replacement.id, kind: 'terminal', terminalId: replacement.id, hostId: replacement.hostId };
+      const follow = state.activeTabId === previous.id && !state.settingsOpen;
+      const tabs = state.tabs.some((item) => item.id === previous.id) && !state.tabs.some((item) => item.id === replacement.id)
+        ? [...state.tabs, tab] : state.tabs;
+      return { terminals, tabs, ...(follow ? tabSelection({ ...state, terminals, tabs }, tab) : {}) };
+    }
     if (event.type === 'terminal-data') {
       const tab = state.terminals[event.terminalId];
       if (!tab) return {};
@@ -94,10 +105,11 @@ export const useUi = create<UiState>((set) => ({
         return { ...closeTab(state, event.terminalId), terminals };
       }
       const previous = state.terminals[event.terminalId];
-      const terminal: TerminalTab = { id: event.terminalId, hostId: event.hostId, taskId: event.taskId,
+      const terminal: TerminalTab = { ...previous, id: event.terminalId, hostId: event.hostId, taskId: event.taskId,
         state: event.state, buffer: previous?.buffer ?? '', offset: previous?.offset ?? 0 };
       return { terminals: { ...state.terminals, [terminal.id]: terminal } };
     }
+    if (event.type === 'clarification' && state.snapshot) return { snapshot: { ...state.snapshot, clarifications: [...(state.snapshot.clarifications ?? []).filter((request) => request.id !== event.value.id), event.value] } };
     if (event.type === 'model-request') return { currentRequests: { ...state.currentRequests, [event.taskId]: { model: event.model, request: event.request } } };
     if (event.type === 'work-progress') return updateConversation(state, event.taskId, { plan: event.plan });
     if (event.type === 'work-report') return updateConversation(state, event.taskId, { report: event.report });

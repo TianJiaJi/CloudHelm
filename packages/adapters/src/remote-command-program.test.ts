@@ -73,6 +73,15 @@ describe.skipIf(process.platform === 'win32')('real process transport without co
     expect(result.output).not.toContain('__CLOUDHELM');
   });
 
+  it('delivers Ctrl+C to the actual PTY process and observes its exit separately', async () => {
+    const f = await fixture();
+    f.launch(['python3', '-c', 'import time,sys; print("ready-to-interrupt", flush=True)\ntry: time.sleep(30)\nexcept KeyboardInterrupt: sys.exit(130)']);
+    await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('ready-to-interrupt'))).toBe(true));
+    f.send({ type: 'input', data: Buffer.from('\u0003').toString('base64') });
+    const result = await f.complete();
+    expect(result.code).toBe(130);
+  });
+
   it('supports ordinary interactive input separately from credentials', async () => {
     const f = await fixture();
     f.launch(['python3', '-c', 'print("Continue?", flush=True); print("answer=" + input())']);

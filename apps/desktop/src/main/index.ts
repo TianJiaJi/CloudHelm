@@ -134,8 +134,7 @@ function registerIpc(): void {
   });
   ipcMain.handle('cloudhelm:terminal-input', (_event, terminalId: string, data: string) => runtime.call({ method: 'terminal-input', terminalId, data, humanIntent: true }));
   ipcMain.handle('cloudhelm:terminal-protocol', (_event, terminalId: string, data: string) => runtime.call({ method: 'terminal-input', terminalId, data, humanIntent: false }));
-  ipcMain.handle('cloudhelm:take-over', (_event, terminalId: string) => runtime.call({ method: 'take-over', terminalId }));
-  ipcMain.handle('cloudhelm:hand-back', (_event, terminalId: string) => runtime.call({ method: 'hand-back', terminalId }));
+  ipcMain.handle('cloudhelm:stop-terminal', (_event, terminalId: string) => runtime.call({ method: 'stop-terminal', terminalId }));
   ipcMain.handle('cloudhelm:resize', (_event, terminalId: string, cols: number, rows: number) => runtime.call({ method: 'resize', terminalId, cols, rows }));
   ipcMain.handle('cloudhelm:decide-approval', (_event, approvalId: string, approved: boolean) => runtime.call({ method: 'decide-approval', approvalId, approved }));
   ipcMain.handle('cloudhelm:answer-input', (_event, requestId: string, answer: string) => runtime.call({ method: 'answer-input', requestId, answer }));

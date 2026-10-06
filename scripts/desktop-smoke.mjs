@@ -1,4 +1,5 @@
 /* global window, setTimeout, clearTimeout */
+import { checkClarificationRuntime } from './check-clarification-runtime.mjs';
 import assert from 'node:assert/strict';
 import console from 'node:console';
 import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -79,6 +80,18 @@ try {
   assert.equal(runtime.safeStorageAvailable, true, 'OS credential encryption is unavailable in this environment');
   assert.equal(runtime.credentialRoundtrip, true);
   if (packaged) assert.equal(runtime.packaged, true);
+  page = await checkClarificationRuntime(page, async () => {
+    // Crash only this isolated smoke-test instance, preserving its temporary database.
+    const previous = application;
+    await new Promise((resolve) => { previous.process().once('exit', resolve); previous.process().kill('SIGKILL'); });
+    application = await electron.launch({ executablePath,
+      args: packaged ? [] : [path.join(desktop, 'out/main/index.js')], env: environment, timeout: 30_000 });
+    application.process().stderr?.on('data', (chunk) => { stderr += String(chunk); });
+    const next = await application.firstWindow({ timeout: 30_000 });
+    next.on('pageerror', (error) => rendererErrors.push(error.message));
+    await next.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
+    return next;
+  });
   const databaseBytes = await readFile(path.join(userData, 'cloudhelm.sqlite'));
   assert.equal(databaseBytes.subarray(0, 16).toString(), 'SQLite format 3\0');
   assert.deepEqual(rendererErrors, []);

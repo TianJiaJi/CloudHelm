@@ -78,26 +78,25 @@ export class WorkerServer {
       case 'open-terminal': return this.openTerminal(call.hostId);
       case 'close-terminal':
         this.interactions.cancelForTerminal(call.terminalId);
-        for (const runner of this.tasks.values()) if (runner.ownsTerminal(call.terminalId)) runner.pause();
+        for (const runner of this.tasks.values()) if (runner.ownsTerminal(call.terminalId)) runner.stopOperation('terminal-close');
         this.terminal.close(call.terminalId);
         return;
       case 'terminal-input': {
-        if (call.humanIntent) {
-          this.interactions.cancelForTerminal(call.terminalId);
-          for (const runner of this.tasks.values()) runner.takeOver(call.terminalId);
+        const taskId = this.terminal.taskOf(call.terminalId);
+        const runner = taskId ? this.tasks.get(taskId) : undefined;
+        if (call.humanIntent && taskId) {
+          if (!runner) throw new Error('对话运行已失效，请重新打开终端');
+          return runner.terminalInput(call.terminalId, call.data);
         }
         this.terminal.input(call.terminalId, call.data, call.humanIntent);
         return;
       }
-      case 'take-over':
-        this.interactions.cancelForTerminal(call.terminalId);
-        for (const runner of this.tasks.values()) runner.takeOver(call.terminalId);
-        this.terminal.takeOver(call.terminalId);
+      case 'stop-terminal': {
+        const taskId = this.terminal.taskOf(call.terminalId);
+        if (taskId) this.tasks.get(taskId)?.terminalInput(call.terminalId, '\u0003');
+        else this.terminal.input(call.terminalId, '\u0003', true);
         return;
-      case 'hand-back':
-        this.terminal.handBack(call.terminalId);
-        for (const runner of this.tasks.values()) if (runner.ownsTerminal(call.terminalId)) void runner.resume();
-        return;
+      }
       case 'resize': return this.terminal.resize(call.terminalId, call.cols, call.rows);
       case 'list-remote': return this.ssh.list(call.hostId, call.path);
       case 'start-task': {
@@ -122,6 +121,13 @@ export class WorkerServer {
         runner.addAuthorization(call.hosts, call.localScopes);
         return;
       }
+      case 'answer-clarification':
+      case 'cancel-clarification': {
+        const runner = this.tasks.get(call.taskId);
+        if (!runner) throw new Error('对话运行已失效，请重新发送需求');
+        if (call.method === 'answer-clarification') return runner.answerClarification(call.requestId, call.answers);
+        return runner.cancelClarification(call.requestId);
+      }
       case 'task-message': {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('请先恢复对话');
@@ -143,12 +149,16 @@ export class WorkerServer {
       case 'resume-task': {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('Task runtime is unavailable; reopen the application to reconcile');
-        void runner.resume().catch((error: unknown) => this.post({ event: {
-          type: 'task-status', taskId: call.taskId, status: 'failed', summary: error instanceof Error ? error.message : String(error)
-        } }));
+        this.resumeTask(runner);
         return;
       }
     }
+  }
+
+  private resumeTask(runner: TaskRunner): void {
+    void runner.resume().catch((error: unknown) => this.post({ event: {
+      type: 'task-status', taskId: runner.task.id, status: 'failed', summary: error instanceof Error ? error.message : String(error)
+    } }));
   }
 
   resolveLog(result: { id: string; value?: LogPage; error?: string }): void {

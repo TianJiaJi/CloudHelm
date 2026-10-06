@@ -11,6 +11,7 @@ interface PendingCommand {
   completeRemote(state: 'exited' | 'unknown'): void;
   reported: boolean;
   operationId: string;
+  stopRequested?: boolean;
 }
 
 interface TerminalRecord {
@@ -85,11 +86,20 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     return true;
   }
 
+  hasPending(id: string): boolean { return !!this.terminals.get(id)?.pending; }
+  pendingOperations(taskId: string): string[] {
+    return [...this.terminals.values()].flatMap((terminal) => terminal.taskId === taskId && terminal.pending ? [terminal.pending.operationId] : []);
+  }
+  releaseIdle(id: string): void {
+    const terminal = this.terminals.get(id);
+    if (terminal && !terminal.pending) this.takeOver(id);
+  }
+
   input(id: string, data: string, humanIntent: boolean): void {
     const terminal = this.require(id);
-    if (humanIntent && (terminal.owner === 'agent' || terminal.owner === 'suspended')) this.takeOver(id);
-    if (terminal.owner === 'human') terminal.channel.write(data);
-    else if (!humanIntent && this.isProtocolResponse(data)) terminal.channel.write(data);
+    if (!humanIntent) { if (this.isProtocolResponse(data)) terminal.channel.write(data); return; }
+    if (terminal.owner !== 'human' || terminal.pending) throw new Error('终端暂不可输入，请先停止 AI 并等待命令退出');
+    terminal.channel.write(data);
   }
 
   takeOver(id: string): void {
@@ -121,14 +131,6 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     this.events.state(id, 'suspended');
   }
 
-  handBack(id: string): void {
-    const terminal = this.require(id);
-    if (terminal.owner !== 'human' || !terminal.taskId) throw new Error('This terminal is not a human-controlled Agent session');
-    // The existing PTY stays with the user; the Agent resumes in a new session.
-    terminal.generation++;
-    this.events.state(id, 'human');
-  }
-
   resize(id: string, cols: number, rows: number): void {
     this.require(id).channel.resize(cols, rows);
   }
@@ -141,14 +143,18 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
 
   stopCommand(id: string): void {
     const terminal = this.require(id);
-    if (!terminal.pending) return;
+    if (!terminal.pending || terminal.pending.stopRequested) return;
+    terminal.pending.stopRequested = true;
     // Only invoked by an explicit user stop action, never to recover a shell.
-    terminal.channel.write('\u0003');
-    this.suspend(id);
+    try { terminal.channel.write('\u0003'); } finally { this.suspend(id); }
   }
 
   stopTaskCommands(taskId: string): void {
-    for (const terminal of this.terminals.values()) if (terminal.taskId === taskId && terminal.pending) this.stopCommand(terminal.id);
+    const errors: unknown[] = [];
+    for (const terminal of this.terminals.values()) if (terminal.taskId === taskId && terminal.pending) {
+      try { this.stopCommand(terminal.id); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new Error('部分命令的停止信号未送达，请核验远端状态');
   }
 
   closeHost(hostId: string): void {

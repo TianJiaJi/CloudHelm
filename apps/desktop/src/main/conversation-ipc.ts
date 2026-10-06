@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import type { ConversationStart, LocalScope, ModelChoice, TaskView } from '@cloudhelm/contracts';
+import type { ClarificationAnswer, ConversationStart, LocalScope, ModelChoice, TaskView } from '@cloudhelm/contracts';
 import type { AppState } from './app-state.js';
 import type { RuntimeBridge } from './runtime-bridge.js';
 
@@ -57,6 +57,7 @@ export function registerConversationIpc({ state, runtime, connectHost, takeSelec
   ipcMain.handle('cloudhelm:send-message', async (_event, id: string, text: string, tokens: string[]) => {
     if (typeof text !== 'string' || !text.trim() || text.length > 100_000) throw new Error('请输入有效内容');
     const task = state.getTask(id);
+    if (task.status === 'waiting-user') throw new Error('请先回答需求澄清，或停止本轮对话');
     await ensureRuntime(task);
     const scopes = takeSelections(tokens);
     try {
@@ -79,6 +80,14 @@ export function registerConversationIpc({ state, runtime, connectHost, takeSelec
   ipcMain.handle('cloudhelm:resume-task', async (_event, id: string) => {
     await ensureRuntime(state.getTask(id));
     await runtime.call({ method: 'resume-task', taskId: id });
+  });
+  ipcMain.handle('cloudhelm:answer-clarification', (_event, taskId: string, requestId: string, answers: ClarificationAnswer[]) => {
+    state.getTask(taskId);
+    return runtime.call({ method: 'answer-clarification', taskId, requestId, answers });
+  });
+  ipcMain.handle('cloudhelm:cancel-clarification', (_event, taskId: string, requestId: string) => {
+    state.getTask(taskId);
+    return runtime.call({ method: 'cancel-clarification', taskId, requestId });
   });
   ipcMain.handle('cloudhelm:stop-operation', (_event, id: string) => runtime.call({ method: 'stop-operation', taskId: id }));
 }

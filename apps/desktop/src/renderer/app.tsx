@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { HostView } from '@cloudhelm/contracts';
 import { useUi, type WorkspaceTab } from './store.js';
 import { TerminalView } from './terminal-view.js';
+import { TerminalControl } from './terminal-control.js';
 import { ModelSettingsDialog } from './model-settings.js';
 import { AgentPanel, type QuotedOutput } from './agent-panel.js';
 import { HostDialog, SafetyDialog, ConfirmDialog } from './host-dialogs.js';
@@ -42,6 +43,10 @@ export function App(): React.JSX.Element {
   }
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const activeTerminal = activeTab?.kind === 'terminal' ? terminals[activeTab.terminalId] : undefined;
+  const terminalId = activeTerminal?.id;
+  const reportTerminalError = useCallback((message: string) => setError(message, terminalId ? { terminalId } : undefined), [setError, terminalId]);
+  const reportConversationError = useCallback((message: string) => setError(message,
+    selectedConversationId ? { conversationId: selectedConversationId } : undefined), [setError, selectedConversationId]);
   const conversation = snapshot?.conversations.find((item) => item.id === selectedConversationId);
   const activeHost = snapshot?.hosts.find((host) => host.id === activeHostId);
   const hostName = (hostId: string): string => snapshot?.hosts.find((host) => host.id === hostId)?.label ?? hostId;
@@ -59,7 +64,7 @@ export function App(): React.JSX.Element {
       for (const conversation of event.value.conversations) {
         const before = previousStatuses.get(conversation.id);
         if (before && before !== 'failed' && conversation.status === 'failed') {
-          setError(conversation.summary || 'Unknown conversation failure');
+          setError(conversation.summary || 'Unknown conversation failure', { conversationId: conversation.id });
         }
       }
     });
@@ -92,7 +97,7 @@ export function App(): React.JSX.Element {
     const executing = snapshot?.operations.some((operation) => operation.taskId === terminal?.taskId && operation.logRef === terminal?.id && ['running', 'unknown'].includes(operation.status));
     const close = async (): Promise<void> => { await window.cloudhelm.closeTerminal(tab.terminalId); useUi.getState().closeTab(tab.id); };
     if (terminal?.taskId && executing) setConfirmation({ title: '断开正在运行的 AI 终端？',
-      message: '关闭这个标签会断开真实 SSH 会话。远端进程不一定停止，当前操作的结果可能需要重新核验。你也可以先暂停 AI 或停止命令。', label: '断开并关闭', action: close });
+      message: '关闭这个标签会断开真实 SSH 会话。远端进程不一定停止，当前操作的结果可能需要重新核验。你也可以先点击“停止”，等待命令退出。', label: '断开并关闭', action: close });
     else void capture(close, setError);
   }
 
@@ -115,7 +120,8 @@ export function App(): React.JSX.Element {
   function tabLabel(tab: WorkspaceTab): string {
     if (tab.kind === 'files') return `${hostName(tab.hostId)} · 文件`;
     if (tab.kind === 'report') return 'AI 对话详情';
-    return `${hostName(tab.hostId)}${terminals[tab.terminalId]?.taskId ? ' · AI' : ''}`;
+    const terminal = terminals[tab.terminalId];
+    return `${hostName(tab.hostId)}${terminal?.replacementTerminalId ? ' · 人工' : terminal?.taskId ? ' · AI' : ''}`;
   }
 
   const sensitiveInput = snapshot?.inputs.find((input) => (input.kind === 'secret' || input.kind === 'otp') && !hiddenInputs.includes(input.id));
@@ -126,7 +132,7 @@ export function App(): React.JSX.Element {
       <div className={styles.sectionHead}><span>远程主机</span><button title="添加主机" aria-label="添加主机" onClick={() => navigate(() => setDialog({ kind: 'host' }))}><Icon name="plus" /></button></div>
       <div className={styles.hostList}>{hosts.map((host) => {
         const lineage = hostLineage(host, snapshot?.hosts ?? []);
-        const working = snapshot?.conversations.find((item) => item.hostIds.some((id) => lineage.includes(id)) && ['running', 'waiting-review', 'recovering', 'human-control'].includes(item.status));
+        const working = snapshot?.conversations.find((item) => item.hostIds.some((id) => lineage.includes(id)) && ['running', 'waiting-review', 'waiting-user', 'recovering', 'human-control'].includes(item.status));
         return <div className={`${styles.hostRow} ${activeHostId && lineage.includes(activeHostId) ? styles.selected : ''}`} key={host.id}>
           <button className={styles.hostSelect} onClick={() => navigate(() => void connectHost(host.id))} title={`${host.username}@${host.address}:${host.port}`} disabled={connecting.includes(host.id)}>
             <Icon name="server" /><span>{host.label}<small>{connecting.includes(host.id) ? '正在连接…' : working ? statusLabel[working.status] : `${host.username}@${host.address}`}</small></span>
@@ -149,7 +155,9 @@ export function App(): React.JSX.Element {
     </aside>
 
     <main className={styles.workspace}>
-      <header className={styles.toolbar}><div className={styles.tabs}>{tabs.map((tab) => <div key={tab.id} className={`${styles.tab} ${!settingsOpen && activeTabId === tab.id ? styles.activeTab : ''}`}>
+      <header className={styles.toolbar}><div className={styles.tabs}>{tabs.map((tab) => <div key={tab.id} className={`${styles.tab} ${!settingsOpen && activeTabId === tab.id ? styles.activeTab : ''}`}
+        onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
+        onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); event.stopPropagation(); navigate(() => closeTab(tab)); } }}>
         <button className={styles.tabSelect} onClick={() => navigate(() => useUi.getState().selectTab(tab.id))}><Icon name={tab.kind === 'terminal' ? 'terminal' : tab.kind === 'files' ? 'folder' : 'chat'} size={14} /><span>{tabLabel(tab)}</span></button>
         <button className={styles.tabClose} aria-label={`关闭 ${tabLabel(tab)}`} title="关闭标签" onClick={() => navigate(() => closeTab(tab))}><Icon name="close" size={12} /></button>
       </div>)}</div>{activeHost && <button title="新终端" aria-label="新终端" onClick={() => navigate(() => void connectHost(activeHost.id, true))}><Icon name="plus" /></button>}
@@ -157,21 +165,20 @@ export function App(): React.JSX.Element {
       {settingsOpen && snapshot ? <ModelSettingsDialog current={snapshot.profile} close={() => useUi.getState().setSettingsOpen(false)} report={setError} registerNavigationGuard={registerNavigationGuard} />
         : activeTerminal ? <div className={styles.terminalArea}>
           <div className={styles.terminalToolbar}><span><i className={`${styles.dot} ${styles.online}`} />{hostName(activeTerminal.hostId)} · {activeTerminal.taskId ? 'AI 专用终端' : 'SSH 终端'}</span>
-            {activeTerminal.taskId && (activeTerminal.state === 'agent' || activeTerminal.state === 'suspended') && <button onClick={() => void capture(() => window.cloudhelm.takeOver(activeTerminal.id), setError)}>接管终端</button>}
-            {activeTerminal.taskId && activeTerminal.state === 'human' && <button onClick={() => void capture(() => window.cloudhelm.handBack(activeTerminal.id), setError)}>交还 AI</button>}
+            <TerminalControl key={activeTerminal.id} terminal={activeTerminal} report={reportTerminalError} />
             <button title="主动将最近的终端输出附到 AI 输入框" onClick={quoteTerminal}>引用输出</button>
             <button onClick={() => useUi.getState().openFiles(activeTerminal.hostId)}><Icon name="folder" size={13} />文件</button>
             {activeHost && <button title="断开 SSH" aria-label="断开 SSH" onClick={() => disconnect(activeHost)}><Icon name="disconnect" size={13} /></button>}
           </div>
-          {activeTerminal.taskId && <div className={styles.terminalNotice}>{activeTerminal.state === 'human' ? '你已接管。AI 不再输入；手动交还后会重新核验环境。' : 'AI 的实际命令和输出会在这里显示。开始输入即可接管，已运行命令不会自动停止。'}</div>}
-          <TerminalView terminalId={activeTerminal.id} report={setError} />
+          {activeTerminal.taskId && <div className={styles.terminalNotice}>{activeTerminal.replacementTerminalId ? 'AI 已切换到新的专用终端。此终端保留供你查看输出或继续人工操作。' : activeTerminal.state === 'human' ? '可以直接输入命令；只有发送消息或点击“继续 AI”才会启动 AI。' : 'AI 执行期间禁止输入。按 Ctrl+C 或点击“停止”，待命令退出后即可输入；停止不会启动新对话。'}</div>}
+          <TerminalView terminalId={activeTerminal.id} report={reportTerminalError} />
         </div> : activeTab?.kind === 'files' ? <FilesPage key={activeTab.id} hostId={activeTab.hostId} host={hostName(activeTab.hostId)} report={setError} />
           : activeTab?.kind === 'report' && snapshot?.conversations.find((item) => item.id === activeTab.conversationId) ? <ReportPage conversation={snapshot.conversations.find((item) => item.id === activeTab.conversationId)!} operations={snapshot.operations.filter((item) => item.taskId === activeTab.conversationId)} report={setError} />
             : <div className={styles.empty}><span className={styles.emptyGlyph}><Icon name="terminal" size={36} /></span><h1>{activeHost ? activeHost.label : '你的服务器，随时连接'}</h1><p>{activeHost ? '点击连接，打开真实 SSH 终端。右侧对话仍限定在这台主机。' : '从左侧选择主机，开始 SSH 会话。AI 助手会一直在旁边。'}</p>
               <button className={styles.primary} onClick={() => activeHost ? void connectHost(activeHost.id) : setDialog({ kind: 'host' })}>{activeHost ? '连接主机' : '添加主机'}</button></div>}
     </main>
     {agentPanelOpen && !settingsOpen && <><PanelResizer /><aside className={styles.agentPanel} style={{ width: ui.agentPanelWidth }}>
-      {snapshot ? <AgentPanel snapshot={snapshot} host={activeHost} conversation={conversation} quote={quote} report={setError} hiddenInputs={hiddenInputs} openInput={(id) => setHiddenInputs((items) => items.filter((item) => item !== id))} /> : <div className={styles.agentWelcome}>正在加载 AI 助手…</div>}
+      {snapshot ? <AgentPanel snapshot={snapshot} host={activeHost} conversation={conversation} quote={quote} report={reportConversationError} hiddenInputs={hiddenInputs} openInput={(id) => setHiddenInputs((items) => items.filter((item) => item !== id))} /> : <div className={styles.agentWelcome}>正在加载 AI 助手…</div>}
     </aside></>}
     {dialog?.kind === 'host' && <HostDialog hosts={hosts} editing={snapshot?.hosts.find((host) => host.id === dialog.hostId)} close={() => setDialog(null)} report={setError} />}
     {dialog?.kind === 'safety' && snapshot?.hosts.find((host) => host.id === dialog.hostId) && <SafetyDialog host={snapshot.hosts.find((host) => host.id === dialog.hostId)!} close={() => setDialog(null)} report={setError} />}
@@ -181,7 +188,7 @@ export function App(): React.JSX.Element {
       <div className={styles.dialogActions}><button onClick={() => setFingerprint(null)}>取消</button><button className={styles.primary} onClick={() => void capture(async () => { const target = fingerprint; await window.cloudhelm.trustHostKey(target.hostId, target.value); setFingerprint(null); await connectHost(target.hostId); }, setError)}>已核对，信任并连接</button></div>
     </div></div>}
     {sensitiveInput && <div className={styles.scrim}><InputCard key={sensitiveInput.id} input={sensitiveInput} host={hostName(sensitiveInput.hostId)} report={setError} later={() => setHiddenInputs((items) => [...items, sensitiveInput.id])} /></div>}
-    {error && <ErrorDialog key={error.code} notice={error} close={dismissError} configureModel={() => useUi.getState().setSettingsOpen(true)} />}
+    {error && <ErrorDialog key={JSON.stringify([error.code, error.context])} notice={error} close={dismissError} configureModel={() => useUi.getState().setSettingsOpen(true)} />}
   </div>;
 }
 
