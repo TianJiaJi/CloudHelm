@@ -1,0 +1,15 @@
+.message { position: relative; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
+.header > strong { font-size: 11px; font-weight: 550; }
+.actions { display: flex; align-items: center; gap: 3px; opacity: 0; pointer-events: none; }
+.message:hover .actions, .message:focus-within .actions { opacity: 1; pointer-events: auto; }
+.actions time { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; margin-right: 5px; white-space: nowrap; }
+.actions button { width: 26px; height: 26px; padding: 5px; color: var(--muted); }
+.message .actions button:hover { background: var(--canvas); color: var(--text); }
+.editor { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.editor textarea { width: 100%; min-height: 90px; max-height: 260px; resize: vertical; line-height: 1.75; font-size: 12px; }
+.editor > small { line-height: 1.6; }
+.editorActions { display: flex; justify-content: flex-end; gap: 8px; }
+.editorActions button { padding: 6px 10px; font-size: 11px; }
+.copyStatus { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (hover: none) { .actions { opacity: 1; pointer-events: auto; } }
