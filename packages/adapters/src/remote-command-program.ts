@@ -27,6 +27,7 @@ finished = threading.Event()
 pending = {}
 process = None
 master = None
+slave = None
 
 def emit(value):
     with output_lock:
@@ -71,17 +72,23 @@ def auth_loop(server, token):
 
 def read_output():
     decoder = codecs.getincrementaldecoder('utf-8')('replace')
+    def take(data):
+        text = decoder.decode(data)
+        if text: emit({'type': 'data', 'data': text})
     try:
-        while True:
-            ready, _, _ = select.select([master], [], [], 0.1)
-            if ready:
+        quiet = 0
+        # The parent keeps the slave open until the transport closes, so output written
+        # just before the payload exits cannot be discarded by a racing slave close.
+        # Two idle reads after the exit still outwait a delayed tty buffer flush.
+        while quiet < 2:
+            if select.select([master], [], [], 0.1)[0]:
+                quiet = 0
                 try: data = os.read(master, 8192)
                 except OSError: break
                 if not data: break
-                text = decoder.decode(data)
-                if text: emit({'type': 'data', 'data': text})
+                take(data)
             elif process.poll() is not None:
-                break
+                quiet += 1
         tail = decoder.decode(b'', final=True)
         if tail: emit({'type': 'data', 'data': tail})
         code = process.wait()
@@ -134,7 +141,8 @@ try:
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
     process = subprocess.Popen(argv, cwd=launch['cwd'], env=environment, stdin=slave, stdout=slave, stderr=slave,
                                close_fds=True, preexec_fn=child_session)
-    os.close(slave)
+    # The slave descriptor stays open here on purpose: closing it while the payload's last
+    # writes are still in the tty buffer can make the master read miss that output entirely.
     if server: threading.Thread(target=auth_loop, args=(server, token), daemon=True).start()
     threading.Thread(target=read_output, daemon=True).start()
     # Unbuffered reads avoid a control message remaining in Python's read-ahead buffer.
@@ -177,5 +185,6 @@ finally:
         try: os.unlink(socket_path)
         except OSError: pass
     if master is not None: os.close(master)
+    if slave is not None: os.close(slave)
     # Closing a transport does not prove the payload stopped. Never automatically kill or replay it.
 `;

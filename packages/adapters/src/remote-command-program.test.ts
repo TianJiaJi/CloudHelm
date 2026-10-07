@@ -33,7 +33,7 @@ async function fixture() {
     return { code: events.find((event) => event.type === 'exit')?.code,
       output: events.filter((event) => event.type === 'data').map((event) => event.data).join('') };
   };
-  return { directory, events, send, launch, complete };
+  return { directory, events, send, launch, complete, stop: () => child.kill() };
 }
 
 async function fakeSudo(directory: string): Promise<string> {
@@ -115,4 +115,19 @@ describe.skipIf(process.platform === 'win32')('real process transport without co
     const result = await f.complete();
     expect(result.code).toBe(1); expect(result.output).not.toContain('must-not-run');
   }, 15000);
+
+  it('never drops the output of a payload that writes and exits immediately', async () => {
+    // The bare process can finish before the reader thread runs; its output must survive
+    // the slave close race and still reach the transport before the exit event.
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const f = await fixture();
+      f.launch(['/bin/echo', `fast-output-${attempt}`]);
+      const result = await f.complete();
+      expect(result.code).toBe(0);
+      expect(result.output).toContain(`fast-output-${attempt}\r\n`);
+      const ordered = f.events.filter((event) => event.type === 'data' || event.type === 'exit').map((event) => event.type).join(',');
+      expect(ordered).toMatch(/^(?:data,)*exit$/u);
+      f.stop();
+    }
+  }, 30000);
 });
