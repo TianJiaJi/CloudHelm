@@ -1,8 +1,9 @@
 import { StringDecoder } from 'node:string_decoder';
-import { isSudo, supportsSudo, type RawTerminal } from '@cloudhelm/core';
+import { isSudo, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
+export type CommandTransport = Pick<SshTransport, 'connectionGeneration' | 'prepareCommandProgram' | 'removeCommandProgram' | 'openPipe' | 'shell'>;
 import { remoteCommandProgram } from './remote-command-program.js';
 
 /** Commands are process arguments; PTY input and sudo credentials have distinct channels. */
@@ -14,6 +15,7 @@ export class SshCommandTerminal implements RawTerminal {
   private humanOwned = false;
   private closed = false;
   private busy = false;
+  private precedingSteps = false;
   private cols = 100;
   private rows = 30;
   private prompt = '';
@@ -22,18 +24,20 @@ export class SshCommandTerminal implements RawTerminal {
   private challenges = new Set<string>();
   private data = (_text: string) => {};
   private display = (_text: string) => {};
+  private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects'>) => {};
   private exited = (_code: number | undefined) => {};
   private closedListener = () => {};
   private authentication = (_challenge: { id: string; prompt?: string }) => {};
   private readonly generation: number;
   private readonly analyzer = new BashAnalyzer();
 
-  constructor(private readonly ssh: SshTransport, private readonly hostId: string) {
+  constructor(private readonly ssh: CommandTransport, private readonly hostId: string) {
     this.generation = ssh.connectionGeneration(hostId);
   }
 
   onData(listener: (text: string) => void): void { this.data = listener; }
   onDisplay(listener: (text: string) => void): void { this.display = listener; }
+  onExecutionFailure(listener: typeof this.failure): void { this.failure = listener; }
   onExit(listener: (code: number | undefined) => void): void { this.exited = listener; }
   onClose(listener: () => void): void { this.closedListener = listener; }
   onAuthentication(listener: (challenge: { id: string; prompt?: string }) => void): void { this.authentication = listener; }
@@ -82,6 +86,7 @@ export class SshCommandTerminal implements RawTerminal {
       if (index >= (steps?.length ?? 1)) { finish(code); return; }
       current();
       const step = steps?.[index];
+      this.precedingSteps = index > 0;
       await this.startProcess(step ? [step.call.name, ...step.call.args] : fallback, cwd,
         !!step && isSudo(step.call), index === 0 ? command : undefined, current, (exitCode) => {
           if (exitCode === undefined) { finish(); return; }
@@ -127,6 +132,10 @@ export class SshCommandTerminal implements RawTerminal {
             this.syntheticPromptShown = false;
           }
           else if (event.type === 'prompt' && typeof event.data === 'string') this.prompt = event.data;
+          else if (event.type === 'launch-error' && ['permission-denied', 'unsupported'].includes(String(event.kind))) {
+            this.failure({ failureKind: event.kind as 'permission-denied' | 'unsupported', effects: this.precedingSteps ? 'possible' : 'none' });
+            this.data('Executable or working directory is unavailable or inaccessible; no process started.'); complete(127); return;
+          }
           else if (event.type === 'exit' && Number.isInteger(event.code)) { complete(event.code as number); return; }
           else if (event.type === 'auth' && typeof event.id === 'string' && /^[a-f0-9]{32}$/u.test(event.id)) {
             this.challenges.add(event.id);

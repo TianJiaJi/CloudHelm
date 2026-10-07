@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
-import { operationFingerprint } from '@cloudhelm/core';
+import { operationFingerprint, OutputRedactor } from '@cloudhelm/core';
 
 type Owner = 'agent' | 'human' | 'suspended' | 'closed';
 
 interface PendingCommand {
   output: string;
+  redactor: OutputRedactor;
+  failure?: Pick<OperationResult, 'failureKind' | 'effects'>;
   settle(result: OperationResult): void;
   remoteCompletion: Promise<'exited' | 'unknown'>;
   completeRemote(state: 'exited' | 'unknown'): void;
@@ -46,6 +48,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     channel.onData((data) => this.receive(terminal, data));
     channel.onDisplay?.((data) => this.events.data(terminal.id, data));
     channel.onClose(() => this.closeRecord(terminal));
+    channel.onExecutionFailure?.((failure) => { if (terminal.pending) terminal.pending.failure = failure; });
     channel.onExit?.((code) => this.complete(terminal, code));
     this.events.state(terminal.id, terminal.owner);
     return terminal.id;
@@ -173,7 +176,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     return new Promise<OperationResult>((resolve) => {
       let completeRemote!: (state: 'exited' | 'unknown') => void;
       const remoteCompletion = new Promise<'exited' | 'unknown'>((done) => { completeRemote = done; });
-      const pending: PendingCommand = { output: '', operationId: operation.id, settle: resolve,
+      const pending: PendingCommand = { output: '', redactor: new OutputRedactor(), operationId: operation.id, settle: resolve,
         remoteCompletion, completeRemote, reported: false };
       terminal.pending = pending;
       signal?.addEventListener('abort', () => {
@@ -200,7 +203,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
   private receive(terminal: TerminalRecord, data: string): void {
     const pending = terminal.pending;
     this.events.data(terminal.id, data, pending?.operationId);
-    if (pending) pending.output = (pending.output + data).slice(-65_536);
+    if (pending) pending.output = (pending.output + pending.redactor.push(data)).slice(-65_536);
     for (const listener of this.listeners.get(terminal.id) ?? []) listener(data);
   }
 
@@ -208,9 +211,12 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     const pending = terminal.pending;
     if (!pending) return;
     terminal.pending = undefined;
+    pending.output = (pending.output + pending.redactor.finish()).slice(-65_536);
     pending.completeRemote(exitCode === undefined ? 'unknown' : 'exited');
     const result: OperationResult = { operationId: pending.operationId,
       status: exitCode === undefined ? 'unknown' : exitCode === 0 ? 'succeeded' : 'failed',
+      failureKind: exitCode === undefined ? 'unknown' : exitCode && /permission denied|operation not permitted/iu.test(pending.output) ? 'permission-denied' : undefined,
+      effects: exitCode === 0 ? undefined : 'possible', ...pending.failure,
       exitCode, stdoutTail: pending.output.slice(-16_384), logRef: terminal.id };
     this.events.completed?.(result);
     if (!pending.reported) pending.settle(result);

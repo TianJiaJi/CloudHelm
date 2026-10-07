@@ -82,6 +82,10 @@ export interface TaskView {
 }
 
 export interface OperationView {
+  failureKind?: 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unknown';
+  effects?: 'none' | 'possible';
+  loginAs?: string;
+  runAs?: string;
   interruption?: UserInterruption;
   id: string;
   taskId: string;

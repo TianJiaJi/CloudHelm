@@ -1,3 +1,4 @@
+import { DiagnosticLogger, diagnosticSettings } from './diagnostic-logger.js';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -198,6 +199,8 @@ void app.whenReady().then(async () => {
   else Menu.setApplicationMenu(null);
   store = new SqliteStore(join(app.getPath('userData'), 'cloudhelm.sqlite'));
   state = new AppState(store, publish);
+  const diagnostics = new DiagnosticLogger(diagnosticSettings(!!process.env.ELECTRON_RENDERER_URL, process.env, app.getPath('userData')));
+  diagnostics.write({ event: 'runtime.started', level: 'info' });
   runtime = new RuntimeBridge((event) => {
     state.record(event);
     if (!window?.isFocused() && Notification.isSupported()
@@ -205,7 +208,7 @@ void app.whenReady().then(async () => {
         || (event.type === 'task-status' && event.status === 'ready-for-review'))) {
       new Notification({ title: 'CloudHelm', body: event.type === 'task-status' ? 'AI 已提交验证结果，等待验收。' : 'AI 需要你处理一项请求。' }).show();
     }
-  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => state.runtimeStopped());
+  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event));
   await runtime.call({ method: 'restore-operations', operations: state.snapshot().operations
     .filter((operation) => operation.status === 'unknown').map(({ id, hostId }) => ({ id, hostId })) });
   registerIpc();

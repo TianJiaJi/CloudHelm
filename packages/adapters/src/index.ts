@@ -5,3 +5,4 @@ export * from './ssh-command-terminal.js';
 export * from './sqlite-store.js';
 export * from './model-catalog.js';
 export * from './pi-clarification-extension.js';
+export * from './su-session.js';
