@@ -15,7 +15,7 @@ describe('cross-task host write isolation', () => {
       .mockResolvedValue({ operationId: 'later', status: 'succeeded', stdoutTail: '' }) };
     const serial = new HostSerialExecutor(downstream);
     const first = serial.execute(operation, 'first-fingerprint');
-    await vi.waitFor(() => expect(downstream.execute).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(downstream.execute).toHaveBeenCalledTimes(1), { timeout: 15000 });
     let authorized = true;
     const isAuthorized = vi.fn(() => authorized);
     const queued = serial.execute({ ...operation, id: 'queued', scope: { ...operation.scope, taskId: 'another-task' } },

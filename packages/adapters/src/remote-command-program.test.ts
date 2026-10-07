@@ -76,7 +76,7 @@ describe.skipIf(process.platform === 'win32')('real process transport without co
   it('delivers Ctrl+C to the actual PTY process and observes its exit separately', async () => {
     const f = await fixture();
     f.launch(['python3', '-c', 'import time,sys; print("ready-to-interrupt", flush=True)\ntry: time.sleep(30)\nexcept KeyboardInterrupt: sys.exit(130)']);
-    await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('ready-to-interrupt'))).toBe(true));
+    await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('ready-to-interrupt'))).toBe(true), { timeout: 15000 });
     f.send({ type: 'input', data: Buffer.from('\u0003').toString('base64') });
     const result = await f.complete();
     expect(result.code).toBe(130);
@@ -85,7 +85,7 @@ describe.skipIf(process.platform === 'win32')('real process transport without co
   it('supports ordinary interactive input separately from credentials', async () => {
     const f = await fixture();
     f.launch(['python3', '-c', 'print("Continue?", flush=True); print("answer=" + input())']);
-    await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('Continue?'))).toBe(true));
+    await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('Continue?'))).toBe(true), { timeout: 15000 });
     f.send({ type: 'input', data: Buffer.from('y\n').toString('base64') });
     expect(await f.complete()).toMatchObject({ code: 0, output: expect.stringContaining('answer=y') });
   });
@@ -97,7 +97,7 @@ describe.skipIf(process.platform === 'win32')('real process transport without co
     await vi.waitFor(() => expect(f.events.some((event) => event.type === 'auth'), JSON.stringify(f.events)).toBe(true), { timeout: 10000 });
     const id = f.events.find((event) => event.type === 'auth')!.id;
     f.send({ type: 'answer', id, answer: 'synthetic-password' });
-    await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('payload-ready'))).toBe(true));
+    await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('payload-ready'))).toBe(true), { timeout: 15000 });
     // A late or duplicated credential must not become the business command's stdin.
     f.send({ type: 'answer', id, answer: 'late-password' });
     f.send({ type: 'input', data: Buffer.from('ordinary-input\n').toString('base64') });

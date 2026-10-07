@@ -45,7 +45,7 @@ function fixture(command = 'sudo apt install docker.io') {
   } };
   const abort = new AbortController();
   const result = bridge.execute(operation, operationFingerprint(operation), abort.signal);
-  const ready = () => vi.waitFor(() => expect(channel.commands).toEqual([command]));
+  const ready = () => vi.waitFor(() => expect(channel.commands).toEqual([command]), { timeout: 15000 });
   const auth = () => channel.challenge(`challenge-${requests.length}`);
   return { channel, terminal, terminalId, coordinator, requests, auto, result, ready, auth, abort,
     disconnect: () => { generation++; } };

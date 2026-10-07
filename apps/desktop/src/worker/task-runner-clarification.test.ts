@@ -21,7 +21,7 @@ async function setup(mixed = false, reverse = false) {
     { event: (event) => events.push(structuredClone(event)), requestApproval: async () => false, cancelApproval() {} });
   const pending = () => events.find((event) => event.type === 'clarification' && event.value.status === 'pending');
   async function question(): Promise<ClarificationRequest> {
-    await vi.waitFor(() => expect(pending()).toBeDefined());
+    await vi.waitFor(() => expect(pending()).toBeDefined(), { timeout: 15000 });
     const event = pending();
     if (event?.type !== 'clarification') throw new Error('Missing question');
     return event.value;

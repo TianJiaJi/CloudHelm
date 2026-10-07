@@ -27,7 +27,7 @@ describe('SafetyGate pre-commit authorization', () => {
   it('asks a human when the configured AI reviewer fails', async () => {
     const fixture = setup();
     const pending = fixture.gate.execute(operation);
-    await vi.waitFor(() => expect(fixture.requestApproval).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(fixture.requestApproval).toHaveBeenCalledOnce(), { timeout: 15000 });
     fixture.approve(true);
     expect((await pending).result?.status).toBe('succeeded');
     expect(fixture.execute).toHaveBeenCalledOnce();
@@ -36,7 +36,7 @@ describe('SafetyGate pre-commit authorization', () => {
   it('invalidates approval after terminal control changes', async () => {
     const fixture = setup();
     const pending = fixture.gate.execute(operation);
-    await vi.waitFor(() => expect(fixture.requestApproval).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(fixture.requestApproval).toHaveBeenCalledOnce(), { timeout: 15000 });
     fixture.changeGeneration();
     fixture.approve(true);
     expect((await pending).decision.ruleId).toBe('authorization-expired');

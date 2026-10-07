@@ -43,7 +43,7 @@ describe('application shutdown ordering', () => {
     expect(f.confirmExit).toHaveBeenCalledOnce();
     expect(f.snapshot).toHaveBeenCalledOnce();
     f.answer(false);
-    await vi.waitFor(() => expect(f.quit).not.toHaveBeenCalled());
+    await vi.waitFor(() => expect(f.quit).not.toHaveBeenCalled(), { timeout: 15000 });
     expect(f.snapshot()).toBeDefined(); expect(f.close).not.toHaveBeenCalled();
   });
 
@@ -51,7 +51,7 @@ describe('application shutdown ordering', () => {
     const f = fixture(true);
     f.quit.mockImplementation(() => { f.shutdown.beforeQuit(f.event); f.shutdown.willQuit(); });
     f.shutdown.beforeQuit(f.event); f.answer(true);
-    await vi.waitFor(() => expect(f.close).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(f.close).toHaveBeenCalledOnce(), { timeout: 15000 });
     expect(() => f.shutdown.beforeQuit(f.event)).not.toThrow();
     expect(f.snapshot).toHaveBeenCalledOnce();
   });

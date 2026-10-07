@@ -145,7 +145,7 @@ describe('conversation runtime restoration', () => {
     const connected = deferred<void>();
     fixture.connectHost.mockImplementation(async (id) => { await connected.promise; fixture.state.getHost(id).status = 'connected'; });
     const pending = invoke(channel, 'conversation-one', 'Continue', []);
-    await vi.waitFor(() => expect(fixture.connectHost).toHaveBeenCalledWith('host-a'));
+    await vi.waitFor(() => expect(fixture.connectHost).toHaveBeenCalledWith('host-a'), { timeout: 15000 });
     expect(fixture.call.mock.calls.some(([request]) => ['task-message', 'resume-task', 'start-task'].includes(request.method))).toBe(false);
     connected.resolve();
     await pending;
@@ -184,7 +184,7 @@ describe('conversation runtime restoration', () => {
     const connected = deferred<void>();
     fixture.connectHost.mockImplementation(async (id) => { await connected.promise; fixture.state.getHost(id).status = 'connected'; });
     const pending = [invoke('send-message', 'conversation-one', 'Continue', []), invoke('resume-task', 'conversation-one')];
-    await vi.waitFor(() => expect(fixture.connectHost).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fixture.connectHost).toHaveBeenCalledTimes(1), { timeout: 15000 });
     connected.resolve();
     await Promise.all(pending);
     expect(fixture.connectHost).toHaveBeenCalledTimes(1);

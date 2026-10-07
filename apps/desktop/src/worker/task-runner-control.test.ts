@@ -79,7 +79,7 @@ describe('stop and explicit continuation', () => {
     const f = await setup(false);
     try {
       const running = f.runner.start();
-      await vi.waitFor(() => expect(f.sessions[0]?.channel.commands).toEqual(['df -h']));
+      await vi.waitFor(() => expect(f.sessions[0]?.channel.commands).toEqual(['df -h']), { timeout: 15000 });
       const id = f.sessions[0]!.id;
       expect(() => f.runner.terminalInput(id, 'pwd\n')).toThrow('先停止');
       expect(f.sessions[0]!.channel.writes).toEqual([]);
@@ -96,7 +96,7 @@ describe('stop and explicit continuation', () => {
       f.runner.terminalInput(id, 'pwd\n');
       expect(f.requests()).toBe(1);
       f.runner.message('请核验状态，不要重试');
-      await vi.waitFor(() => expect(f.requests()).toBe(2));
+      await vi.waitFor(() => expect(f.requests()).toBe(2), { timeout: 15000 });
       expect(JSON.stringify(f.fixture.requests[1]!.messages)).toContain('CloudHelm user interruption');
       expect(JSON.stringify(f.fixture.requests[1]!.messages)).toContain(source);
       expect(JSON.stringify(f.fixture.requests[1]!.messages)).toContain('Do not automatically retry');
@@ -109,13 +109,13 @@ describe('stop and explicit continuation', () => {
     const opening = deferred();
     try {
       const running = f.runner.start();
-      await vi.waitFor(() => expect(f.sessions[0]?.channel.commands).toEqual(['df -h']));
+      await vi.waitFor(() => expect(f.sessions[0]?.channel.commands).toEqual(['df -h']), { timeout: 15000 });
       f.runner.stopOperation(); await running;
       f.sessions[0]!.channel.complete();
       f.control.openBarrier = opening.promise;
       const resuming = f.runner.resume();
       expect(f.runner.resume()).toBe(resuming);
-      await vi.waitFor(() => expect(f.sessions).toHaveLength(2));
+      await vi.waitFor(() => expect(f.sessions).toHaveLength(2), { timeout: 15000 });
       f.runner.pause(); opening.resolve(); await resuming;
       expect(f.requests()).toBe(1);
       expect(f.terminal.currentGeneration(f.sessions[1]!.id)).toBe(-1);

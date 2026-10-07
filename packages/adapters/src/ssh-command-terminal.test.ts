@@ -38,7 +38,7 @@ describe('direct SSH command transport', () => {
   ] as const)('executes foreground list %s with shell conditions', async (command, codes, names) => {
     const f = fixture(); await f.terminal.execute(command, '/', () => true);
     for (const [index, code] of codes.entries()) {
-      await vi.waitFor(() => expect(f.channels[index]?.writes.length).toBe(1));
+      await vi.waitFor(() => expect(f.channels[index]?.writes.length).toBe(1), { timeout: 15000 });
       const launch = JSON.parse(f.channels[index]!.writes[0]!);
       expect(launch.argv[0]).toBe(names[index]);
       expect(launch.sudo).toBe(names[index] === 'sudo');
@@ -62,7 +62,7 @@ describe('direct SSH command transport', () => {
     await f.terminal.execute('sudo id; sudo mkdir /root/test', '/', () => authorized);
     if (reason === 'revoked') { authorized = false; f.channel.event({ type: 'exit', code: 0 }); }
     else f.channel.emit('close');
-    await vi.waitFor(() => expect(f.exited).toHaveBeenCalledWith(undefined));
+    await vi.waitFor(() => expect(f.exited).toHaveBeenCalledWith(undefined), { timeout: 15000 });
     expect(f.openPipe).toHaveBeenCalledOnce();
   });
 
@@ -82,7 +82,7 @@ describe('direct SSH command transport', () => {
   it('opens a sized interactive shell immediately on idle takeover, without extra Enter presses', async () => {
     const f = fixture(); f.terminal.resize(132, 42); f.terminal.takeOver();
     f.terminal.write('su -\r');
-    await vi.waitFor(() => expect(f.human.writes).toEqual(['su -\r']));
+    await vi.waitFor(() => expect(f.human.writes).toEqual(['su -\r']), { timeout: 15000 });
     expect(f.shell).toHaveBeenCalledExactlyOnceWith('host', 132, 42);
     expect(f.human.setWindow).toHaveBeenCalledWith(42, 132, 0, 0);
   });

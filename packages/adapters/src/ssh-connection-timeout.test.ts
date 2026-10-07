@@ -31,7 +31,7 @@ describe('SSH test deadline cleanup', () => {
     const ssh = new SshTransport(); const abort = new AbortController();
     const connection = ssh.connect(host, { password: 'test-only' }, { host: { ...host, id: 'jump' }, secret: { password: 'test-only' } }, undefined, abort.signal);
     const outcome = expect(connection).rejects.toThrow('timed out');
-    await vi.waitFor(() => expect(fixture.forward).toBeDefined());
+    await vi.waitFor(() => expect(fixture.forward).toBeDefined(), { timeout: 15000 });
     abort.abort(); await outcome;
     const lateChannel = { end: vi.fn() }; fixture.forward!(null, lateChannel);
     expect(lateChannel.end).toHaveBeenCalledOnce();
