@@ -40,16 +40,12 @@ function descendants(table, root) {
 }
 
 async function forceKill(pid) {
-  if (process.platform === 'win32') {
-    try {
-      await execute('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 10_000, windowsHide: true });
-    } catch (error) {
-      // An exiting process can disappear between the snapshot and taskkill.
-      if ((await processTable()).some((entry) => entry.pid === pid && !entry.zombie)) throw error;
-    }
-  } else {
-    try { process.kill(pid, 'SIGKILL'); }
-    catch (error) { if (error.code !== 'ESRCH') throw error; }
+  // Kill only captured PIDs. Windows taskkill /T can reject an orphan after its
+  // parent exits; Node's SIGKILL terminates that PID without walking ancestry.
+  try { process.kill(pid, 'SIGKILL'); }
+  catch (error) {
+    // A process can disappear between the snapshot and termination.
+    if (error.code !== 'ESRCH' && (await processTable()).some((entry) => entry.pid === pid && !entry.zombie)) throw error;
   }
 }
 
@@ -89,7 +85,7 @@ export class DesktopProcess {
     await this.capture();
     // No app.quit()/close(): the persisted pending question must reach startup recovery.
     if (this.pids.has(this.child.pid)) await forceKill(this.child.pid);
-    // POSIX SIGKILL does not kill descendants. Also cover previously orphaned Windows children.
+    // Terminating one PID does not kill descendants; include captured orphans.
     const live = new Set((await processTable()).filter((entry) => !entry.zombie).map((entry) => entry.pid));
     for (const pid of this.pids) if (pid !== this.child.pid && live.has(pid)) await forceKill(pid);
     // OS process termination releases userData/SQLite handles before we reuse the directory.

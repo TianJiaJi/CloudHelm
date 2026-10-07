@@ -1,4 +1,4 @@
-/* global window */
+/* global window, navigator */
 import assert from 'node:assert/strict';
 
 /**
@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
  * rejection, the master switch and reset, and the delete-conversation guard.
  */
 export async function checkMenusAndShortcuts(page, screenshot) {
+  const isMac = await page.evaluate(() => /mac|iphone|ipad/iu.test(`${navigator.platform} ${navigator.userAgent}`));
+  const modifier = isMac ? 'Meta' : 'Control';
   // Message menu: copy text and edit stay available from the right click.
   const message = page.getByRole('article', { name: '用户消息', exact: true }).first();
   await message.click({ button: 'right' });
@@ -17,12 +19,20 @@ export async function checkMenusAndShortcuts(page, screenshot) {
   await screenshot('context-menu-message.png');
   await page.keyboard.press('Escape');
   await messageMenu.waitFor({ state: 'hidden' });
+  // A pointer menu survives its opening mouseup, then closes on an outside click.
+  await message.click({ button: 'right' });
+  await messageMenu.waitFor();
+  await page.getByRole('textbox', { name: '给 AI 的消息', exact: true }).click();
+  await messageMenu.waitFor({ state: 'hidden' });
 
   // Terminal menu: always opens, copy is disabled without a selection, unset
   // actions advertise their missing shortcut.
   const terminal = page.locator('[data-shortcut-scope="terminal"]');
-  await terminal.click({ position: { x: 60, y: 60 } });
-  await terminal.click({ button: 'right', position: { x: 60, y: 60 } });
+  // macOS xterm selects the word under a right click; use a blank row to test
+  // the no-selection state consistently on every platform.
+  const blankRow = { x: 60, y: (await terminal.boundingBox()).height - 30 };
+  await terminal.click({ position: blankRow });
+  await terminal.click({ button: 'right', position: blankRow });
   const terminalMenu = page.getByRole('menu', { name: '终端操作' });
   await terminalMenu.waitFor();
   assert.equal(await terminalMenu.getByRole('menuitem', { name: '引用输出到 AI' }).count(), 1);
@@ -67,7 +77,7 @@ export async function checkMenusAndShortcuts(page, screenshot) {
   assert.equal(await editMenu.getByRole('menuitem', { name: '撤销' }).count(), 1);
   assert.equal(await editMenu.getByRole('menuitem', { name: '粘贴' }).count(), 1);
   assert.equal(await editMenu.getByRole('menuitem', { name: '全选' }).count(), 1);
-  assert.ok(await editMenu.locator('kbd', { hasText: 'Ctrl+C' }).count(), 'editing shortcuts are shown as hints');
+  assert.ok(await editMenu.locator('kbd', { hasText: isMac ? '⌘C' : 'Ctrl+C' }).count(), 'editing shortcuts are shown as hints');
   await screenshot('context-menu-edit.png');
   await page.keyboard.press('Escape');
   await editMenu.waitFor({ state: 'hidden' });
@@ -88,19 +98,19 @@ export async function checkMenusAndShortcuts(page, screenshot) {
     'every shortcut row is visible inside the settings panel');
   await screenshot('shortcut-settings.png');
   const rowFor = (name) => panel.locator('[class*=shortcutRow]', { hasText: name }).first();
-  assert.match(await rowFor('关闭当前标签').locator('kbd').first().textContent(), /Ctrl\+W/u, 'default binding is shown');
+  assert.equal(await rowFor('关闭当前标签').locator('kbd').first().textContent(), isMac ? '⌘W' : 'Ctrl+W', 'default binding is shown');
 
   await rowFor('新终端').getByRole('button', { name: '更改' }).click();
   await panel.getByText('请按下新的快捷键').first().waitFor();
   await page.keyboard.press('Control+Alt+p');
-  await rowFor('新终端').locator('kbd', { hasText: 'Ctrl+Alt+P' }).waitFor();
+  await rowFor('新终端').locator('kbd', { hasText: isMac ? '⌃⌥P' : 'Ctrl+Alt+P' }).waitFor();
   assert.ok((await page.evaluate(() => window.fixture.calls.filter((call) => call.kind === 'shortcuts')))
     .some((call) => call.settings.bindings['terminal.new'] === 'ctrl+alt+p'), 'recorded binding is persisted');
 
   await rowFor('新对话').getByRole('button', { name: '更改' }).click();
-  await page.keyboard.press('Control+w');
+  await page.keyboard.press(`${modifier}+w`);
   await panel.getByRole('alert').filter({ hasText: '已被' }).waitFor();
-  await page.keyboard.press('Control+c');
+  await page.keyboard.press(`${modifier}+c`);
   await panel.getByRole('alert').filter({ hasText: '保留键位' }).waitFor();
   await page.keyboard.press('Escape');
   await rowFor('新对话').getByRole('button', { name: '更改' }).waitFor();
@@ -118,7 +128,7 @@ export async function checkMenusAndShortcuts(page, screenshot) {
   await master.click();
 
   await panel.getByRole('button', { name: '恢复全部默认' }).click();
-  await rowFor('新终端').locator('kbd', { hasText: 'Ctrl+Shift+T' }).waitFor();
+  await rowFor('新终端').locator('kbd', { hasText: isMac ? '⇧⌘T' : 'Ctrl+Shift+T' }).waitFor();
   await page.getByRole('button', { name: '返回', exact: true }).click();
   await page.getByRole('heading', { name: '模型设置', exact: true }).waitFor({ state: 'hidden' });
 }
