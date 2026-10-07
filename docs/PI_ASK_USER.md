@@ -23,3 +23,5 @@ CloudHelm 内置 `@cloudhelm/pi-ask-user`，模型工具名为 `ask_user`。实�
 ## 验证
 
 单元与本地 HTTP/SSE 模型集成测试覆盖真实 Pi 加载、提示词注入、问答继续、混合工具批次、取消、过期、重复提交及上下文保留。`pnpm test:ui` 覆盖草稿、选项、自定义回答、提交失败及重试。`pnpm test:desktop` 与 `pnpm test:desktop:packaged` 使用本地模拟模型，跨 IPC、utility process 和 SQLite 检查重启前后插件注册及旧请求失效。
+
+桌面测试在等待回答时强制结束隔离实例的进程树，等待所有进程退出、释放用户目录后再重启，保留崩溃恢复语义。Windows 的全新临时配置先正常关闭一次，并验证 safeStorage 能跨重启解密，以持久化 Chromium 的初始加密密钥；此准备步骤发生在创建对话之前。失败时保留原始错误和可用的截图，清理有超时和目录删除重试，CI 同时上传失败日志。

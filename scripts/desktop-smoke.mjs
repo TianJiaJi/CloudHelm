@@ -1,4 +1,4 @@
-/* global window, setTimeout, clearTimeout */
+/* global window, Buffer, setTimeout, clearTimeout */
 import { checkClarificationRuntime } from './check-clarification-runtime.mjs';
 import assert from 'node:assert/strict';
 import console from 'node:console';
@@ -93,6 +93,18 @@ try {
   assert.equal(runtime.safeStorageAvailable, true, 'OS credential encryption is unavailable in this environment');
   assert.equal(runtime.credentialRoundtrip, true);
   if (packaged) assert.equal(runtime.packaged, true);
+  if (process.platform === 'win32') {
+    // A brand-new Chromium profile persists its Windows encryption key on clean shutdown.
+    // Prime that profile before saving the model fixture's credential and crash-testing a task.
+    const encrypted = await application.evaluate(({ safeStorage }) => safeStorage.encryptString('cloudhelm-smoke-bootstrap').toString('base64'));
+    await currentProcess.close();
+    instances.delete(currentProcess);
+    page = await launch();
+    page.on('pageerror', (error) => rendererErrors.push(error.message));
+    await page.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
+    const decrypted = await application.evaluate(({ safeStorage }, value) => safeStorage.decryptString(Buffer.from(value, 'base64')), encrypted);
+    assert.equal(decrypted, 'cloudhelm-smoke-bootstrap', 'Windows profile encryption must survive restart before crash testing');
+  }
   page = await checkClarificationRuntime(page, async () => {
     // Crash only this isolated smoke-test instance, preserving its temporary database.
     await currentProcess.crash();
