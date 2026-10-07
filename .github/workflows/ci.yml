@@ -40,21 +40,21 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       CLOUDHELM_EXPECTED_ARCH: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Set Node before pnpm bootstrap
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7.0.0
         with:
           node-version: 24
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6.1.0
         with:
           version: 11.9.0
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version: 24
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         id: python
         with:
           python-version: '3.12'
@@ -98,7 +98,7 @@ jobs:
         run: pnpm --filter @cloudhelm/desktop exec electron-builder ${{ matrix.builder_args }} --publish never
       - name: Save smoke screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: smoke-${{ matrix.platform }}
           include-hidden-files: true
@@ -110,7 +110,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Save unsigned desktop packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: CloudHelm-${{ matrix.platform }}
           path: |
@@ -130,7 +130,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - name: Decide whether to publish this version
@@ -152,7 +152,7 @@ jobs:
           VERSION_FILE_CHANGED=$CHANGED_FLAG TAG_EXISTS=$TAG_EXISTS node scripts/release-decision.mjs
       - name: Download built installers
         if: steps.decision.outputs.should-publish == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: CloudHelm-*
           path: release-assets
