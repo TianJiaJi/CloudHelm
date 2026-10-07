@@ -87,6 +87,31 @@ describe('direct SSH command transport', () => {
     expect(f.human.setWindow).toHaveBeenCalledWith(42, 132, 0, 0);
   });
 
+  it('states the handover and erases the synthetic prompt before a later takeover shell', async () => {
+    const f = fixture(); await f.terminal.execute('du -xhd1 /usr', '/home/tian', () => true);
+    f.channel.event({ type: 'prompt', data: 'tian@ubuntu:~$ ' });
+    f.channel.event({ type: 'data', data: '3.4G\t/usr\n' });
+    f.channel.event({ type: 'exit', code: 0 });
+    expect(f.output).toHaveBeenCalledExactlyOnceWith('3.4G\t/usr\n');
+    expect(f.display.mock.calls.flat().join('')).toBe('tian@ubuntu:~$ ');
+    f.terminal.takeOver();
+    await vi.waitFor(() => expect(f.display.mock.calls.flat().join(''))
+      .toBe('tian@ubuntu:~$ \r\x1b[2K—— 终端已交还人工输入 ——\r\n'), { timeout: 15000 });
+    expect(f.shell).toHaveBeenCalledExactlyOnceWith('host', 100, 30);
+  });
+
+  it('skips the synthetic prompt when the exit report hands the terminal over at once', async () => {
+    const f = fixture();
+    f.exited.mockImplementation(() => f.terminal.takeOver());
+    await f.terminal.execute('du -xhd1 /usr', '/home/tian', () => true);
+    f.channel.event({ type: 'prompt', data: 'tian@ubuntu:~$ ' });
+    f.channel.event({ type: 'data', data: '3.4G\t/usr\n' });
+    f.channel.event({ type: 'exit', code: 0 });
+    await vi.waitFor(() => expect(f.display.mock.calls.flat().join(''))
+      .toBe('—— 终端已交还人工输入 ——\r\n'), { timeout: 15000 });
+    expect(f.shell).toHaveBeenCalledOnce();
+  });
+
   it.each(['od -c /root/test/test', 'sudo od -c /root/test/test'])('passes %s as literal executable arguments', async (command) => {
     const f = fixture(); await f.terminal.execute(command, '/home/ubuntu', () => true);
     expect(JSON.parse(f.channel.writes[0]!)).toEqual({ argv: command.split(' '), cwd: '/home/ubuntu', sudo: command.startsWith('sudo '), command, cols: 100, rows: 30 });

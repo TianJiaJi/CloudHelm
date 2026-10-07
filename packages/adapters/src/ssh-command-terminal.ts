@@ -17,6 +17,7 @@ export class SshCommandTerminal implements RawTerminal {
   private cols = 100;
   private rows = 30;
   private prompt = '';
+  private syntheticPromptShown = false;
   private lineStart = true;
   private challenges = new Set<string>();
   private data = (_text: string) => {};
@@ -61,9 +62,16 @@ export class SshCommandTerminal implements RawTerminal {
     this.lineStart = true;
     const finish = (code?: number) => {
       this.busy = false;
-      if (code !== undefined && !this.humanOwned) this.display(`${this.lineStart ? '' : '\r\n'}${this.prompt}`);
-      this.exited(code);
-      if (this.humanOwned && !this.closed) void this.openHuman().catch(() => this.close());
+      // The exit report can synchronously hand the terminal back to the human owner;
+      // decide on the synthetic prompt only after that handover is known.
+      try { this.exited(code); }
+      finally {
+        if (code !== undefined && !this.humanOwned && !this.closed) {
+          this.display(`${this.lineStart ? '' : '\r\n'}${this.prompt}`);
+          this.syntheticPromptShown = true;
+        }
+        if (this.humanOwned && !this.closed) void this.openHuman().catch(() => this.close());
+      }
     };
     const next = async (index: number, code: number): Promise<void> => {
       while (steps && index < steps.length) {
@@ -113,8 +121,11 @@ export class SshCommandTerminal implements RawTerminal {
           const event = JSON.parse(line) as Record<string, unknown>;
           if (event.type === 'data' && typeof event.data === 'string') {
             this.data(event.data);
-            if (event.data) this.lineStart = event.data.endsWith('\n');
-          } else if (event.type === 'display' && typeof event.data === 'string') this.display(event.data);
+            if (event.data) { this.lineStart = event.data.endsWith('\n'); this.syntheticPromptShown = false; }
+          } else if (event.type === 'display' && typeof event.data === 'string') {
+            this.display(event.data);
+            this.syntheticPromptShown = false;
+          }
           else if (event.type === 'prompt' && typeof event.data === 'string') this.prompt = event.data;
           else if (event.type === 'exit' && Number.isInteger(event.code)) { complete(event.code as number); return; }
           else if (event.type === 'auth' && typeof event.id === 'string' && /^[a-f0-9]{32}$/u.test(event.id)) {
@@ -154,7 +165,12 @@ export class SshCommandTerminal implements RawTerminal {
       if (this.closed) { channel.end(); throw new Error('Terminal closed'); }
       this.human = channel;
       channel.setWindow(this.rows, this.cols, 0, 0);
-      channel.on('data', (chunk: Buffer) => this.data(chunk.toString('utf8')));
+      // The banner of a fresh login shell can look like a reconnect; state the handover
+      // first and erase the synthetic prompt left on screen by the finished command.
+      this.display(`${this.syntheticPromptShown ? '\r\x1b[2K' : this.lineStart ? '' : '\r\n'}—— 终端已交还人工输入 ——\r\n`);
+      this.syntheticPromptShown = false;
+      this.lineStart = true;
+      channel.on('data', (chunk: Buffer) => { this.syntheticPromptShown = false; this.data(chunk.toString('utf8')); });
       channel.on('close', () => this.close());
       channel.on('error', () => this.close());
       return channel;
