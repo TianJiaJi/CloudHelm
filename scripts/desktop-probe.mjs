@@ -23,7 +23,28 @@ async function probe() {
   const tree = parser.parse('printf "%s\\n" cloudhelm');
   const wasmParsed = !!tree && !tree.rootNode.hasError && tree.rootNode.type === 'program';
   tree?.delete(); parser.delete();
-  return { sqliteRoundtrip, sqliteVersion, wasmParsed, grammarPath, electron: process.versions.electron, architecture: process.arch };
+  const appAnalyzer = await checkAppAnalyzer(process.argv[4]);
+  return { sqliteRoundtrip, sqliteVersion, wasmParsed, grammarPath, appAnalyzer, electron: process.versions.electron, architecture: process.arch };
+}
+
+// The built bundle resolves its own dependencies, which is exactly where the grammar lookup used
+// to fail for unpackaged runs. Only shared chunks are imported: entry points start a real process.
+async function checkAppAnalyzer(bundleDirectory) {
+  if (!bundleDirectory) return undefined;
+  const { readdir } = await import('node:fs/promises');
+  const { pathToFileURL } = await import('node:url');
+  const chunks = path.join(bundleDirectory, 'chunks');
+  const names = existsSync(chunks) ? await readdir(chunks) : [];
+  for (const name of names.filter((entry) => entry.endsWith('.js'))) {
+    const file = path.join(chunks, name);
+    const module = await import(pathToFileURL(file).href);
+    const Analyzer = Object.values(module).find((value) => typeof value === 'function' && value.name === 'BashAnalyzer');
+    if (!Analyzer) continue;
+    const analysis = await new Analyzer().analyze('df -hT -x tmpfs; echo ok; df -i');
+    if (analysis.hasError) throw new Error(`The built Bash analyzer could not parse a compound command: ${file}`);
+    return { module: path.relative(bundleDirectory, file), calls: analysis.calls.length, compound: analysis.hasCompound };
+  }
+  throw new Error(`The built application does not expose the Bash analyzer under ${chunks}`);
 }
 probe().then(
   (result) => process.parentPort.postMessage({ result }),

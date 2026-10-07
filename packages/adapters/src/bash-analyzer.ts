@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { embeddedShell, findCommands, shellWord, wrappedCommand } from './shell-wrappers.js';
 import { Language, Parser, type Node as SyntaxNode } from 'web-tree-sitter';
 import type { CommandAnalysis, CommandCall, CommandAnalyzer } from '@cloudhelm/core';
@@ -8,6 +9,54 @@ import type { CommandAnalysis, CommandCall, CommandAnalyzer } from '@cloudhelm/c
 const require = createRequire(import.meta.url);
 const MAX_COMMAND_LENGTH = 65_536;
 const MAX_NESTING = 4;
+const GRAMMAR_FILE = 'tree-sitter-bash.wasm';
+
+/**
+ * The grammar is loaded from the first location that exists:
+ * the packaged resources, the directory of the built bundle (or its parent when bundles are
+ * code-split into chunks), and finally the installed grammar package used by tests and sources.
+ * Relying on module resolution alone breaks every unpackaged run, because the bundle resolves
+ * from the application output directory, which cannot see the adapter's own node_modules.
+ */
+export function grammarPathCandidates(locations: {
+  resourcesPath?: string | undefined;
+  bundleDirectory?: string | undefined;
+  packageDirectory?: string | undefined;
+}): string[] {
+  const directories = [
+    locations.resourcesPath,
+    locations.bundleDirectory,
+    locations.bundleDirectory && path.join(locations.bundleDirectory, '..'),
+    locations.packageDirectory
+  ];
+  return [...new Set(directories.filter((directory): directory is string => !!directory)
+    .map((directory) => path.join(directory, GRAMMAR_FILE)))];
+}
+
+/** Selection is pure so the deployment order stays testable without a packaged application. */
+export function findGrammarPath(locations: Parameters<typeof grammarPathCandidates>[0],
+  exists: (file: string) => boolean = existsSync): string | undefined {
+  return grammarPathCandidates(locations).find((candidate) => exists(candidate));
+}
+
+function bundleDirectory(): string | undefined {
+  try { return path.dirname(fileURLToPath(import.meta.url)); } catch { return undefined; }
+}
+
+function installedGrammarDirectory(): string | undefined {
+  try { return path.dirname(require.resolve('tree-sitter-bash/package.json')); } catch { return undefined; }
+}
+
+function resolveGrammarPath(): string {
+  const locations = {
+    resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+    bundleDirectory: bundleDirectory(),
+    packageDirectory: installedGrammarDirectory()
+  };
+  const found = findGrammarPath(locations);
+  if (!found) throw new Error(`Bash grammar file is missing; checked ${grammarPathCandidates(locations).join(', ')}`);
+  return found;
+}
 
 function isDynamic(node: SyntaxNode): boolean {
   if (/expansion|substitution|glob|concatenation|arithmetic/u.test(node.type)) return true;
@@ -109,19 +158,21 @@ export class BashAnalyzer implements CommandAnalyzer {
   private async getParser(): Promise<Parser> {
     if (this.parser) return this.parser;
     if (!this.initializing) {
-      this.initializing = (async () => {
-        await Parser.init();
-        const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-        const bundledGrammar = resourcesPath && path.join(resourcesPath, 'tree-sitter-bash.wasm');
-        const grammarPath = bundledGrammar && existsSync(bundledGrammar)
-          ? bundledGrammar : path.join(path.dirname(require.resolve('tree-sitter-bash/package.json')), 'tree-sitter-bash.wasm');
-        const grammar = await Language.load(grammarPath);
-        const parser = new Parser().setLanguage(grammar);
-        this.parser = parser;
-        return parser;
-      })();
+      // A failed initialization must not be cached: a later retry can succeed once the grammar is in place.
+      this.initializing = this.createParser().catch((error: unknown) => {
+        this.initializing = null;
+        throw error;
+      });
     }
     return this.initializing;
+  }
+
+  private async createParser(): Promise<Parser> {
+    await Parser.init();
+    const grammar = await Language.load(resolveGrammarPath());
+    const parser = new Parser().setLanguage(grammar);
+    this.parser = parser;
+    return parser;
   }
 
   async analyze(command: string): Promise<CommandAnalysis> {

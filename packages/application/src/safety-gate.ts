@@ -38,8 +38,10 @@ export class SafetyGate {
       if (operation.kind === 'command') {
         try {
           analysis = await this.deps.analyzer.analyze(operation.command);
-        } catch {
-          const safety = { verdict: 'error', ruleId: 'analyzer-unavailable', reason: 'Command analyzer is unavailable' } as const;
+        } catch (error) {
+          // Fail closed, but keep the cause: a silent "unavailable" hides broken deployments.
+          const cause = (error instanceof Error ? error.message : String(error)).slice(0, 300);
+          const safety = { verdict: 'error', ruleId: 'analyzer-unavailable', reason: `Command analyzer is unavailable: ${cause}` } as const;
           await this.deps.audit.decided(operation.id, safety, fingerprint);
           return { decision: safety };
         }

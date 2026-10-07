@@ -81,6 +81,8 @@ pnpm test:desktop:packaged
 
 Agent 命令需要远端 Python 3。固定组件通过 SFTP 放置在私有临时目录，仅负责启动目标程序、回传输出和退出码及隔离 sudo 密码通道。普通人工 SSH 终端不依赖此组件。缺少 Python 3 时提示并暂停，不自动安装或换用复杂 Shell 包装。
 
+安全审核先用 Tree-sitter 解析命令；缺少 `tree-sitter-bash.wasm` 时分析器不可用，所有 Agent 命令都会被拒绝并暂停任务（失败不放行）。语法文件有三处部署位置，按顺序取第一个存在的：打包后的 `resources/tree-sitter-bash.wasm`、构建产物目录（`out/main/tree-sitter-bash.wasm`，由 `electron.vite.config.ts` 随主进程构建产出，覆盖 dev、`electron-vite preview` 和 `electron .`）、以及源码/测试解析到的 `tree-sitter-bash` 包。未打包运行时不能依赖模块解析，因为产物目录看不到适配器自己的 `node_modules`。
+
 sudo 支持可静态解析的前台命令列表（`;`、换行、`&&`、`||`），每条实际执行前复核授权。只有 sudo 发出 askpass 请求时才弹出密码输入。终端完整显示远端用户名、主机、工作目录、原始命令和输出；提示符及命令回显与操作输出分开，PTY 从启动时采用当前窗口尺寸。AI 提示符采用标准 Bash 样式，不加载用户自定义 PS1。人工接管立即打开原生交互 Shell，可按需执行 `su -`。
 
 sudo 的默认回归测试可单独运行：

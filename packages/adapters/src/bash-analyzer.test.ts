@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { BashAnalyzer } from './bash-analyzer.js';
+import path from 'node:path';
+import { BashAnalyzer, findGrammarPath, grammarPathCandidates } from './bash-analyzer.js';
 import { decideSafety, isReadOnlyQuery, type ProposedOperation } from '@cloudhelm/core';
 
 const scope = {
@@ -96,4 +97,33 @@ describe('deterministic safety policy', () => {
     expect(isReadOnlyQuery(await analyzer.analyze(value))).toBe(true);
   });
 
+});
+
+describe('grammar deployment lookup', () => {
+  const bundle = path.join(path.sep, 'app', 'out', 'main', 'chunks');
+  const installed = path.join(path.sep, 'repo', 'packages', 'adapters', 'node_modules', 'tree-sitter-bash');
+
+  it('prefers packaged resources, then the built bundle, then the installed package', () => {
+    expect(grammarPathCandidates({ resourcesPath: path.join(path.sep, 'app', 'resources'), bundleDirectory: bundle, packageDirectory: installed }))
+      .toEqual([
+        path.join(path.sep, 'app', 'resources', 'tree-sitter-bash.wasm'),
+        path.join(bundle, 'tree-sitter-bash.wasm'),
+        path.join(bundle, '..', 'tree-sitter-bash.wasm'),
+        path.join(installed, 'tree-sitter-bash.wasm')
+      ]);
+  });
+
+  it('drops unknown locations instead of resolving them to the working directory', () => {
+    expect(grammarPathCandidates({ resourcesPath: undefined, bundleDirectory: undefined, packageDirectory: undefined })).toEqual([]);
+  });
+
+  it('finds the emitted grammar when neither resources nor the grammar package are reachable', () => {
+    const emitted = path.join(bundle, '..', 'tree-sitter-bash.wasm');
+    const locations = { bundleDirectory: bundle, packageDirectory: undefined, resourcesPath: undefined };
+    expect(findGrammarPath(locations, (file) => file === emitted)).toBe(emitted);
+  });
+
+  it('reports no grammar when every candidate is absent', () => {
+    expect(findGrammarPath({ bundleDirectory: bundle, packageDirectory: installed, resourcesPath: undefined }, () => false)).toBeUndefined();
+  });
 });

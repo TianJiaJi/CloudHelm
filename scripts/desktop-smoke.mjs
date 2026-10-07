@@ -77,7 +77,7 @@ try {
     const available = safeStorage.isEncryptionAvailable();
     const credentialRoundtrip = available && safeStorage.decryptString(safeStorage.encryptString('cloudhelm-smoke-only')) === 'cloudhelm-smoke-only';
     const native = await new Promise((resolve, reject) => {
-      const probe = utilityProcess.fork(input.probePath, [appPath, grammarPath], { serviceName: 'CloudHelm smoke dependency probe' });
+      const probe = utilityProcess.fork(input.probePath, [appPath, grammarPath, input.bundleDirectory], { serviceName: 'CloudHelm smoke dependency probe' });
       const timeout = setTimeout(() => { probe.kill(); reject(new Error('Native/WASM probe timed out')); }, 20_000);
       probe.on('message', (message) => {
         clearTimeout(timeout); probe.kill();
@@ -86,9 +86,16 @@ try {
       probe.on('exit', (code) => { if (code !== 0) { clearTimeout(timeout); reject(new Error(`Native/WASM probe exited ${code}`)); } });
     });
     return { packaged: app.isPackaged, appPath, native, safeStorageAvailable: available, credentialRoundtrip };
-  }, { packaged, grammarPath: path.join(desktop, 'resources/tree-sitter-bash.wasm'), probePath: path.join(root, 'scripts/desktop-probe.mjs') });
+  }, { packaged, grammarPath: path.join(desktop, 'resources/tree-sitter-bash.wasm'), probePath: path.join(root, 'scripts/desktop-probe.mjs'), bundleDirectory: packaged ? undefined : path.join(desktop, 'out/main') });
   assert.equal(runtime.native.sqliteRoundtrip, true);
   assert.equal(runtime.native.wasmParsed, true);
+  if (!packaged) {
+    // Unpackaged runs cannot reach the adapter's grammar package, so the build must ship the grammar
+    // beside the bundle and the app's own analyzer must resolve it there.
+    await access(path.join(desktop, 'out/main/tree-sitter-bash.wasm'));
+    assert.equal(runtime.native.appAnalyzer?.calls, 3);
+    assert.equal(runtime.native.appAnalyzer?.compound, true);
+  }
   if (process.env.CLOUDHELM_EXPECTED_ARCH) assert.equal(runtime.native.architecture, process.env.CLOUDHELM_EXPECTED_ARCH);
   assert.equal(runtime.safeStorageAvailable, true, 'OS credential encryption is unavailable in this environment');
   assert.equal(runtime.credentialRoundtrip, true);
