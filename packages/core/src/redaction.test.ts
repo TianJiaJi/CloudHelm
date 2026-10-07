@@ -17,3 +17,25 @@ describe('sensitive output masking', () => {
     expect(redactOutput('password=abc')).toBe('password=[REDACTED]');
   });
 });
+
+it('redacts quoted config, JSON, OTP, nested keys and incomplete private keys', () => {
+  const output = redactOutput(`{"apiKey":"two words","nested":{"token":"escaped\\\"value"}}
+ADMIN_PASSWORD_HASH='scrypt$private words'
+验证码：123456
+-----BEGIN OPENSSH PRIVATE KEY-----
+private-material`);
+  for (const secret of ['two words', 'escaped', 'scrypt', '123456', 'private-material']) expect(output).not.toContain(secret);
+});
+
+it('redacts a quoted JSON credential split across data chunks', () => {
+  const redactor = new OutputRedactor();
+  expect(redactor.push('{"apiKey":"split ')).toBe('');
+  expect(redactor.push('secret"}\n')).not.toContain('split');
+});
+
+it('does not leak continuation lines of a quoted credential', () => {
+  const redactor = new OutputRedactor();
+  const output = redactor.push('SECRET="first secret line\n') + redactor.push('second secret line\n')
+    + redactor.push('last secret line"\nnormal output\n') + redactor.finish();
+  expect(output).not.toContain('secret line'); expect(output).toContain('normal output');
+});

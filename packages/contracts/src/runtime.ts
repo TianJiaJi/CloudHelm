@@ -36,6 +36,7 @@ export type RuntimeCall =
 export interface LogPage { text: string; nextCursor: number; more: boolean }
 
 export type RuntimeMessage =
+  | { diagnostic: import('./diagnostics.js').DiagnosticRecord }
   | { readLog: { id: string; taskId: string; operationId: string; cursor: number } }
   | { logResult: { id: string; value?: LogPage; error?: string } }
   | { id: string; call: RuntimeCall }

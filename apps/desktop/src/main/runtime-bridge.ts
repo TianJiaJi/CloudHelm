@@ -1,3 +1,4 @@
+import type { DiagnosticEvent } from '@cloudhelm/core';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { utilityProcess, type UtilityProcess } from 'electron';
@@ -17,7 +18,8 @@ export class RuntimeBridge {
 
   constructor(private readonly onEvent: (event: Extract<RuntimeMessage, { event: unknown }>['event']) => void,
     private readonly readLog: (taskId: string, operationId: string, cursor: number) => import('@cloudhelm/contracts/runtime').LogPage,
-    private readonly onStopped: () => void = () => {}) {
+    private readonly onStopped: () => void = () => {},
+    private readonly diagnostic: (event: DiagnosticEvent) => void = () => {}) {
     this.child = utilityProcess.fork(join(import.meta.dirname, 'runtime.js'), [], { serviceName: 'CloudHelm Agent and SSH runtime' });
     this.child.on('message', (message: RuntimeMessage) => this.receive(message));
     this.child.on('exit', () => {
@@ -48,6 +50,7 @@ export class RuntimeBridge {
 
   private receive(message: RuntimeMessage): void {
     if (this.closing || this.stopped) return;
+    if ('diagnostic' in message) { this.diagnostic(message.diagnostic); return; }
     if ('readLog' in message) {
       const query = message.readLog;
       try { this.child.postMessage({ logResult: { id: query.id, value: this.readLog(query.taskId, query.operationId, query.cursor) } }); }

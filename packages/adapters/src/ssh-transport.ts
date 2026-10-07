@@ -1,3 +1,4 @@
+import { redactOutput } from '@cloudhelm/core';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -6,6 +7,13 @@ import { Client, type ClientChannel, type ConnectConfig, type FileEntryWithStats
 export class HostKeyError extends Error {
   constructor(readonly fingerprint: string, readonly expected?: string) {
     super(expected ? 'SSH host key changed' : 'SSH host key is not trusted yet');
+  }
+}
+
+/** A preflight failure is distinguishable from any attempted remote write. */
+export class RemoteFileError extends Error {
+  constructor(readonly effects: 'none' | 'possible', readonly permissionDenied: boolean, detail?: string) {
+    super(permissionDenied ? 'Remote filesystem permission denied' : redactOutput(detail ?? 'Remote file operation failed; verify if effects are possible'));
   }
 }
 
@@ -220,7 +228,8 @@ export class SshTransport {
   /** Writes through a private temporary file and retains a private backup of an overwritten file. */
   async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAuthorized: () => void = () => {}): Promise<string | undefined> {
     if (content.length > 1_048_576) throw new Error('Structured writes are limited to 1 MiB');
-    return this.withSftp(hostId, async (sftp) => {
+    let effects: 'none' | 'possible' = 'none';
+    try { return await this.withSftp(hostId, async (sftp) => {
       await this.checkSafeParent(sftp, absolutePath);
       const existing = await this.lstatOptional(sftp, absolutePath);
       if (existing?.isSymbolicLink() || existing?.isDirectory()) throw new Error('Target must be a regular file, not a symlink or directory');
@@ -228,10 +237,12 @@ export class SshTransport {
       const backup = existing ? `${absolutePath}.cloudhelm-backup-${randomUUID()}` : undefined;
       if (backup) {
         const original = await this.readSftpFile(sftp, absolutePath);
+        effects = 'possible';
         await this.writeSftpFile(sftp, backup, original, 0o600, assertAuthorized);
       }
       const temporary = `${absolutePath}.cloudhelm-new-${randomUUID()}`;
       try {
+        effects = 'possible';
         await this.writeSftpFile(sftp, temporary, content, existing ? existing.mode & 0o777 : 0o600, assertAuthorized);
         await new Promise<void>((resolve, reject) => {
           assertAuthorized();
@@ -242,24 +253,30 @@ export class SshTransport {
         throw error;
       }
       return backup;
-    });
+    }); } catch (error) {
+      throw new RemoteFileError(effects, !!error && typeof error === 'object' && 'code' in error && (error.code === 3 || error.code === 'EACCES' || error.code === 'EPERM'), error instanceof Error ? error.message : undefined);
+    }
   }
 
   /** Deletes regular files only, preserving a separate recovery copy. */
   async deleteFile(hostId: string, absolutePath: string, assertAuthorized: () => void = () => {}): Promise<string> {
-    return this.withSftp(hostId, async (sftp) => {
+    let effects: 'none' | 'possible' = 'none';
+    try { return await this.withSftp(hostId, async (sftp) => {
       await this.checkSafeParent(sftp, absolutePath);
       const existing = await this.lstatOptional(sftp, absolutePath);
       if (!existing || existing.isDirectory() || existing.isSymbolicLink()) throw new Error('Only an existing regular file can be deleted');
       if (existing.size > 1_048_576) throw new Error('File is too large for a managed backup');
       const backup = `${absolutePath}.cloudhelm-backup-${randomUUID()}`;
+      effects = 'possible';
       await this.writeSftpFile(sftp, backup, await this.readSftpFile(sftp, absolutePath), 0o600, assertAuthorized);
       await new Promise<void>((resolve, reject) => {
         assertAuthorized();
         sftp.unlink(absolutePath, (error) => error ? reject(error) : resolve());
       });
       return backup;
-    });
+    }); } catch (error) {
+      throw new RemoteFileError(effects, !!error && typeof error === 'object' && 'code' in error && (error.code === 3 || error.code === 'EACCES' || error.code === 'EPERM'), error instanceof Error ? error.message : undefined);
+    }
   }
 
   private async withSftp<T>(hostId: string, action: (sftp: SFTPWrapper) => Promise<T>): Promise<T> {

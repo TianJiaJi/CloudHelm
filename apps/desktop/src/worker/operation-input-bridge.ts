@@ -28,7 +28,7 @@ export class OperationInputBridge implements OperationExecutor {
     if (!plan) {
       if (analysis.calls.some((call) => /(?:^|\/)(?:sudo|su)$/u.test(call.name))) {
         this.terminal.suspend(terminalId);
-        return { operationId: operation.id, status: 'failed', requiresUserAction: true,
+        return { operationId: operation.id, status: 'failed', requiresUserAction: true, failureKind: 'unsupported', effects: 'none',
           stdoutTail: 'This authentication form requires manual takeover; no command was sent. Do not wrap it or switch tools to bypass this result.' };
       }
       return this.terminal.execute(operation, fingerprint, signal, options);
@@ -95,6 +95,8 @@ export class OperationInputBridge implements OperationExecutor {
       // sudo itself reports authentication/policy rejection. Ordinary payload errors remain failures.
       if (plan.auth && result.status === 'failed' && /(?:^|[\r\n])sudo:\s/iu.test(result.stdoutTail)) {
         result.requiresUserAction = true;
+        result.failureKind = 'authentication-failed';
+        result.effects = 'possible';
         this.terminal.suspend(terminalId);
       }
       return result;

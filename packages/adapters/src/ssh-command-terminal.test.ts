@@ -157,3 +157,15 @@ describe('direct SSH command transport', () => {
     expect(f.openPipe).toHaveBeenCalledOnce();
   });
 });
+
+it.each([false, true])('distinguishes launch failure after an earlier action (prior=%s)', async (prior) => {
+  const f = fixture(); const failure = vi.fn(); f.terminal.onExecutionFailure(failure);
+  await f.terminal.execute(prior ? 'sudo mkdir -p /tmp/example && sudo missing-executable' : 'missing-executable', '/', () => true);
+  if (prior) {
+    f.channel.event({ type: 'exit', code: 0 });
+    await vi.waitFor(() => expect(f.channels).toHaveLength(2), { timeout: 15000 });
+  }
+  f.channels.at(-1)!.event({ type: 'launch-error', kind: 'unsupported' });
+  expect(failure).toHaveBeenCalledWith({ failureKind: 'unsupported', effects: prior ? 'possible' : 'none' });
+  expect(f.exited).toHaveBeenCalledWith(127);
+});

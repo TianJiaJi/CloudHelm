@@ -5,6 +5,9 @@ export interface OperationScope {
   hostId: string;
   cwd: string;
   runAs: string;
+  loginAs?: string;
+  sessionId?: string;
+  connectionGeneration?: number;
   terminalId: string;
   terminalGeneration: number;
   policyRevision: number;
@@ -54,6 +57,8 @@ export interface OperationResult {
   operationId: string;
   status: 'succeeded' | 'failed' | 'unknown' | 'handed-over';
   exitCode?: number;
+  failureKind?: 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unknown';
+  effects?: 'none' | 'possible';
   stdoutTail: string;
   logRef?: string;
   cwd?: string;

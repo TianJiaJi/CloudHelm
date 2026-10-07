@@ -1,3 +1,6 @@
+import { PrivilegedRuntime } from './privileged-runtime.js';
+import { safeDiagnostic } from '@cloudhelm/core';
+import { eventDiagnostic } from './diagnostic-events.js';
 import { HostSerialExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import { HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
@@ -19,12 +22,14 @@ export class WorkerServer {
   });
   private readonly terminal: TerminalManager;
   private readonly executor: HostSerialExecutor;
+  private readonly privileged: PrivilegedRuntime;
+  private readonly hosts = new Map<string, RuntimeHost>();
   private readonly interactions: InteractionCoordinator;
   private readonly tasks = new Map<string, TaskRunner>();
   private readonly pendingApprovals = new Map<string, { hostId: string; resolve(allowed: boolean): void }>();
   private readonly pendingInputs = new Map<string, { connectionId: string; expiresAt: number; resolve(answer: string | null): void; timeout: ReturnType<typeof setTimeout> }>();
 
-  constructor(private readonly post: (message: RuntimeMessage) => void) {
+  constructor(private readonly send: (message: RuntimeMessage) => void) {
     this.terminal = new TerminalManager({
       data: (terminalId, data, operationId) => this.post({ event: { type: 'terminal-data', terminalId, data, operationId } }),
       completed: (result) => { for (const runner of this.tasks.values()) runner.recordRemoteResult(result); },
@@ -45,7 +50,17 @@ export class WorkerServer {
     const commands = new OperationInputBridge(this.terminal, this.ssh, this.interactions,
       (taskId, hostId) => this.post({ event: { type: 'task-message', taskId, role: 'system',
         text: `已审核的安装操作在主机 ${hostId} 上需要普通继续确认，APT 报告 0 项删除，已自动回答 y。`, createdAt: Date.now() } }));
-    this.executor = new HostSerialExecutor(new FileOperationExecutor(this.terminal, this.ssh, commands));
+    this.privileged = new PrivilegedRuntime({ terminal: this.terminal, ssh: this.ssh,
+      ordinary: new FileOperationExecutor(this.terminal, this.ssh, commands),
+      jump: (host) => host.jumpHostId ? this.hosts.get(host.jumpHostId) : undefined,
+      input: (request, signal) => this.requestPrivateInput(request, signal) });
+    this.executor = new HostSerialExecutor(this.privileged);
+  }
+
+  private post(message: RuntimeMessage): void {
+    const diagnostic = eventDiagnostic(message);
+    if (diagnostic) this.send({ diagnostic });
+    this.send(message);
   }
 
   async dispatch(call: RuntimeCall): Promise<unknown> {
@@ -79,7 +94,7 @@ export class WorkerServer {
       case 'close-terminal':
         this.interactions.cancelForTerminal(call.terminalId);
         for (const runner of this.tasks.values()) if (runner.ownsTerminal(call.terminalId)) runner.stopOperation('terminal-close');
-        this.terminal.close(call.terminalId);
+        if (this.terminal.hostOf(call.terminalId)) this.terminal.close(call.terminalId);
         return;
       case 'terminal-input': {
         const taskId = this.terminal.taskOf(call.terminalId);
@@ -100,13 +115,15 @@ export class WorkerServer {
       case 'resize': return this.terminal.resize(call.terminalId, call.cols, call.rows);
       case 'list-remote': return this.ssh.list(call.hostId, call.path);
       case 'start-task': {
+        if (!call.restored) this.send({ diagnostic: safeDiagnostic({ event: 'chat', level: 'info', taskId: call.task.id, role: 'user', text: call.task.goal }) });
         if (this.tasks.has(call.task.id)) throw new Error('Task is already active');
         const runner = new TaskRunner(call.task, call.hosts, call.profile, call.priorOperations ?? [], this.terminal, this.executor,
           (hostId, taskId) => this.openTerminal(hostId, taskId), {
+            diagnostic: (diagnostic) => this.send({ diagnostic: safeDiagnostic(diagnostic) }),
             event: (event) => this.post({ event } as RuntimeMessage),
             requestApproval: (view) => this.requestApproval(view),
             cancelApproval: (id) => this.cancelApproval(id)
-          }, call.history, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor));
+          }, call.history, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor), this.privileged.forTask(call.task.id));
         this.tasks.set(call.task.id, runner);
         const start = runner.start(call.restored);
         if (call.restored) await start;
@@ -187,8 +204,24 @@ export class WorkerServer {
     });
   }
 
+  private requestPrivateInput(request: Omit<InputRequestView, 'id' | 'expiresAt'>, signal: AbortSignal): Promise<string | null> {
+    signal.throwIfAborted();
+    const id = randomUUID(); const expiresAt = Date.now() + 120_000;
+    return new Promise((resolve) => {
+      const abort = () => { if (this.pendingInputs.has(id)) this.answerInput(id, null); };
+      const timeout = setTimeout(abort, 120_000);
+      this.pendingInputs.set(id, { connectionId: request.operationId, expiresAt, timeout,
+        resolve: (answer) => { signal.removeEventListener('abort', abort); resolve(answer); } });
+      signal.addEventListener('abort', abort, { once: true });
+      this.post({ event: { type: 'input-open', value: { ...request, id, expiresAt } } });
+      if (signal.aborted) abort();
+    });
+  }
+
   private async connect(host: RuntimeHost, jump?: RuntimeHost): Promise<void> {
     const connectionId = randomUUID();
+    this.hosts.set(host.id, host);
+    if (jump) this.hosts.set(jump.id, jump);
     try {
       await this.ssh.connect(host as SshHost, { password: host.secret, passphrase: host.secret },
         jump ? { host: jump as SshHost, secret: { password: jump.secret, passphrase: jump.secret } } : undefined,

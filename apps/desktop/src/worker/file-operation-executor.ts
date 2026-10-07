@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import type { SshTransport } from '@cloudhelm/adapters';
+import { RemoteFileError, type SshTransport } from '@cloudhelm/adapters';
 import { operationFingerprint, type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 import type { TerminalManager } from '@cloudhelm/application';
 import { LocalFileAccess } from './local-file-access.js';
@@ -50,7 +50,9 @@ export class FileOperationExecutor implements OperationExecutor {
         logRef: operation.scope.terminalId
       };
     } catch (error) {
-      return { operationId: operation.id, status: remoteStarted ? 'unknown' : 'failed',
+      const effects = error instanceof RemoteFileError ? error.effects : remoteStarted ? 'possible' : 'none';
+      return { operationId: operation.id, status: effects === 'possible' ? 'unknown' : 'failed', effects,
+        failureKind: error instanceof RemoteFileError && error.permissionDenied ? 'permission-denied' : 'unknown',
         stdoutTail: `SFTP operation needs verification: ${error instanceof Error ? error.message : String(error)}` };
     }
   }

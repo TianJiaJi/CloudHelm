@@ -8,6 +8,7 @@ export function operationFingerprint(operation: ProposedOperation): string {
     hostId: scope.hostId,
     cwd: scope.cwd,
     runAs: scope.runAs,
+    loginAs: scope.loginAs, sessionId: scope.sessionId, connectionGeneration: scope.connectionGeneration,
     terminalId: scope.terminalId,
     terminalGeneration: scope.terminalGeneration,
     policyRevision: scope.policyRevision,

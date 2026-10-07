@@ -5,21 +5,23 @@ export function isSudo(call: CommandCall): boolean {
 }
 
 /** The password recipient is the literal sudo process, never a shell or stdin. */
-export function sudoTarget(call: CommandCall): { name: string; args: string[] } | undefined {
+export function sudoTarget(call: CommandCall): { name: string; args: string[]; runAs: string } | undefined {
   if (!isSudo(call)) return;
   const args = call.args;
   let index = 0;
+  let runAs = 'root';
   while (index < args.length) {
     const option = args[index]!;
     if (['-n', '--non-interactive', '-k', '--reset-timestamp', '-H', '--set-home'].includes(option)) { index++; continue; }
     if (['-u', '--user', '-g', '--group'].includes(option) && /^[a-z_][a-z0-9_-]*[$]?$/iu.test(args[index + 1] ?? '')) {
+      if (option === '-u' || option === '--user') runAs = args[index + 1]!;
       index += 2; continue;
     }
     break;
   }
   if (args[index] === '--') index++;
   if (!args[index] || args[index]!.startsWith('-') || args[index]!.includes('=')) return;
-  return { name: args[index]!, args: args.slice(index + 1) };
+  return { name: args[index]!, args: args.slice(index + 1), runAs };
 }
 
 export function supportsSudo(analysis: CommandAnalysis): boolean {

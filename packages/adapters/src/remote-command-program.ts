@@ -173,6 +173,10 @@ try:
                     if entry and not entry['event'].is_set() and (answer is None or (isinstance(answer, str) and len(answer) <= 4095 and not any(c in answer for c in '\r\n\0'))):
                         entry['answer'] = answer
                         entry['event'].set()
+except (FileNotFoundError, PermissionError):
+    if process is None:
+        emit({'type': 'launch-error', 'kind': 'permission-denied' if isinstance(sys.exc_info()[1], PermissionError) else 'unsupported'})
+    else: emit({'type': 'error', 'message': 'Command transport failed; verify remote outcome.'})
 except Exception:
     # Do not serialize exceptions or control messages: they might contain credentials.
     emit({'type': 'error', 'message': 'Direct command transport failed; verify the remote outcome before retrying.'})

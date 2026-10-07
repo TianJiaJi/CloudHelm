@@ -93,3 +93,18 @@ describe('SSH connection generations', () => {
     expect(ssh.isConnected('host')).toBe(true);
   });
 });
+
+it('reports a denied preflight read as having no remote effects', async () => {
+  const calls = sftpFixture(false, () => {});
+  state.sftp.lstat = (_path: string, callback: (error: unknown) => void) => callback({ code: 3 });
+  const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+  await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({ effects: 'none', permissionDenied: true });
+  expect(calls.write).not.toHaveBeenCalled(); expect(calls.rename).not.toHaveBeenCalled();
+});
+
+it('retains possible effects when staging already began before failure', async () => {
+  sftpFixture(false, () => {});
+  state.sftp.writeFile = (_path: string, _data: Buffer, _options: unknown, callback: (error: unknown) => void) => callback({ code: 3 });
+  const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+  await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({ effects: 'possible', permissionDenied: true });
+});
