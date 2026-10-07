@@ -1,3 +1,5 @@
+export type ErrorContext = { terminalId: string } | { conversationId: string };
+
 export interface ErrorPresentation {
   code: string;
   title: string;
@@ -5,6 +7,7 @@ export interface ErrorPresentation {
   severity: 'error' | 'warning';
   action?: 'model-settings';
   details: string;
+  context?: ErrorContext;
 }
 
 interface ErrorRule extends Omit<ErrorPresentation, 'details'> { pattern: RegExp }
@@ -38,11 +41,13 @@ const rules: ErrorRule[] = [
   { code: 'ssh-fingerprint', pattern: /Verify SSH host key|Host key verification failed|host key mismatch|主机指纹发生变化/iu,
     title: '请核对服务器身份', description: '服务器身份尚未确认或指纹发生变化。请通过可信渠道核对主机指纹，再重新连接。', severity: 'warning' },
   { code: 'input-expired', pattern: /Input request expired|Input bridge authorization expired/iu,
-    title: '这次输入请求已失效', description: '认证阶段或终端状态已经变化。请等待新的输入请求，或接管终端检查；不要将密码粘贴到普通终端。', severity: 'warning' },
+    title: '这次输入请求已失效', description: '认证阶段或终端状态已经变化。请等待新的输入请求，或停止 AI 后检查终端；不要将密码粘贴到普通终端。', severity: 'warning' },
   { code: 'approval-expired', pattern: /Approval expired|authorization expired|authorization revoked|批准已失效/iu,
     title: '这次授权已失效', description: '操作内容、策略或终端控制权发生了变化。请查看最新操作并重新审核后再继续。', severity: 'warning' },
+  { code: 'terminal-busy', pattern: /AI 正在运行，请先停止再输入|终端暂不可输入，请先停止 AI 并等待命令退出/iu,
+    title: '请先停止执行', description: '停止 AI 后请等待远端命令退出，再输入命令。停止不会发起新的 AI 对话。', severity: 'warning' },
   { code: 'human-control', pattern: /Return terminal control to the Agent|not a human-controlled Agent session|taken over/iu,
-    title: '请先确认终端控制权', description: '终端控制状态已经变化。请在终端顶部查看当前状态，需要继续 AI 时手动交还终端。', severity: 'warning' },
+    title: '请先确认终端控制权', description: '终端控制状态已经变化。请在终端顶部查看当前状态，需要继续 AI 时发送消息或点击“继续 AI”。', severity: 'warning' },
   { code: 'ssh-handshake-closed', pattern: /Connection lost before handshake/iu,
     title: 'SSH 握手前连接被关闭', description: '连接在身份验证之前已中断，尚未验证密码或私钥。请核对地址和端口，并检查 VPN／代理分流、服务器防火墙及 SSH 服务的访问限制。', severity: 'warning' },
   { code: 'disconnected', pattern: /Host is not connected|Not connected|ECONNRESET|EPIPE|Connection (?:lost|closed)|Terminal not found|disconnected/iu,

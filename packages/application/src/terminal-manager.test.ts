@@ -28,12 +28,15 @@ function operation(id: string, generation: number): ProposedOperation {
 }
 
 describe('real PTY ownership', () => {
-  it('rejects an approved command after immediate human takeover', async () => {
+  it('blocks typing until the backend releases the idle session and invalidates old grants', async () => {
     const channel = new FakeTerminal();
     const manager = new TerminalManager({ data() {}, state() {} });
     const id = manager.open('host', channel, 'task');
     const proposed = operation('one', manager.currentGeneration(id));
     proposed.scope.terminalId = id;
+    expect(() => manager.input(id, 'pwd\n', true)).toThrow('先停止');
+    expect(channel.writes).toEqual([]);
+    manager.releaseIdle(id);
     manager.input(id, 'pwd\n', true);
     await expect(manager.execute(proposed, operationFingerprint(proposed))).rejects.toThrow('authorization expired');
     expect(channel.writes).toEqual(['pwd\n']);

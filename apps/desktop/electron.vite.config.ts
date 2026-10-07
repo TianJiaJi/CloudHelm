@@ -1,4 +1,5 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const here = import.meta.dirname;
@@ -6,7 +7,10 @@ const workspacePackages = ['@cloudhelm/contracts', '@cloudhelm/core', '@cloudhel
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: workspacePackages })],
+    plugins: [externalizeDepsPlugin({ exclude: workspacePackages }), { name: 'pi-extension-notices', generateBundle() {
+      for (const name of ['LICENSE', 'NOTICE']) this.emitFile({ type: 'asset', fileName: `pi-extensions/ask-user/${name}`,
+        source: readFileSync(resolve(here, '../../packages/adapters/src/pi-extensions/ask-user', name), 'utf8') });
+    } }],
     build: { rollupOptions: { input: {
       index: resolve(here, 'src/main/index.ts'),
       runtime: resolve(here, 'src/worker/runtime.ts')

@@ -199,3 +199,26 @@ describe('restored conversations and fixed request overhead', () => {
     expect(generationTokenBudget({ contextWindow: 32_000, maxTokens: 2048 })).toBe(2048);
   });
 });
+
+it('keeps exact clarification questions and answers through compaction and restart', () => {
+  const answer = JSON.stringify({ questions: [{ id: 'scope', prompt: '环境？' }], answers: [{ id: 'scope', value: '测试环境', custom: true }] });
+  const toolResult = { ...result('ask', answer), toolName: 'ask_user' } as AgentMessage;
+  const compacted = compactWithinBudget([user('Deploy'), assistant([{ type: 'toolCall', id: 'ask', name: 'ask_user', arguments: { questions: [{ id: 'scope', prompt: '环境？' }] } }]), toolResult,
+    assistant([call('large')]), result('large', 'log'.repeat(10000)), user('Check the port'), user('Check health')], 4000);
+  expect(compacted).toContainEqual(toolResult);
+  const text = `[需求澄清回答]\n${answer}`;
+  const history: ConversationMessage[] = [{ taskId: 'task', role: 'user', text, createdAt: 2 },
+    ...Array.from({ length: 20 }, (_, i): ConversationMessage => ({ taskId: 'task', role: 'user', text: `follow-up-${i}`, createdAt: i + 3 }))];
+  expect(restoredConversationMessages({ id: 'task', goal: 'Deploy', createdAt: 1 }, history)).toContainEqual({ role: 'user', content: text, timestamp: 2 });
+});
+
+it('preserves user interruption provenance across restart and compaction without treating it as a new request', () => {
+  const record: ConversationMessage = { taskId: 'task', role: 'system', text: '用户通过 Ctrl+C 主动终止执行，不要自动重试。', createdAt: 2,
+    interruption: { source: 'ctrl-c', requestedAt: 2, operationIds: ['stopped-operation'] } };
+  const history = [record, ...Array.from({ length: 20 }, (_, i): ConversationMessage => ({ taskId: 'task', role: 'user', text: `follow-up-${i}`, createdAt: i + 3 }))];
+  const restored = restoredConversationMessages({ id: 'task', goal: '检查服务', createdAt: 1 }, history);
+  const control = restored.find((message) => message.role === 'system');
+  expect(JSON.stringify(control)).toContain('stopped-operation');
+  const compacted = compactWithinBudget([...restored, assistant([call('long-log')]), result('long-log', 'noise'.repeat(5000)), user('只核验状态')], 4000);
+  expect(compacted).toContainEqual(control);
+});

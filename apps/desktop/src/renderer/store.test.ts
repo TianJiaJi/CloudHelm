@@ -13,6 +13,19 @@ function snapshot(): AppSnapshot {
 beforeEach(() => { useUi.setState(useUi.getInitialState(), true); useUi.getState().setSnapshot(snapshot()); });
 
 describe('SSH workspace projection', () => {
+  it.each([true, false])('projects a handed-back terminal without stealing background focus (foreground: %s)', (foreground) => {
+    useUi.getState().applyEvent({ type: 'terminal-state', terminalId: 'old-agent', hostId: 'a', taskId: 'a-old', state: 'human' });
+    useUi.getState().openTerminal('old-agent');
+    useUi.getState().applyEvent({ type: 'terminal-data', terminalId: 'old-agent', data: 'original output' });
+    if (!foreground) useUi.getState().openTerminal('b-ssh');
+    useUi.getState().applyEvent({ type: 'terminal-state', terminalId: 'new-agent', hostId: 'a', taskId: 'a-old', state: 'agent' });
+    useUi.getState().applyEvent({ type: 'terminal-replaced', previousTerminalId: 'old-agent', terminalId: 'new-agent' });
+    expect(useUi.getState().activeTabId).toBe(foreground ? 'new-agent' : 'b-ssh');
+    expect(useUi.getState().selectedConversationId).toBe(foreground ? 'a-old' : 'b-chat');
+    expect(useUi.getState().terminals['old-agent']).toMatchObject({ state: 'human', replacementTerminalId: 'new-agent', buffer: 'original output' });
+    expect(useUi.getState().terminals['new-agent']?.state).toBe('agent');
+    expect(useUi.getState().tabs.map((item) => item.id)).toContain('old-agent');
+  });
   it('keeps background AI sessions from changing the visible terminal or conversation', () => {
     useUi.getState().openTerminal('a-ssh');
     useUi.getState().applyEvent({ type: 'terminal-state', terminalId: 'b-agent', hostId: 'b', taskId: 'b-chat', state: 'agent' });

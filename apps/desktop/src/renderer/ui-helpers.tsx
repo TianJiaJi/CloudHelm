@@ -4,7 +4,7 @@ export async function capture(action: () => Promise<unknown>, report: (error: st
   try { await action(); report(''); } catch (error) { report(error instanceof Error ? error.message : String(error)); }
 }
 export const statusLabel: Record<TaskStatus, string> = {
-  draft: '准备就绪', running: '正在处理', 'waiting-review': '等待确认', 'human-control': '你已接管', recovering: '核验远端状态',
+  draft: '准备就绪', running: '正在处理', 'waiting-review': '等待确认', 'waiting-user': '等待你的回答', 'human-control': '你已接管', recovering: '核验远端状态',
   paused: '已暂停', answered: '已回答', 'ready-for-review': '待验收', accepted: '已验收', failed: '需要处理'
 };
 export const reviewLabel = { ask: '人工批准', 'ai-review': 'AI 审核', permissive: '自动执行' };

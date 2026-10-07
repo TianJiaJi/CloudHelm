@@ -220,3 +220,18 @@ describe('conversation runtime restoration', () => {
     expect(fixture.call.mock.calls.filter(([request]) => request.method === 'start-task')).toHaveLength(2);
   });
 });
+
+it('does not restore or authorize a conversation while submitting clarification answers', async () => {
+  const f = setup();
+  await invoke('answer-clarification', 'conversation-one', 'request', [{ id: 'scope', value: 'test' }]);
+  expect(f.call.mock.calls.map(([call]) => call)).toEqual([{ method: 'answer-clarification', taskId: 'conversation-one', requestId: 'request', answers: [{ id: 'scope', value: 'test' }] }]);
+  expect(f.connectHost).not.toHaveBeenCalled();
+  expect(f.takeSelections).not.toHaveBeenCalled();
+});
+
+it('blocks ordinary messages and local attachment authorization while waiting for clarification', async () => {
+  const f = setup({ ...makeConversation(), status: 'waiting-user' }, true);
+  await expect(invoke('send-message', 'conversation-one', 'continue', ['selected-token'])).rejects.toThrow('先回答');
+  expect(f.call).not.toHaveBeenCalled();
+  expect(f.takeSelections).not.toHaveBeenCalled();
+});

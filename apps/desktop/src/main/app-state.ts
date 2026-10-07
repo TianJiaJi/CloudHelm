@@ -3,7 +3,7 @@ import { safeStorage } from 'electron';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
 import { OutputRedactor } from '@cloudhelm/core';
-import { HostDraftSchema, type AppEvent, type AppSnapshot, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type TaskView } from '@cloudhelm/contracts';
+import { HostDraftSchema, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; credentialRevision?: string }
@@ -15,6 +15,7 @@ export class AppState {
   private readonly operations = new Map<string, OperationView>();
   private readonly approvals = new Map<string, AppSnapshot['approvals'][number]>();
   private readonly inputs = new Map<string, AppSnapshot['inputs'][number]>();
+  private readonly clarifications = new Map<string, ClarificationRequest>();
   private readonly messages: AppSnapshot['messages'] = [];
   private readonly logBuffer = new Map<string, string>();
   private readonly redactors = new Map<string, OutputRedactor>();
@@ -28,7 +29,12 @@ export class AppState {
     for (const task of store.list<TaskView>('tasks')) this.tasks.set(task.id,
       task.status === 'running' || task.status === 'waiting-review'
         ? { ...task, localScopes: task.localScopes ?? [], status: 'recovering' }
-        : { ...task, localScopes: task.localScopes ?? [] });
+        : { ...task, localScopes: task.localScopes ?? [], ...(task.status === 'waiting-user' ? { status: 'paused' as const } : {}) });
+    for (const request of store.list<ClarificationRequest>('clarifications')) {
+      const restored = request.status === 'pending' ? { ...request, status: 'expired' as const } : request;
+      this.clarifications.set(restored.id, restored);
+      if (restored !== request) store.put('clarifications', restored.id, restored);
+    }
     for (const operation of store.list<OperationView>('operations')) this.operations.set(operation.id,
       operation.status === 'approved' || operation.status === 'running' ? { ...operation, status: 'unknown', reason: 'Application exited before outcome was recorded' } : operation);
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));
@@ -40,6 +46,7 @@ export class AppState {
   snapshot(): AppSnapshot {
     return {
       hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
+      clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
       profile: { ...this.profile, hasKey: !!this.profileSecret(), hasJevKey: !!this.secret('jev-key:vercel-ai-gateway') }
     };
@@ -318,6 +325,10 @@ export class AppState {
         this.operations.set(event.value.id, event.value);
         this.store.put('operations', event.value.id, event.value);
         break;
+      case 'clarification':
+        this.clarifications.set(event.value.id, event.value);
+        this.store.put('clarifications', event.value.id, event.value);
+        break;
       case 'approval-open': this.approvals.set(event.value.id, event.value); break;
       case 'approval-close': this.approvals.delete(event.id); break;
       case 'input-open': this.inputs.set(event.value.id, event.value); break;
@@ -332,7 +343,7 @@ export class AppState {
         break;
       }
       case 'task-message': {
-        const message = { taskId: event.taskId, role: event.role, text: event.text, createdAt: event.createdAt, model: event.model };
+        const message = { taskId: event.taskId, role: event.role, text: event.text, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
         this.messages.push(message);
         this.store.put('messages', `${event.createdAt}:${randomUUID()}`, message);
         break;
@@ -353,12 +364,20 @@ export class AppState {
       }
       case 'terminal-state': {
         if (event.state === 'closed') this.terminals.delete(event.terminalId);
-        else this.terminals.set(event.terminalId, { id: event.terminalId, hostId: event.hostId, taskId: event.taskId, state: event.state });
+        else this.terminals.set(event.terminalId, { ...this.terminals.get(event.terminalId), id: event.terminalId, hostId: event.hostId, taskId: event.taskId, state: event.state });
         if (event.state === 'closed') {
           const tail = this.redactors.get(event.terminalId)?.finish() ?? '';
           this.logBuffer.set(event.terminalId, (this.logBuffer.get(event.terminalId) ?? '') + tail);
           this.redactors.delete(event.terminalId);
           this.flushLogs();
+        }
+        break;
+      }
+      case 'terminal-replaced': {
+        const previous = this.terminals.get(event.previousTerminalId);
+        const replacement = this.terminals.get(event.terminalId);
+        if (previous && replacement && previous.taskId === replacement.taskId && previous.hostId === replacement.hostId) {
+          previous.replacementTerminalId = replacement.id;
         }
         break;
       }
@@ -376,7 +395,7 @@ export class AppState {
       case 'snapshot': break;
     }
     if (event.type !== 'terminal-data') this.publish();
-    if (event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
+    if (event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'terminal-replaced' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
   }
 
   publish(): void { if (!this.closed) this.emit({ type: 'snapshot', value: this.snapshot() }); }
@@ -393,6 +412,10 @@ export class AppState {
     }
     for (const task of this.tasks.values()) if (['running', 'waiting-review', 'human-control', 'paused'].includes(task.status)) {
       this.record({ type: 'task-status', taskId: task.id, status: 'recovering', summary: '运行进程已停止，请重新打开 CloudHelm 后核验远端状态。' });
+    }
+    for (const request of this.clarifications.values()) if (request.status === 'pending') {
+      this.record({ type: 'clarification', value: { ...request, status: 'expired' } });
+      this.record({ type: 'task-status', taskId: request.taskId, status: 'paused', summary: '运行进程已退出，旧问题已失效。请重新发送需求。' });
     }
     this.approvals.clear(); this.inputs.clear(); this.publish();
   }

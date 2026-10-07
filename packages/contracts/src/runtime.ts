@@ -1,4 +1,4 @@
-import type { AppEvent, ConversationMessage, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
+import type { AppEvent, ClarificationAnswer, ConversationMessage, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
 
 export interface RuntimeHost extends HostView { secret?: string }
 export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 'trust-required' }>
@@ -6,6 +6,8 @@ export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 
 export interface RuntimeProfile { provider: string; modelId: string; baseUrl?: string; apiKey: string; credentialRevision?: string; jevKey?: string }
 
 export type RuntimeCall =
+  | { method: 'answer-clarification'; taskId: string; requestId: string; answers: ClarificationAnswer[] }
+  | { method: 'cancel-clarification'; taskId: string; requestId: string }
   | { method: 'restore-operations'; operations: Array<{ id: string; hostId: string }> }
   | { method: 'connect'; host: RuntimeHost; jump?: RuntimeHost }
   | { method: 'test-host'; host: RuntimeHost; jump?: RuntimeHost }
@@ -19,7 +21,7 @@ export type RuntimeCall =
   | { method: 'open-terminal'; hostId: string }
   | { method: 'close-terminal'; terminalId: string }
   | { method: 'terminal-input'; terminalId: string; data: string; humanIntent: boolean }
-  | { method: 'take-over' | 'hand-back'; terminalId: string }
+  | { method: 'stop-terminal'; terminalId: string }
   | { method: 'resize'; terminalId: string; cols: number; rows: number }
   | { method: 'list-remote'; hostId: string; path: string }
   | { method: 'start-task'; task: TaskView; hosts: RuntimeHost[]; profile: RuntimeProfile; priorOperations?: OperationView[]; history?: ConversationMessage[]; restored?: boolean }

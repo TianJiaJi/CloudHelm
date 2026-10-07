@@ -48,6 +48,15 @@ afterEach(() => {
 });
 
 describe('conversation credential binding', () => {
+  it('keeps terminal replacement in authoritative snapshots after further terminal state events', () => {
+    const { state, events } = setup();
+    state.record({ type: 'terminal-state', terminalId: 'old', hostId: 'host', taskId: 'task', state: 'human' });
+    state.record({ type: 'terminal-state', terminalId: 'new', hostId: 'host', taskId: 'task', state: 'agent' });
+    state.record({ type: 'terminal-replaced', previousTerminalId: 'old', terminalId: 'new' });
+    state.record({ type: 'terminal-state', terminalId: 'old', hostId: 'host', taskId: 'task', state: 'human' });
+    expect(state.snapshot().terminals.find((item) => item.id === 'old')).toMatchObject({ state: 'human', replacementTerminalId: 'new' });
+    expect(events).toContainEqual({ type: 'terminal-replaced', previousTerminalId: 'old', terminalId: 'new' });
+  });
   it.each([
     { apiKey: 'replacement-account-key' },
     { baseUrl: 'http://localhost:4321/v1', apiKey: undefined },
@@ -173,4 +182,41 @@ describe('state disposal', () => {
       expect(events).toEqual([]);
     } finally { vi.useRealTimers(); }
   });
+});
+
+
+describe('clarification persistence', () => {
+  it('expires pending questions on restart while retaining answered questions and pausing the conversation', () => {
+    const { state, store } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    state.record({ type: 'task-status', taskId: task.id, status: 'waiting-user' });
+    const request = { id: 'ask', taskId: task.id, toolCallId: 'tool', generation: 'run', questions: [{ id: 'q', prompt: '环境？' }], createdAt: 1, expiresAt: 9999999999999, status: 'pending' as const };
+    state.record({ type: 'clarification', value: request });
+    state.record({ type: 'clarification', value: { ...request, id: 'answered', status: 'answered', answers: [{ id: 'q', value: '测试', custom: true }] } });
+    const restarted = setup(store).state;
+    expect(restarted.getTask(task.id).status).toBe('paused');
+    expect(restarted.snapshot().clarifications).toEqual([{ ...request, status: 'expired' }, { ...request, id: 'answered', status: 'answered', answers: [{ id: 'q', value: '测试', custom: true }] }]);
+    expect(setup(store).state.snapshot().clarifications?.[0]?.status).toBe('expired');
+  });
+  it('expires questions when the utility process exits', () => {
+    const { state } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    state.record({ type: 'task-status', taskId: task.id, status: 'waiting-user' });
+    state.record({ type: 'clarification', value: { id: 'ask', taskId: task.id, toolCallId: 'tool', generation: 'run', questions: [{ id: 'q', prompt: '环境？' }], createdAt: 1, expiresAt: 9999999999999, status: 'pending' } });
+    state.runtimeStopped();
+    expect(state.getTask(task.id).status).toBe('paused');
+    expect(state.snapshot().clarifications?.[0]?.status).toBe('expired');
+  });
+});
+
+it('persists deliberate interruption metadata separately from observed process outcomes', () => {
+  const { state, store } = setup();
+  const interruption = { source: 'ctrl-c' as const, requestedAt: 10, operationIds: ['op'] };
+  state.record({ type: 'task-message', taskId: 'task', role: 'system', text: '用户通过 Ctrl+C 主动终止执行。', interruption, createdAt: 10 });
+  state.record({ type: 'operation', value: { id: 'op', taskId: 'task', hostId: 'host', kind: 'command', preview: 'sleep 30', status: 'failed', exitCode: 130, createdAt: 1, interruption } });
+  const restored = setup(store).state.snapshot();
+  expect(restored.messages[0]?.interruption).toEqual(interruption);
+  expect(restored.operations[0]).toMatchObject({ status: 'failed', exitCode: 130, interruption });
 });

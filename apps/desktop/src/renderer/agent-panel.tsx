@@ -4,6 +4,7 @@ import { useUi } from './store.js';
 import { ApprovalCard, InputCard } from './interaction-cards.js';
 import { OperationCard, VerificationCard } from './workspace-pages.js';
 import { MarkdownMessage } from './markdown-message.js';
+import { ClarificationCard } from './clarification-card.js';
 import { UserMessage } from './user-message.js';
 import { conversationTimeline } from './conversation-timeline.js';
 import { capture, Icon, reviewLabel, statusLabel } from './ui-helpers.js';
@@ -23,18 +24,19 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
   const scroll = useRef<HTMLDivElement>(null);
   const messages = snapshot.messages.filter((message) => message.taskId === conversation?.id);
   const operations = snapshot.operations.filter((operation) => operation.taskId === conversation?.id);
-  const timeline = conversationTimeline(messages, operations.slice(-6));
+  const clarifications = (snapshot.clarifications ?? []).filter((request) => request.taskId === conversation?.id);
+  const timeline = conversationTimeline(messages.filter((message) => !message.text.startsWith('[需求澄清回答]')), operations.slice(-6), clarifications);
   const approvals = snapshot.approvals.filter((approval) => approval.taskId === conversation?.id);
   const inputs = snapshot.inputs.filter((input) => input.taskId === conversation?.id);
   const terminal = useUi((state) => {
     const sessions = Object.values(state.terminals).filter((item) => conversation && item.taskId === conversation.id);
     return sessions.find((item) => item.state === 'agent') ?? sessions.at(-1);
   });
-  const running = conversation && ['running', 'waiting-review', 'recovering'].includes(conversation.status);
+  const running = conversation && ['running', 'waiting-review', 'waiting-user', 'recovering'].includes(conversation.status);
   const hasRunningOperation = operations.some((operation) => operation.status === 'running'
     || (operation.status === 'unknown' && snapshot.terminals.some((terminal) => terminal.id === operation.logRef)));
   useEffect(() => { void window.cloudhelm.availableModels().then(setModels).catch((error: unknown) => report(String(error))); }, [snapshot.profile.provider, snapshot.profile.modelId, snapshot.profile.hasKey, report]);
-  useEffect(() => { scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' }); }, [conversation?.id, messages.length, operations.length]);
+  useEffect(() => { scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' }); }, [conversation?.id, messages.length, operations.length, clarifications.length]);
   const hostName = (id: string): string => snapshot.hosts.find((item) => item.id === id)?.label ?? id;
   return <>
     <header className={styles.agentHead}><span><Icon name="chat" />AI 助手</span><div><button title="新对话" aria-label="新对话" onClick={() => useUi.getState().newConversation(host?.id ?? null)}><Icon name="plus" /></button>
@@ -44,9 +46,8 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
       <small>{host ? <><Icon name="shield" size={12} />{reviewLabel[host.defaultMode]}</> : '未授权远端操作'}</small></div>
     {conversation && <div className={styles.agentActions}>
       <span className={styles.status}>{statusLabel[conversation.status]}</span>
-      {running ? <button title="暂停后不再发起新操作，正在运行的命令会继续" onClick={() => void capture(() => window.cloudhelm.pauseConversation(conversation.id), report)}><Icon name="pause" size={13} />暂停 AI</button>
-        : ['paused', 'failed', 'human-control'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />{conversation.status === 'human-control' ? '交还并继续' : '继续 AI'}</button>}
-      {hasRunningOperation && <button title="尝试终止远端命令，并核验实际结果" onClick={() => void capture(() => window.cloudhelm.stopOperation(conversation.id), report)}><Icon name="stop" size={13} />停止命令</button>}
+      {(running || hasRunningOperation) && <button title="停止本轮 AI，并请求终止正在运行的命令" onClick={() => void capture(() => window.cloudhelm.stopOperation(conversation.id), report)}><Icon name="stop" size={13} />停止</button>}
+      {!running && ['paused', 'failed', 'human-control'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
     </div>}
     <div className={styles.agentScroll} ref={scroll}>
       {!conversation && <div className={styles.agentWelcome}><span className={styles.welcomeIcon}><Icon name="chat" size={25} /></span><h2>{host ? '这台服务器，需要做些什么？' : '有什么想聊的？'}</h2>
@@ -56,6 +57,7 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
       {!!conversation?.plan?.length && <details className={styles.planCard} open><summary>执行计划</summary><ol>{conversation.plan.map((step) => <li key={step.id} data-state={step.status}><span>{step.status === 'done' ? '✓' : step.status === 'running' ? '•' : '○'}</span>{step.title}</li>)}</ol></details>}
       {operations.length > 6 && <button className={styles.textButton} onClick={() => conversation && useUi.getState().openReport(conversation.id)}>查看更早的操作</button>}
       {timeline.map((entry) => {
+        if (entry.kind === 'clarification') return <ClarificationCard key={entry.key} request={entry.value} />;
         if (entry.kind === 'operation') return <OperationCard key={entry.key} operation={entry.value} report={report} />;
         const message = entry.value;
         if (message.role === 'user') return <UserMessage key={`${message.taskId}:${entry.key}`} message={message} canEdit={(conversation?.hostIds.length ?? 0) <= 1} report={report} />;
@@ -87,6 +89,7 @@ function Composer({ hostId, conversation, profile, models, quote, report }: {
   const [model, setModel] = useState<ModelChoice>({ provider: conversation?.provider ?? profile.provider, modelId: conversation?.modelId ?? profile.modelId });
   const currentRequest = useUi((state) => conversation ? state.currentRequests[conversation.id] : undefined);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const waiting = conversation?.status === 'waiting-user';
   const legacy = (conversation?.hostIds.length ?? 0) > 1;
   const pendingModel = conversation?.status === 'running' && currentRequest && (currentRequest.model.provider !== model.provider || currentRequest.model.modelId !== model.modelId);
   useEffect(() => {
@@ -114,7 +117,7 @@ function Composer({ hostId, conversation, profile, models, quote, report }: {
   }
   async function send(): Promise<void> {
     const message = text.trim();
-    if (!message || busy || switching || legacy) return;
+    if (!message || busy || switching || legacy || waiting) return;
     setBusy(true);
     await capture(async () => {
       if (conversation) await window.cloudhelm.sendMessage(conversation.id, message, attachments.map((item) => item.token));
@@ -133,7 +136,7 @@ function Composer({ hostId, conversation, profile, models, quote, report }: {
     {legacy && <p className={styles.notice}>这是一条旧版多主机记录，仅供查看。请从具体主机开始新对话。</p>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(); }}>
       {!!attachments.length && <div className={styles.attachments}>{attachments.map((item) => <span key={item.token}><Icon name={item.scope.kind === 'directory' ? 'folder' : 'file'} size={12} />{item.scope.path.split(/[\\/]/u).at(-1)}<button type="button" aria-label={`移除 ${item.scope.path}`} onClick={() => setAttachments((items) => items.filter((attachment) => attachment.token !== item.token))}><Icon name="close" size={11} /></button></span>)}</div>}
-      <textarea ref={textarea} rows={3} aria-label="给 AI 的消息" placeholder={hostId ? '描述你的目标，或补充下一步…' : '问点什么…'} value={text} disabled={legacy}
+      <textarea ref={textarea} rows={3} aria-label="给 AI 的消息" placeholder={waiting ? '请先回答上方问题，或停止本轮对话' : hostId ? '描述你的目标，或补充下一步…' : '问点什么…'} value={text} disabled={legacy || waiting}
         onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 180)}px`; }}
         onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
       <div className={styles.composerTools}><div className={styles.attachControl}>
@@ -145,7 +148,7 @@ function Composer({ hostId, conversation, profile, models, quote, report }: {
           {!models.some((item) => `${item.provider}/${item.modelId}` === selectedValue) && <option value={selectedValue}>{model.modelId}</option>}
           {models.map((item) => <option key={`${item.provider}/${item.modelId}`} value={`${item.provider}/${item.modelId}`}>{item.name} · {item.provider}</option>)}
         </select> : <button type="button" className={styles.configureModel} onClick={() => useUi.getState().setSettingsOpen(true)}>配置模型</button>}
-        <button type="submit" className={styles.sendButton} aria-label="发送消息" disabled={!text.trim() || busy || switching || !models.length || legacy}><Icon name="arrow" size={16} /></button>
+        <button type="submit" className={styles.sendButton} aria-label="发送消息" disabled={!text.trim() || busy || switching || !models.length || legacy || waiting}><Icon name="arrow" size={16} /></button>
       </div>
     </form>
     <small className={styles.composerHint}>{pendingModel ? `下一次请求使用 ${model.modelId}` : 'Enter 发送 · Shift + Enter 换行'}</small>

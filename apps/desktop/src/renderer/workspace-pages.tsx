@@ -46,6 +46,7 @@ export function OperationCard({ operation, report }: { operation: OperationView;
     <pre className={styles.command}>{operation.preview}</pre>
     {output && <pre className={styles.outputTail}>{output.slice(-1600)}</pre>}
     <details><summary>操作详情{operation.exitCode !== undefined ? ` · 退出码 ${operation.exitCode}` : ''}</summary>
+      {operation.interruption && <p>用户主动中断（{operation.interruption.source === 'ctrl-c' ? 'Ctrl+C' : operation.interruption.source === 'terminal-close' ? '关闭终端' : '停止按钮'}）；{operation.status === 'unknown' ? '远端结果待核验' : `实际退出码：${operation.exitCode ?? '待确认'}`}。</p>}
       {operation.reason && <p>{operation.reason}</p>}{operation.model && <small>{operation.model.provider} · {operation.model.modelId}</small>}
       <div className={styles.cardActions}>{terminal && <button onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 终端</button>}
         {operation.logRef && <button onClick={() => void capture(async () => setFullLog(await window.cloudhelm.readTerminalLog(operation.logRef!)), report)}>查看日志</button>}</div>

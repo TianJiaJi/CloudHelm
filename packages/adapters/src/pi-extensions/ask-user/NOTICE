@@ -1,0 +1,7 @@
+CloudHelm ask_user extension
+Prompt guidance and interaction design adapted from eko24ive/pi-ask 1.2.0 (MIT).
+Source: https://github.com/eko24ive/pi-ask
+Commit: 49482b7e5d0d57be8af1db81f490f6e860792cfb
+Changes: Electron conversation cards, single-select/free-text questions, abort-aware application coordinator,
+24-hour timeout with stop semantics, isolated embedded Pi extension loading, durable request lifecycle.
+The original TUI, multi-select, preview panes and AFK continuation are not included.

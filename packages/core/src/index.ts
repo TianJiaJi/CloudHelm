@@ -4,3 +4,4 @@ export * from './fingerprint.js';
 export * from './safety.js';
 export * from './redaction.js';
 export * from './sudo-plan.js';
+export * from './clarification.js';

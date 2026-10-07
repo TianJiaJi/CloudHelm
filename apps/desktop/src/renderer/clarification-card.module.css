@@ -1,0 +1,15 @@
+.card { margin: 16px 0; padding: 14px; border: 1px solid var(--border, #d9dce4); border-radius: 12px; background: var(--canvas, #202324); font-size: 13px; }
+.card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card header span, .hint { color: var(--muted, #687083); font-size: 12px; }
+.card fieldset { border: 0; padding: 0; margin: 16px 0; min-width: 0; }
+.card legend { font-weight: 600; margin-bottom: 8px; line-height: 1.6; }
+.option, .other { display: flex; gap: 8px; align-items: flex-start; padding: 8px 6px; cursor: pointer; }
+.option input, .other input { margin-top: 3px; flex-shrink: 0; }
+.option small { display: block; color: var(--muted, #687083); margin-top: 4px; line-height: 1.5; }
+.option em { font-size: 11px; font-style: normal; margin-left: 6px; color: var(--accent, #83b7aa); }
+.card textarea { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; border: 1px solid var(--border, #d9dce4); border-radius: 6px; padding: 8px; }
+.card footer { display: flex; justify-content: flex-end; gap: 8px; }
+.card button { padding: 7px 10px; border: 1px solid var(--border, #d9dce4); border-radius: 6px; cursor: pointer; }
+.card button[type='submit'] { background: var(--accent, #83b7aa); color: var(--canvas, #202324); }
+.card button:disabled { opacity: .5; cursor: default; }
+.error { color: #b42318; }
