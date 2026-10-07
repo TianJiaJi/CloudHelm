@@ -98,4 +98,13 @@ describe('SSH workspace projection', () => {
     expect(useUi.getState().activeTabId).toBe('a-ssh');
     expect(useUi.getState().terminals['a-ssh']).toBeDefined();
   });
+  it('closes report tabs and forgets a deleted conversation in the next snapshot', () => {
+    useUi.getState().openReport('a-old');
+    expect(useUi.getState().tabs.some((tab) => tab.kind === 'report')).toBe(true);
+    const next = snapshot();
+    next.conversations = next.conversations.filter((item) => item.id !== 'a-old');
+    useUi.getState().setSnapshot(next);
+    expect(useUi.getState().tabs.some((tab) => tab.kind === 'report')).toBe(false);
+    expect(useUi.getState().selectedConversationId).not.toBe('a-old');
+  });
 });

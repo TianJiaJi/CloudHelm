@@ -58,7 +58,7 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
       <option value="">直连（不使用跳板机）</option>{hosts.filter((host) => !host.jumpHostId && host.id !== editing?.id).map((host) => <option key={host.id} value={host.id}>{host.label}</option>)}
     </select></label>
     {draft.auth !== 'agent' && <label>{draft.auth === 'password' ? 'SSH 密码' : '私钥口令（如有）'}
-      <input type="password" autoComplete="new-password" required={draft.auth === 'password' && (!editing || editing.auth !== 'password')}
+      <input type="password" autoComplete="new-password" data-sensitive-input="true" required={draft.auth === 'password' && (!editing || editing.auth !== 'password')}
         value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={editing && editing.auth === draft.auth ? '留空保留现有凭据' : ''} /></label>}
     </fieldset>
     <HostConnectionTestStatus testing={connectionTest.testing} result={connectionTest.result}

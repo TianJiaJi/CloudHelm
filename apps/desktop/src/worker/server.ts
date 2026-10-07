@@ -152,6 +152,14 @@ export class WorkerServer {
         this.resumeTask(runner);
         return;
       }
+      case 'delete-task': {
+        const runner = this.tasks.get(call.taskId);
+        if (!runner) return;
+        if (!runner.canDelete) throw new Error('对话仍在运行，无法删除');
+        runner.dispose();
+        this.tasks.delete(call.taskId);
+        return;
+      }
     }
   }
 

@@ -40,6 +40,22 @@
 .providerName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; white-space: nowrap; }
 .defaultDot { display: block; width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--accent); }
 .catalogHint { margin: 0; padding: 4px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.groupCount { margin-left: auto; color: var(--muted); font-size: 10px; }
+.shortcutToolbar { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; }
+.shortcutToolbar .search { width: 190px; }
+.shortcutList { display: flex; flex-direction: column; flex: none; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.page .shortcutRow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 11px 13px; border-bottom: 1px solid var(--border); color: var(--text); }
+.shortcutRow:last-child { border-bottom: 0; }
+.shortcutName { flex: 1 1 150px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.shortcutScope { flex: none; width: 40px; color: var(--muted); font-size: 10px; }
+.shortcutBinding { flex: none; min-width: 108px; display: inline-flex; align-items: center; }
+.shortcutBinding kbd { padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--canvas); font-family: inherit; font-size: 11px; color: var(--text); }
+.unset { color: var(--muted); font-style: italic; font-size: 11px; }
+.shortcutActions { flex: none; margin-left: auto; display: flex; gap: 6px; }
+.page .shortcutActions button { padding: 5px 9px; border: 1px solid var(--border); font-size: 11px; }
+.recordHint { color: var(--accent); font-size: 11px; }
+.shortcutError { margin: 8px 0 0; color: light-dark(#a14432, #eda38d); font-size: 11px; }
+.shortcutResetRow { display: flex; justify-content: flex-end; gap: 8px; }
 .detail { display: flex; flex-direction: column; gap: 21px; padding: 23px; min-height: 0; overflow-y: auto; }
 .providerHeading h2 { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.4px; }
 .providerHeading p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }

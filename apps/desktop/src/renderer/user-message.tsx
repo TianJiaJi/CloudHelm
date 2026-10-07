@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import type { ConversationMessage } from '@cloudhelm/contracts';
 import { Icon } from './ui-helpers.js';
+import { copyEntries } from './clipboard.js';
+import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
 import styles from './user-message.module.css';
 import ui from './ui.module.css';
 
@@ -26,6 +28,14 @@ export function UserMessage({ message, canEdit, report }: {
     setEditing(false); setDraft(message.text);
     editButton.current?.focus({ preventScroll: true });
   }
+  /** Editor actions stay available from the right-click menu, not just the icon row. */
+  function messageMenu(): ContextMenuEntry[] {
+    const entries = copyEntries('复制文本', message.text, report);
+    entries.push({ id: 'd1', separator: true },
+      { id: 'edit', label: '编辑消息', icon: 'edit', disabled: !canEdit || busy,
+        run: () => { setDraft(message.text); setEditing(true); } });
+    return entries;
+  }
   async function send(): Promise<void> {
     const text = draft.trim();
     if (!text || text === message.text.trim() || !canEdit || sending.current) return;
@@ -37,7 +47,8 @@ export function UserMessage({ message, canEdit, report }: {
     finally { sending.current = false; setBusy(false); }
   }
 
-  return <article className={`${ui.message} ${ui.userMessage} ${styles.message}`} aria-label="用户消息">
+  return <article className={`${ui.message} ${ui.userMessage} ${styles.message}`} aria-label="用户消息"
+    onContextMenu={(event) => openContextMenu(event, messageMenu(), '消息操作')}>
     <div className={styles.header}><strong>你</strong>
       <div className={styles.actions}>
         <time dateTime={sentAt.toISOString()} title={`发送时间：${timestamp}`} aria-label={`发送时间：${timestamp}`}>

@@ -90,4 +90,11 @@ export function registerConversationIpc({ state, runtime, connectHost, takeSelec
     return runtime.call({ method: 'cancel-clarification', taskId, requestId });
   });
   ipcMain.handle('cloudhelm:stop-operation', (_event, id: string) => runtime.call({ method: 'stop-operation', taskId: id }));
+  ipcMain.handle('cloudhelm:delete-conversation', async (_event, id: string) => {
+    if (typeof id !== 'string' || !id.trim() || id.length > 120) throw new Error('Invalid conversation id');
+    // Authoritative state decides deletability before any runtime cleanup.
+    state.assertDeletable(id);
+    if (await runtime.call<boolean>({ method: 'has-task', taskId: id })) await runtime.call({ method: 'delete-task', taskId: id });
+    state.deleteTask(id);
+  });
 }

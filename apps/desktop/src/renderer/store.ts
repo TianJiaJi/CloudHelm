@@ -62,7 +62,9 @@ function projectSnapshot(state: UiState, snapshot: AppSnapshot): Partial<UiState
   for (const terminal of snapshot.terminals ?? Object.values(state.terminals)) {
     if (terminal.state !== 'closed') terminals[terminal.id] = { ...terminal, buffer: state.terminals[terminal.id]?.buffer ?? '', offset: state.terminals[terminal.id]?.offset ?? 0 };
   }
-  const tabs = state.tabs.filter((tab) => tab.kind !== 'terminal' || terminals[tab.terminalId]);
+  // Terminal tabs follow their session; report tabs follow their conversation.
+  const tabs = state.tabs.filter((tab) => tab.kind === 'terminal' ? !!terminals[tab.terminalId]
+    : tab.kind !== 'report' || !!snapshot.conversations.find((item) => item.id === tab.conversationId));
   const next = { ...state, snapshot, terminals, tabs };
   const selection = state.activeTabId && !tabs.some((tab) => tab.id === state.activeTabId)
     ? tabSelection(next, tabs.at(-1)) : { selectedConversationId: conversationFor(next, state.activeHostId) };

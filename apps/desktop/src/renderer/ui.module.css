@@ -31,9 +31,16 @@
 .selected .hostSelect > svg, .selected > svg { color: var(--accent); }
 .addHostEmpty { width: 100%; min-height: 60px; border: 1px dashed var(--border) !important; color: var(--muted) !important; font-size: 11px; }
 .menuDismiss { position: fixed; inset: 0; z-index: 19; border-radius: 0 !important; cursor: default; background: transparent !important; }
-.hostMenu, .attachMenu { position: absolute; z-index: 20; min-width: 150px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); box-shadow: 0 8px 24px #0005; }
-.hostMenu { position: fixed; inset: auto; margin: 0; min-width: 170px; max-height: calc(100vh - 16px); overflow-y: auto; color: var(--text); }
-.hostMenu button, .attachMenu button { display: flex; justify-content: flex-start; width: 100%; padding: 8px 10px; font-size: 12px; }
+.menuSurface, .attachMenu { z-index: 20; min-width: 150px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); box-shadow: 0 8px 24px #0005; }
+.menuSurface { position: fixed; inset: auto; margin: 0; min-width: 190px; max-height: calc(100vh - 16px); overflow-y: auto; color: var(--text); }
+.menuSurface button, .attachMenu button { display: flex; justify-content: flex-start; width: 100%; padding: 8px 10px; font-size: 12px; }
+.menuSurface button > span { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menuSurface button > svg { color: var(--muted); }
+.menuSurface button:disabled { opacity: .42; cursor: default; }
+.menuSurface button:disabled:hover { background: transparent; }
+.menuHint { flex: none; margin-left: 18px; color: var(--muted); font-family: inherit; font-size: 10px; letter-spacing: .2px; }
+.menuHintMuted { opacity: .6; font-style: italic; }
+.menuDivider { height: 1px; margin: 5px 6px; background: var(--border); }
 .dangerText { color: #dfa299 !important; }
 .historyList { min-height: 0; overflow: auto; flex: 1; padding: 0 8px 12px; }
 .historyGroup { margin-bottom: 8px; }

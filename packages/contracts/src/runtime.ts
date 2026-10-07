@@ -30,7 +30,8 @@ export type RuntimeCall =
   | { method: 'decide-approval'; approvalId: string; approved: boolean }
   | { method: 'answer-input'; requestId: string; answer: string }
   | { method: 'cancel-input'; requestId: string }
-  | { method: 'pause-task' | 'resume-task'; taskId: string };
+  | { method: 'pause-task' | 'resume-task'; taskId: string }
+  | { method: 'delete-task'; taskId: string };
 
 export interface LogPage { text: string; nextCursor: number; more: boolean }
 

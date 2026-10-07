@@ -41,6 +41,7 @@ export function InputCard({ input, host, report, later }: { input: InputRequestV
     {sensitive && <p className={styles.notice}>密码或验证码直接提交给当前认证操作，AI 不会看到，也不会保存到对话或终端日志。</p>}
     {input.choices?.length ? <div className={styles.cardActions}>{input.choices.map((choice) => <button key={choice} type="button" disabled={expired || busy} onClick={() => submit(choice)}>{choice}</button>)}</div>
       : <label>{sensitive ? (input.kind === 'otp' ? '验证码' : '密码') : '你的回答'}<input autoFocus={sensitive} type={sensitive ? 'password' : 'text'}
+        data-sensitive-input={sensitive ? 'true' : undefined}
         autoComplete="off" value={answer} disabled={expired || busy} onChange={(event) => setAnswer(event.target.value)} /></label>}
     <div className={styles.cardActions}>
       <button type="button" disabled={busy} onClick={() => { setAnswer(''); void capture(() => window.cloudhelm.cancelInput(input.id), report); }}>取消输入</button>

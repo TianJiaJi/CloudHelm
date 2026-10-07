@@ -4,6 +4,8 @@ import { capture, Icon, statusLabel } from './ui-helpers.js';
 import { useUi } from './store.js';
 import { MarkdownMessage } from './markdown-message.js';
 import { presentError } from './error-presentation.js';
+import { copyEntries, copyText } from './clipboard.js';
+import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
 import styles from './ui.module.css';
 
 export function FilesPage({ hostId, host, report }: { hostId: string; host: string; report(error: string): void }): React.JSX.Element {
@@ -19,7 +21,21 @@ export function FilesPage({ hostId, host, report }: { hostId: string; host: stri
     return () => { active = false; };
   }, [hostId, path, report]);
   function navigate(next: string): void { setPath(next); setDraft(next); }
-  return <section className={styles.filesPage}>
+  const remotePath = (name: string): string => `${path.replace(/\/$/u, '')}/${name}`;
+  /** Read-only file listing: menus copy paths or descend, never modify the host. */
+  function fileMenuEntries(file: { name: string; isDirectory: boolean }): ContextMenuEntry[] {
+    const full = remotePath(file.name);
+    const entries: ContextMenuEntry[] = [...copyEntries('复制完整路径', full),
+      { id: 'copy-name', label: '复制文件名', icon: 'copy', run: () => void copyText(file.name) }];
+    if (file.isDirectory) entries.push({ id: 'd1', separator: true },
+      { id: 'open', label: '进入目录', icon: 'folder', run: () => navigate(full) });
+    return entries;
+  }
+  return <section className={styles.filesPage}
+    onContextMenu={(event) => openContextMenu(event, [
+      { id: 'copy-path', label: '复制当前路径', icon: 'copy', run: () => void copyText(path) },
+      { id: 'up', label: '上一级', icon: 'arrow', disabled: path === '/', run: () => navigate(path === '/' ? '/' : `${path.replace(/\/$/u, '')}/..`) }
+    ], '文件页操作')}>
     <div className={styles.pageHead}><div><small>{host}</small><h2>远程文件</h2></div><span className={styles.pill}>只读 SFTP</span></div>
     <form className={styles.pathRow} onSubmit={(event) => { event.preventDefault(); navigate(draft); }}>
       <button type="button" title="上一级" onClick={() => navigate(path === '/' ? '/' : `${path.replace(/\/$/u, '')}/..`)}><Icon name="arrow" /></button>
@@ -28,7 +44,9 @@ export function FilesPage({ hostId, host, report }: { hostId: string; host: stri
     <p className={styles.note}>在这里查看目录。需要修改文件时，可在 AI 助手中说明，变更将经过审核。</p>
     <div className={styles.fileTable}><div className={styles.fileHeader}><span>名称</span><span>大小</span></div>
       {loading ? <p>正在读取目录…</p> : files.length ? [...files].sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name)).map((file) =>
-        <button className={styles.fileRow} key={file.name} disabled={!file.isDirectory} onClick={() => navigate(`${path.replace(/\/$/u, '')}/${file.name}`)}>
+        <button className={styles.fileRow} key={file.name} disabled={!file.isDirectory}
+          onContextMenu={(event) => openContextMenu(event, fileMenuEntries(file), `${file.name} 文件操作`)}
+          onClick={() => navigate(`${path.replace(/\/$/u, '')}/${file.name}`)}>
           <span><Icon name={file.isDirectory ? 'folder' : 'file'} />{file.name}</span><small>{file.isDirectory ? '文件夹' : new Intl.NumberFormat('zh-CN').format(file.size) + ' B'}</small>
         </button>) : <p>这个目录是空的。</p>}
     </div>
@@ -41,7 +59,16 @@ export function OperationCard({ operation, report }: { operation: OperationView;
   const live = terminal?.buffer.slice(-3000).replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/gu, '');
   const output = operation.status === 'running' ? live : operation.outputTail;
   const statuses = { proposed: '审核中', approved: '已批准', running: '执行中', succeeded: '已完成', failed: '执行失败', denied: '已拦截', unknown: '结果待核验' };
-  return <section className={styles.operationCard}>
+  function menuEntries(): ContextMenuEntry[] {
+    const entries: ContextMenuEntry[] = [{ id: 'copy-command', label: '复制命令', icon: 'copy', run: () => void copyText(operation.preview) }];
+    if (output) entries.push({ id: 'copy-output', label: '复制输出', icon: 'copy', run: () => void copyText(output) });
+    entries.push({ id: 'd1', separator: true });
+    if (terminal) entries.push({ id: 'open-terminal', label: '打开 AI 终端', icon: 'terminal', run: () => useUi.getState().openTerminal(terminal.id) });
+    if (operation.logRef) entries.push({ id: 'log', label: '查看日志',
+      run: () => void capture(async () => setFullLog(await window.cloudhelm.readTerminalLog(operation.logRef!)), report) });
+    return entries;
+  }
+  return <section className={styles.operationCard} onContextMenu={(event) => openContextMenu(event, menuEntries(), '操作详情')}>
     <div className={styles.cardTitle}><Icon name="terminal" /><strong>{operation.kind === 'command' ? '远程命令' : '文件操作'}</strong><small>{statuses[operation.status]}</small></div>
     <pre className={styles.command}>{operation.preview}</pre>
     {output && <pre className={styles.outputTail}>{output.slice(-1600)}</pre>}
@@ -58,7 +85,9 @@ export function OperationCard({ operation, report }: { operation: OperationView;
 export function VerificationCard({ conversation, report }: { conversation: TaskView; report(error: string): void }): React.JSX.Element {
   const verified = conversation.status === 'ready-for-review' && !!conversation.report?.evidenceOperationIds.length;
   const failure = conversation.status === 'failed' ? presentError(conversation.summary) : null;
-  return <section className={`${styles.reviewCard} ${styles.verificationCard}`}>
+  const conclusion = failure?.description ?? conversation.report?.summary ?? conversation.summary ?? '';
+  return <section className={`${styles.reviewCard} ${styles.verificationCard}`}
+    onContextMenu={(event) => openContextMenu(event, copyEntries('复制结论', conclusion, report), '验证结论')}>
     <div className={styles.cardTitle}><Icon name={verified || conversation.status === 'accepted' ? 'check' : 'shield'} /><strong>{failure?.title ?? statusLabel[conversation.status]}</strong></div>
     <p>{failure?.description ?? conversation.report?.summary ?? conversation.summary ?? '还需要补充验证证据，请查看对话中的说明。'}</p>
     {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
@@ -81,7 +110,9 @@ export function ReportPage({ conversation, operations, report }: { conversation:
       <h3>恢复说明</h3><ul>{conversation.report.recovery.map((item) => <li key={item}>{item}</li>)}</ul>
       <h3>验证证据</h3>{operations.filter((operation) => conversation.report?.evidenceOperationIds.includes(operation.id)).map((operation) => <OperationCard key={operation.id} operation={operation} report={report} />)}
     </>}
-    <h3>对话记录</h3>{messages.map((message, index) => <article className={styles.message} key={`${message.createdAt}:${index}`}><strong>{message.role === 'user' ? '你' : message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}</article>)}
+    <h3>对话记录</h3>{messages.map((message, index) => <article className={styles.message} key={`${message.createdAt}:${index}`}
+      onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
+      <strong>{message.role === 'user' ? '你' : message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}</article>)}
     {!!operations.length && <details><summary>全部操作（{operations.length}）</summary>{operations.map((operation) => <OperationCard key={operation.id} operation={operation} report={report} />)}</details>}
   </section>;
 }

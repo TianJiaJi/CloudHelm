@@ -44,7 +44,9 @@ scripts/         UI、Markdown、Electron 启动及依赖探针
 | --- | --- |
 | `pnpm dev` | 启动开发版 |
 | `pnpm build` | 编译主进程、preload、worker 和界面 |
-| `pnpm check` | TypeScript、Vitest、ESLint、依赖方向与行数检查 |
+| `pnpm check` | TypeScript、Vitest、ESLint、依赖方向与行数检查，并校验版本一致 |
+| `pnpm version:set` | 从根目录 `version.json` 同步各包版本与 README；传入参数（如 `pnpm version:set 0.2.0`）时先写入 `version.json` |
+| `pnpm version:check` | 只校验 `version.json`、各 `package.json` 与 README 版本一致，不一致退出非零 |
 | `pnpm test:ui` | 使用模拟后端验证 renderer 交互 |
 | `pnpm test:markdown` | 验证 Markdown 排版、链接和代码复制 |
 | `pnpm --filter @cloudhelm/desktop package` | 编译、重建 Electron 原生模块并生成本平台目录包 |
@@ -59,7 +61,7 @@ pnpm test:ui
 pnpm test:markdown
 ```
 
-`test:ui` 使用假 SSH、假模型、文档地址和假凭据，不连接用户服务器；覆盖主机菜单、私钥选择、未保存配置测试、对话时间线、用户消息复制／编辑、窗口与终端尺寸、审批、接管及友好错误。截图在 `.cache/ui-smoke/`。
+`test:ui` 使用假 SSH、假模型、文档地址和假凭据，不连接用户服务器；覆盖主机菜单、私钥选择、未保存配置测试、对话时间线、用户消息复制／编辑、窗口与终端尺寸、审批、接管、右键菜单（终端／输入框／主机／对话／标签）与快捷键设置录制，以及友好错误。截图在 `.cache/ui-smoke/`。
 
 `test:markdown` 验证 GFM、代码复制、原始 HTML 禁用、外链协议和图片隐私，截图在 `.cache/markdown-smoke/`。本机可用 `CLOUDHELM_SMOKE_BROWSER_CHANNEL=chrome` 选择已安装的 Chrome；Windows PowerShell 设置环境变量时使用 `$env:CLOUDHELM_SMOKE_BROWSER_CHANNEL = 'chrome'`。
 
@@ -120,7 +122,17 @@ pnpm --filter @cloudhelm/desktop exec electron-builder --mac dmg --arm64 --publi
 pnpm --filter @cloudhelm/desktop exec electron-builder --win nsis --x64 --publish never
 ```
 
-执行上述命令前先运行目录包构建和桌面测试。生产分发需要另行配置签名／公证；当前 CI 生成未签名安装包，不自动创建 Release。
+执行上述命令前先运行目录包构建和桌面测试。生产分发需要另行配置签名／公证。
+
+### 版本号与自动发布
+
+根目录 `version.json` 是版本号的唯一来源。发布新版本的流程：
+
+1. 运行 `pnpm version:set <新版本>`（或直接改 `version.json` 后运行 `pnpm version:set`），它会同步根与各 workspace `package.json` 的 `version`（含 `apps/desktop`，即 electron-builder 与 `app.getVersion()` 的来源）以及 README 版本说明。
+2. 提交并推送 `version.json` 与同步结果到默认分支。
+3. CI 在三平台构建与检查全部通过后，若本次 push 修改了 `version.json` 且 `v<版本>` 标签不存在，自动创建 GitHub Release（**标记为预发布**，自动生成更新说明）并附上 DMG×2 与 NSIS 安装包；其余情况只构建、不发布。
+
+判定逻辑在 `scripts/release-decision.mjs`（含单元测试）；同步逻辑在 `scripts/set-version.mjs`（`--check` 供 CI 校验）。同一版本的标签已存在时不会重复发布；如发布中断需要补发，可在 GitHub 上手动用同一标签创建 Release。
 
 [CI 工作流](../.github/workflows/ci.yml) 在 push、Pull Request 和手动触发时运行：
 

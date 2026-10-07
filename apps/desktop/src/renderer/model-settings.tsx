@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppSnapshot, ModelProfileDraft, ModelProviderSettings, ModelProviderView } from '@cloudhelm/contracts';
 import { errorMessage, inlineError } from './error-presentation.js';
+import { ShortcutSettings } from './shortcut-settings.js';
 import styles from './model-settings.module.css';
 
 type Profile = AppSnapshot['profile'];
-type Section = 'api' | 'subscription' | 'review';
+type Section = 'api' | 'subscription' | 'review' | 'shortcuts';
 type Destination = { section: Section } | { providerId: string } | { close: true } | { externalAction(): void };
 type NavigationGuard = (next: () => void) => void;
 type Feedback = { kind: 'success' | 'error'; text: string } | null;
@@ -191,7 +192,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     </header>
     <nav className={styles.sections} role="tablist" aria-label="模型接入方式">
       {([{ id: 'api', label: 'API Key', icon: 'key' }, { id: 'subscription', label: '模型订阅 · 未开放', icon: 'subscription' },
-        { id: 'review', label: 'AI 审核', icon: 'shield' }] as const).map((item) =>
+        { id: 'review', label: 'AI 审核', icon: 'shield' }, { id: 'shortcuts', label: '快捷键', icon: 'keyboard' }] as const).map((item) =>
         <button key={item.id} id={`model-tab-${item.id}`} type="button" role="tab" aria-selected={section === item.id}
           aria-controls={`model-panel-${item.id}`} disabled={busy !== null} className={styles.sectionTab}
           onClick={() => requestNavigation({ section: item.id })}><SettingsIcon kind={item.icon} />{item.label}</button>)}
@@ -285,9 +286,12 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
       <FeedbackLine feedback={feedback} />
     </div>}
 
+    {section === 'shortcuts' && <ShortcutSettings report={callback.current.report} />}
+
     <footer className={styles.footer}>
       <p>{section === 'api' ? '默认模型用于新对话；已有对话可在输入框中切换模型。'
-        : section === 'review' ? '密钥默认仅保存在此设备。' : '当前版本不提供订阅登录。'}</p>
+        : section === 'review' ? '密钥默认仅保存在此设备。'
+          : section === 'shortcuts' ? '快捷键保存在本机，更改立即生效。' : '当前版本不提供订阅登录。'}</p>
       <button type="button" className={styles.button} disabled={busy !== null} onClick={() => requestNavigation({ close: true })}>返回</button>
       {section === 'api' && <button type="button" className={styles.primary} disabled={busy !== null || !validApi}
         onClick={() => void saveApi()}>{busy === 'save' ? '保存中…' : '保存为默认'}</button>}
@@ -327,10 +331,11 @@ function UnsavedChanges({ api, busy, canSave, cancel, discard, save }: {
   </dialog>;
 }
 
-type IconKind = 'key' | 'subscription' | 'shield' | 'search' | 'eye' | 'eye-off';
+type IconKind = 'key' | 'subscription' | 'shield' | 'search' | 'eye' | 'eye-off' | 'keyboard';
 function SettingsIcon({ kind }: { kind: IconKind }): React.JSX.Element {
   const paths: Record<IconKind, React.JSX.Element> = {
     key: <><circle cx="15" cy="8" r="5" /><path d="m11.5 11.5-8 8V22H7v-3h3v-3l3-3" /></>,
+    keyboard: <><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8" /></>,
     subscription: <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7" /></>,
     shield: <><path d="m12 3 8 4v6c0 5-8 9-8 9S4 18 4 13V7z" /><path d="m8 12 3 3 5-6" /></>,
     search: <><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></>,

@@ -8,6 +8,8 @@ import { ClarificationCard } from './clarification-card.js';
 import { UserMessage } from './user-message.js';
 import { conversationTimeline } from './conversation-timeline.js';
 import { capture, Icon, reviewLabel, statusLabel } from './ui-helpers.js';
+import { copyEntries, copyText } from './clipboard.js';
+import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
 import styles from './ui.module.css';
 
 type ModelOption = ModelChoice & { name: string };
@@ -54,14 +56,16 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
         <p>{host ? '用自然语言告诉我目标。我会调查、执行并验证结果，需要你决定时会在这里说明。' : '可以直接提问。连接左侧主机后，也可以让我协助操作服务器。'}</p>
         {host && <div className={styles.suggestions}><span>你可以这样说</span><p>检查这台服务器的磁盘占用</p><p>帮我把这个服务装成 Docker 并启动</p></div>}
       </div>}
-      {!!conversation?.plan?.length && <details className={styles.planCard} open><summary>执行计划</summary><ol>{conversation.plan.map((step) => <li key={step.id} data-state={step.status}><span>{step.status === 'done' ? '✓' : step.status === 'running' ? '•' : '○'}</span>{step.title}</li>)}</ol></details>}
+      {!!conversation?.plan?.length && <details className={styles.planCard} open onContextMenu={(event) => openContextMenu(event, copyEntries('复制执行计划',
+        conversation.plan!.map((step) => `${step.status === 'done' ? '✓' : step.status === 'running' ? '•' : '○'} ${step.title}`).join('\n'), report), '执行计划')}><summary>执行计划</summary><ol>{conversation.plan.map((step) => <li key={step.id} data-state={step.status}><span>{step.status === 'done' ? '✓' : step.status === 'running' ? '•' : '○'}</span>{step.title}</li>)}</ol></details>}
       {operations.length > 6 && <button className={styles.textButton} onClick={() => conversation && useUi.getState().openReport(conversation.id)}>查看更早的操作</button>}
       {timeline.map((entry) => {
         if (entry.kind === 'clarification') return <ClarificationCard key={entry.key} request={entry.value} />;
         if (entry.kind === 'operation') return <OperationCard key={entry.key} operation={entry.value} report={report} />;
         const message = entry.value;
         if (message.role === 'user') return <UserMessage key={`${message.taskId}:${entry.key}`} message={message} canEdit={(conversation?.hostIds.length ?? 0) <= 1} report={report} />;
-        return <article key={entry.key} className={styles.message}>
+        return <article key={entry.key} className={styles.message}
+          onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
           <strong>{message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}
           {message.model && <small>{message.model.provider} · {message.model.modelId}</small>}
         </article>;
@@ -132,10 +136,20 @@ function Composer({ hostId, conversation, profile, models, quote, report }: {
     setBusy(false);
   }
   const selectedValue = `${model.provider}/${model.modelId}`;
+  function attachmentMenuEntries(item: LocalAttachment): ContextMenuEntry[] {
+    return [
+      { id: 'copy-path', label: '复制完整路径', icon: 'copy', run: () => void copyText(item.scope.path) },
+      { id: 'd1', separator: true },
+      { id: 'remove', label: '移除附件', icon: 'close', danger: true,
+        run: () => setAttachments((items) => items.filter((attachment) => attachment.token !== item.token)) }
+    ];
+  }
   return <div className={styles.composerWrap}>
     {legacy && <p className={styles.notice}>这是一条旧版多主机记录，仅供查看。请从具体主机开始新对话。</p>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(); }}>
-      {!!attachments.length && <div className={styles.attachments}>{attachments.map((item) => <span key={item.token}><Icon name={item.scope.kind === 'directory' ? 'folder' : 'file'} size={12} />{item.scope.path.split(/[\\/]/u).at(-1)}<button type="button" aria-label={`移除 ${item.scope.path}`} onClick={() => setAttachments((items) => items.filter((attachment) => attachment.token !== item.token))}><Icon name="close" size={11} /></button></span>)}</div>}
+      {!!attachments.length && <div className={styles.attachments}>{attachments.map((item) => <span key={item.token}
+        onContextMenu={(event) => openContextMenu(event, attachmentMenuEntries(item), '附件操作')}>
+        <Icon name={item.scope.kind === 'directory' ? 'folder' : 'file'} size={12} />{item.scope.path.split(/[\\/]/u).at(-1)}<button type="button" aria-label={`移除 ${item.scope.path}`} onClick={() => setAttachments((items) => items.filter((attachment) => attachment.token !== item.token))}><Icon name="close" size={11} /></button></span>)}</div>}
       <textarea ref={textarea} rows={3} aria-label="给 AI 的消息" placeholder={waiting ? '请先回答上方问题，或停止本轮对话' : hostId ? '描述你的目标，或补充下一步…' : '问点什么…'} value={text} disabled={legacy || waiting}
         onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 180)}px`; }}
         onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />

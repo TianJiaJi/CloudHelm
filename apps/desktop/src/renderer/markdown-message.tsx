@@ -1,6 +1,8 @@
 import { Children, createContext, isValidElement, useContext, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { copyEntries } from './clipboard.js';
+import { openContextMenu } from './context-menu.js';
 import styles from './markdown-message.module.css';
 
 const InsideLink = createContext(false);
@@ -36,7 +38,7 @@ function CodeBlock({ children }: { children?: ReactNode }): React.JSX.Element {
     try { await navigator.clipboard.writeText(text); setCopied('copied'); }
     catch { setCopied('failed'); }
   }
-  return <div className={styles.codeBlock}>
+  return <div className={styles.codeBlock} onContextMenu={(event) => openContextMenu(event, copyEntries('复制代码', text), '代码操作')}>
     <div className={styles.codeHeader}><span>{language}</span><button type="button" aria-label="复制代码" onClick={() => void copy()}>
       {copied === 'copied' ? '已复制' : copied === 'failed' ? '复制失败，点击重试' : '复制'}</button></div>
     <pre>{children}</pre>

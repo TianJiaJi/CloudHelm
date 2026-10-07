@@ -20,6 +20,7 @@ const emit = (event: AppEvent): void => listeners.forEach((listener) => listener
 const sync = (): void => emit({ type: 'snapshot', value: structuredClone(view) });
 const terminalEvent = (terminal: TerminalViewState): void => emit({ type: 'terminal-state', terminalId: terminal.id, ...terminal });
 const unsupported = async (): Promise<never> => { throw new Error('UI smoke reached an unimplemented fixture method'); };
+const shortcutSettings = { bindings: {} as Record<string, string>, enabled: true };
 
 const api: DesktopAPI = {
   snapshot: async () => structuredClone(view),
@@ -90,6 +91,18 @@ const api: DesktopAPI = {
   testHostConnection: async (input) => { calls.push({ kind: 'test-host', input }); return { status: 'success', latencyMs: 42 }; },
   saveModelProfile: async (profile) => { calls.push({ kind: 'profile', profile }); },
   saveReviewSettings: async (settings) => { calls.push({ kind: 'review-settings', settings }); },
+  appVersion: async () => '0.1.0-smoke',
+  shortcuts: async () => structuredClone(shortcutSettings),
+  saveShortcuts: async (settings) => { calls.push({ kind: 'shortcuts', settings }); shortcutSettings.bindings = structuredClone(settings.bindings); shortcutSettings.enabled = settings.enabled; },
+  readClipboard: async () => 'pasted from clipboard',
+  writeClipboard: async (text) => { calls.push({ kind: 'clipboard-write', text }); },
+  deleteConversation: async (id) => {
+    calls.push({ kind: 'delete-conversation', id });
+    view.conversations = view.conversations.filter((item) => item.id !== id);
+    view.messages = view.messages.filter((item) => item.taskId !== id);
+    view.operations = view.operations.filter((item) => item.taskId !== id);
+    sync();
+  },
   resumeConversation: unsupported, acceptConversation: unsupported,
   answerClarification: unsupported, cancelClarification: unsupported,
   cancelInput: unsupported, addHost: unsupported, editHost: unsupported, updateHostSafety: unsupported,

@@ -33,6 +33,13 @@ export interface ClarificationRequest {
 }
 
 export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'waiting-user' | 'human-control' | 'recovering' | 'paused' | 'answered' | 'ready-for-review' | 'accepted' | 'failed';
+
+/** Statuses in which a conversation still owns live work and must not be deleted. */
+export const ACTIVE_TASK_STATUSES: readonly TaskStatus[] = ['running', 'waiting-review', 'waiting-user', 'human-control', 'recovering', 'answered'];
+export function isActiveTaskStatus(status: TaskStatus): boolean {
+  return ACTIVE_TASK_STATUSES.includes(status);
+}
+
 export interface ModelChoice { provider: string; modelId: string }
 export interface ModelProfileDraft extends ModelChoice { baseUrl?: string; apiKey?: string }
 export interface PlanStep { id: string; title: string; status: 'pending' | 'running' | 'done' | 'blocked' }
@@ -150,8 +157,12 @@ export type AppEvent =
   | { type: 'work-progress'; taskId: string; plan: PlanStep[] }
   | { type: 'work-report'; taskId: string; report?: VerificationReport };
 
+export interface ShortcutSettings { bindings: Record<string, string>; enabled: boolean }
+
 export interface DesktopAPI {
   snapshot(): Promise<AppSnapshot>;
+  /** Version of the packaged application, sourced from apps/desktop/package.json. */
+  appVersion(): Promise<string>;
   addHost(host: HostDraft): Promise<HostView>;
   editHost(hostId: string, host: HostDraft, newSecret?: string): Promise<HostView>;
   testHostConnection(input: HostConnectionTestInput): Promise<HostConnectionTestResult>;
@@ -163,6 +174,11 @@ export interface DesktopAPI {
   testModelConnection(profile: ModelProfileDraft): Promise<{ latencyMs: number }>;
   availableModels(): Promise<Array<ModelChoice & { name: string }>>;
   saveReviewSettings(settings: { jevKey?: string; disableJev?: boolean }): Promise<void>;
+  shortcuts(): Promise<ShortcutSettings>;
+  saveShortcuts(settings: ShortcutSettings): Promise<void>;
+  /** Clipboard access for user-initiated menu actions; contents are never logged. */
+  readClipboard(): Promise<string>;
+  writeClipboard(text: string): Promise<void>;
   connectHost(hostId: string): Promise<void>;
   disconnectHost(hostId: string): Promise<void>;
   deleteHost(hostId: string): Promise<void>;
@@ -189,5 +205,7 @@ export interface DesktopAPI {
   acceptConversation(taskId: string): Promise<void>;
   listRemote(hostId: string, path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>>;
   readTerminalLog(terminalId: string): Promise<string>;
+  /** Permanently removes a finished conversation with its records and terminal logs. */
+  deleteConversation(id: string): Promise<void>;
   onEvent(listener: (event: AppEvent) => void): () => void;
 }

@@ -53,7 +53,9 @@ function setup(task = makeConversation(), running = false) {
     authorizeTask: vi.fn((id: string, hostIds: string[], scopes: LocalScope[]) => {
       const value = conversations.get(id)!; value.hostIds.push(...hostIds); value.localScopes.push(...scopes);
     }),
-    record: vi.fn((message: AppSnapshot['messages'][number]) => { messages.push(message); })
+    record: vi.fn((message: AppSnapshot['messages'][number]) => { messages.push(message); }),
+    assertDeletable: vi.fn((id: string) => { void conversations.get(id); }),
+    deleteTask: vi.fn((id: string) => { conversations.delete(id); })
   };
   const call = vi.fn(async (request: RuntimeCall): Promise<unknown> => {
     if (request.method === 'has-task') return active.has(request.taskId);
@@ -234,4 +236,36 @@ it('blocks ordinary messages and local attachment authorization while waiting fo
   await expect(invoke('send-message', 'conversation-one', 'continue', ['selected-token'])).rejects.toThrow('先回答');
   expect(f.call).not.toHaveBeenCalled();
   expect(f.takeSelections).not.toHaveBeenCalled();
+});
+
+describe('conversation deletion IPC', () => {
+  it('drops the runtime task before removing the authoritative record', async () => {
+    const fixture = setup();
+    fixture.active.add('conversation-one');
+    await invoke('delete-conversation', 'conversation-one');
+    expect(fixture.state.assertDeletable).toHaveBeenCalledWith('conversation-one');
+    expect(fixture.call).toHaveBeenCalledWith({ method: 'delete-task', taskId: 'conversation-one' });
+    expect(fixture.state.deleteTask).toHaveBeenCalledWith('conversation-one');
+  });
+  it('skips the runtime when the task was never loaded there', async () => {
+    const fixture = setup();
+    await invoke('delete-conversation', 'conversation-one');
+    expect(fixture.call).not.toHaveBeenCalledWith({ method: 'delete-task', taskId: 'conversation-one' });
+    expect(fixture.state.deleteTask).toHaveBeenCalledWith('conversation-one');
+  });
+  it('rejects malformed ids before touching state or runtime', async () => {
+    const fixture = setup();
+    await expect(invoke('delete-conversation', '')).rejects.toThrow('Invalid conversation id');
+    await expect(invoke('delete-conversation', 42)).rejects.toThrow('Invalid conversation id');
+    expect(fixture.state.assertDeletable).not.toHaveBeenCalled();
+    expect(fixture.state.deleteTask).not.toHaveBeenCalled();
+  });
+  it('stops everywhere when the authoritative state refuses the deletion', async () => {
+    const fixture = setup();
+    fixture.active.add('conversation-one');
+    fixture.state.assertDeletable.mockImplementation(() => { throw new Error('对话仍在进行中，请先停止或等待结束后再删除'); });
+    await expect(invoke('delete-conversation', 'conversation-one')).rejects.toThrow(/进行中/u);
+    expect(fixture.call).not.toHaveBeenCalledWith({ method: 'delete-task', taskId: 'conversation-one' });
+    expect(fixture.state.deleteTask).not.toHaveBeenCalled();
+  });
 });

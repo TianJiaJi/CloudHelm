@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { HostView } from '@cloudhelm/contracts';
+import type { HostView, TaskView } from '@cloudhelm/contracts';
+import { isActiveTaskStatus } from '@cloudhelm/contracts';
 import { useUi, type WorkspaceTab } from './store.js';
 import { TerminalView } from './terminal-view.js';
 import { TerminalControl } from './terminal-control.js';
@@ -12,10 +13,18 @@ import { capture, Icon, statusLabel } from './ui-helpers.js';
 import { ErrorDialog } from './error-dialog.js';
 import { useErrorNotices } from './use-error-notices.js';
 import { AnchoredMenu } from './anchored-menu.js';
+import { ContextMenuHost, MenuEntryList, openContextMenu, type ContextMenuAction, type ContextMenuEntry } from './context-menu.js';
+import { copyEntries, copyText, readClipboardText } from './clipboard.js';
+import { editableTarget, editMenuEntries } from './edit-menu.js';
+import { useKeyboardShortcuts } from './use-shortcuts.js';
+import { useShortcuts } from './shortcut-store.js';
+import { isMacPlatform, menuHint, type ShortcutActionId, type ShortcutContext } from './shortcuts.js';
+import { terminalActions } from './terminal-actions.js';
 import styles from './ui.module.css';
 
 type Confirmation = { title: string; message: string; label: string; action(): Promise<void> };
 type Dialog = { kind: 'host'; hostId?: string } | { kind: 'safety'; hostId: string } | null;
+type Hint = Pick<ContextMenuAction, 'hint' | 'hintMuted'>;
 
 function hostLineage(host: HostView, hosts: HostView[]): string[] {
   const ids = [host.id];
@@ -27,6 +36,9 @@ function hostLineage(host: HostView, hosts: HostView[]): string[] {
 export function App(): React.JSX.Element {
   const ui = useUi();
   const { snapshot, terminals, tabs, activeTabId, activeHostId, selectedConversationId, settingsOpen, agentPanelOpen } = ui;
+  const bindings = useShortcuts((state) => state.bindings);
+  const shortcutsEnabled = useShortcuts((state) => state.enabled);
+  const isMac = isMacPlatform();
   const [dialog, setDialog] = useState<Dialog>(null);
   const [hostMenu, setHostMenu] = useState<{ hostId: string; anchor: HTMLButtonElement } | null>(null);
   const { current: error, report: setError, dismiss: dismissError } = useErrorNotices();
@@ -35,6 +47,7 @@ export function App(): React.JSX.Element {
   const [hiddenInputs, setHiddenInputs] = useState<string[]>([]);
   const [connecting, setConnecting] = useState<string[]>([]);
   const [quote, setQuote] = useState<QuotedOutput | null>(null);
+  const [appVersion, setAppVersion] = useState('');
   const navigationGuard = useRef<((next: () => void) => void) | null>(null);
   const registerNavigationGuard = useCallback((guard: ((next: () => void) => void) | null) => { navigationGuard.current = guard; }, []);
   function navigate(action: () => void): void {
@@ -51,6 +64,18 @@ export function App(): React.JSX.Element {
   const activeHost = snapshot?.hosts.find((host) => host.id === activeHostId);
   const hostName = (hostId: string): string => snapshot?.hosts.find((host) => host.id === hostId)?.label ?? hostId;
   const pendingCount = (snapshot?.approvals.length ?? 0) + (snapshot?.inputs.length ?? 0);
+
+  /** Shortcut hints only appear where the binding can actually fire. */
+  function hintFor(actionId: ShortcutActionId, context: ShortcutContext = 'default'): Hint {
+    const value = menuHint(actionId, bindings, isMac, context, shortcutsEnabled);
+    return value ? { hint: value.hint, hintMuted: value.muted } : {};
+  }
+
+  useEffect(() => {
+    void useShortcuts.getState().load();
+    try { void window.cloudhelm.appVersion().then(setAppVersion).catch(() => setAppVersion('')); }
+    catch { setAppVersion(''); }
+  }, []);
 
   useEffect(() => {
     const unsubscribe = window.cloudhelm.onEvent((event) => {
@@ -91,20 +116,53 @@ export function App(): React.JSX.Element {
     } finally { setConnecting((ids) => ids.filter((id) => id !== hostId)); }
   }
 
-  function closeTab(tab: WorkspaceTab): void {
-    if (tab.kind !== 'terminal') { useUi.getState().closeTab(tab.id); return; }
+  /** A terminal whose AI operation is still running must not be closed silently. */
+  function executingTerminal(tab: WorkspaceTab): boolean {
+    if (tab.kind !== 'terminal') return false;
     const terminal = terminals[tab.terminalId];
-    const executing = snapshot?.operations.some((operation) => operation.taskId === terminal?.taskId && operation.logRef === terminal?.id && ['running', 'unknown'].includes(operation.status));
-    const close = async (): Promise<void> => { await window.cloudhelm.closeTerminal(tab.terminalId); useUi.getState().closeTab(tab.id); };
-    if (terminal?.taskId && executing) setConfirmation({ title: '断开正在运行的 AI 终端？',
-      message: '关闭这个标签会断开真实 SSH 会话。远端进程不一定停止，当前操作的结果可能需要重新核验。你也可以先点击“停止”，等待命令退出。', label: '断开并关闭', action: close });
-    else void capture(close, setError);
+    return !!terminal?.taskId && !!snapshot?.operations.some((operation) => operation.taskId === terminal.taskId
+      && operation.logRef === terminal.id && ['running', 'unknown'].includes(operation.status));
+  }
+
+  async function closeTabNow(tab: WorkspaceTab): Promise<void> {
+    if (tab.kind === 'terminal') await window.cloudhelm.closeTerminal(tab.terminalId);
+    useUi.getState().closeTab(tab.id);
+  }
+
+  function closeTab(tab: WorkspaceTab): void {
+    if (!executingTerminal(tab)) { void capture(() => closeTabNow(tab), setError); return; }
+    setConfirmation({ title: '断开正在运行的 AI 终端？',
+      message: '关闭这个标签会断开真实 SSH 会话。远端进程不一定停止，当前操作的结果可能需要重新核验。你也可以先点击“停止”，等待命令退出。',
+      label: '断开并关闭', action: () => closeTabNow(tab) });
+  }
+
+  function closeTabs(targets: WorkspaceTab[]): void {
+    if (!targets.length) return;
+    const risky = targets.filter((tab) => executingTerminal(tab));
+    const close = async (): Promise<void> => { for (const tab of targets) await closeTabNow(tab); };
+    if (!risky.length) { void capture(close, setError); return; }
+    setConfirmation({ title: `关闭 ${targets.length} 个标签？`,
+      message: `其中 ${risky.length} 个 AI 终端正在执行命令。关闭会断开真实 SSH 会话，远端进程不一定停止，结果可能需要重新核验。`,
+      label: '断开并关闭', action: close });
+  }
+
+  function cycleTab(step: number): void {
+    if (tabs.length < 2) return;
+    const index = tabs.findIndex((tab) => tab.id === activeTabId);
+    const next = tabs[(index + step + tabs.length) % tabs.length];
+    if (next) navigate(() => useUi.getState().selectTab(next.id));
   }
 
   function disconnect(host: HostView): void {
     setHostMenu(null);
     setConfirmation({ title: `断开 ${host.label}？`, message: '将断开这台主机的 SSH 会话。正在执行的命令可能仍在远端运行，重新连接后会先核验结果。', label: '断开 SSH',
       action: () => window.cloudhelm.disconnectHost(host.id) });
+  }
+
+  function removeHost(host: HostView): void {
+    setHostMenu(null);
+    setConfirmation({ title: `移除 ${host.label}？`, message: '从主机列表移除该连接配置，历史对话和审计记录会保留。不会删除服务器上的数据。', label: '移除主机',
+      action: () => window.cloudhelm.deleteHost(host.id) });
   }
 
   function quoteTerminal(): void {
@@ -124,16 +182,96 @@ export function App(): React.JSX.Element {
     return `${hostName(tab.hostId)}${terminal?.replacementTerminalId ? ' · 人工' : terminal?.taskId ? ' · AI' : ''}`;
   }
 
+  function hostActions(host: HostView): ContextMenuEntry[] {
+    return [
+      { id: 'edit-host', label: '编辑主机', icon: 'settings', run: () => navigate(() => { setHostMenu(null); setDialog({ kind: 'host', hostId: host.id }); }) },
+      { id: 'safety', label: '安全设置', icon: 'shield', run: () => navigate(() => { setHostMenu(null); setDialog({ kind: 'safety', hostId: host.id }); }) },
+      { id: 'new-terminal', label: '新终端', icon: 'terminal', ...hintFor('terminal.new'),
+        run: () => navigate(() => { setHostMenu(null); void connectHost(host.id, true); }) },
+      { id: 'disconnect', label: '断开 SSH', icon: 'disconnect', run: () => navigate(() => disconnect(host)) },
+      { id: 'd1', separator: true },
+      { id: 'remove-host', label: '移除主机', danger: true, run: () => removeHost(host) }
+    ];
+  }
+
+  function conversationActions(item: TaskView): ContextMenuEntry[] {
+    const blocked = isActiveTaskStatus(item.status);
+    return [
+      { id: 'open', label: '打开对话', icon: 'chat', run: () => navigate(() => useUi.getState().selectConversation(item.id)) },
+      { id: 'report', label: '查看完整报告', icon: 'expand', run: () => navigate(() => useUi.getState().openReport(item.id)) },
+      { id: 'd1', separator: true },
+      ...copyEntries('复制对话文本', conversationText(item)),
+      { id: 'd2', separator: true },
+      { id: 'delete', label: '删除对话', icon: 'close', danger: true, disabled: blocked,
+        title: blocked ? '对话仍在进行中，请先停止或等待结束再删除' : '永久删除这条对话及其记录',
+        run: () => deleteConversation(item) }
+    ];
+  }
+
+  /** Deleting removes the conversation and its records; the backend re-checks state. */
+  function deleteConversation(item: TaskView): void {
+    setConfirmation({ title: `删除“${item.goal}”？`,
+      message: '将永久删除这条对话的消息、操作记录与相关终端日志，无法恢复。相关标签会一并关闭。主机配置、凭据与其他对话不受影响。',
+      label: '删除对话', action: () => window.cloudhelm.deleteConversation(item.id) });
+  }
+
+  function conversationText(item: TaskView): string {
+    const messages = (snapshot?.messages ?? []).filter((message) => message.taskId === item.id);
+    const lines = [`# ${item.goal}`, ...messages.map((message) => `${message.role === 'user' ? '你' : message.role === 'agent' ? 'CloudHelm' : '系统'}：${message.text}`)];
+    return lines.join('\n\n');
+  }
+
+  function tabActions(tab: WorkspaceTab): ContextMenuEntry[] {
+    const others = tabs.filter((item) => item.id !== tab.id);
+    const othersLabel = others.length ? `关闭其他标签（${others.length}）` : '关闭其他标签';
+    const allLabel = tabs.length > 1 ? `关闭全部标签（${tabs.length}）` : '关闭全部标签';
+    return [
+      { id: 'close', label: '关闭标签', icon: 'close', ...hintFor('tab.close'), run: () => navigate(() => closeTab(tab)) },
+      { id: 'close-others', label: othersLabel, ...hintFor('tab.closeOthers'), disabled: !others.length,
+        run: () => navigate(() => closeTabs(others)) },
+      { id: 'close-all', label: allLabel, ...hintFor('tab.closeAll'), run: () => navigate(() => closeTabs([...tabs])) }
+    ];
+  }
+
+  /** Fallback menu: native editing commands for fields, copy/select for plain text. */
+  function handleContextMenu(event: React.MouseEvent): void {
+    const field = editableTarget(event.target);
+    if (field) { openContextMenu(event, editMenuEntries(field, bindings, isMac, setError), '编辑菜单'); return; }
+    const selection = window.getSelection()?.toString().trim() ?? '';
+    const entries: ContextMenuEntry[] = [];
+    if (selection) entries.push({ id: 'copy-selection', label: '复制选中内容', icon: 'copy', run: () => void copyText(selection) });
+    entries.push({ id: 'select-all', label: '全选', run: () => document.execCommand('selectAll') });
+    openContextMenu(event, entries, '页面操作');
+  }
+
+  useKeyboardShortcuts({
+    'terminal.new': () => { if (activeHost) void connectHost(activeHost.id, true); },
+    'conversation.new': () => navigate(() => useUi.getState().newConversation(activeHostId ?? null)),
+    'settings.open': () => navigate(() => useUi.getState().setSettingsOpen(true)),
+    'tab.close': () => { if (activeTab) closeTab(activeTab); },
+    'tab.closeOthers': () => { if (activeTab) closeTabs(tabs.filter((tab) => tab.id !== activeTab.id)); },
+    'tab.closeAll': () => closeTabs([...tabs]),
+    'tab.next': () => cycleTab(1),
+    'tab.previous': () => cycleTab(-1),
+    'agent.toggle': () => useUi.getState().toggleAgentPanel(),
+    'terminal.copy': () => { const target = terminalActions(terminalId); if (target?.getSelection()) void copyText(target.getSelection()); },
+    'terminal.paste': () => { const text = readClipboardText(); void text.then((value) => { if (value) terminalActions(terminalId)?.paste(value); }).catch(() => undefined); },
+    'terminal.selectAll': () => terminalActions(terminalId)?.selectAll(),
+    'terminal.clear': () => terminalActions(terminalId)?.clear(),
+    'terminal.quote': () => quoteTerminal()
+  });
+
   const sensitiveInput = snapshot?.inputs.find((input) => (input.kind === 'secret' || input.kind === 'otp') && !hiddenInputs.includes(input.id));
   const hosts = snapshot?.hosts.filter((host) => !host.archived) ?? [];
-  return <div className={styles.app}>
+  return <div className={styles.app} onContextMenu={handleContextMenu}>
     <aside className={styles.sidebar}>
       <div className={styles.brand}><span className={styles.brandIcon}><Icon name="terminal" size={18} /></span>CloudHelm</div>
       <div className={styles.sectionHead}><span>远程主机</span><button title="添加主机" aria-label="添加主机" onClick={() => navigate(() => setDialog({ kind: 'host' }))}><Icon name="plus" /></button></div>
       <div className={styles.hostList}>{hosts.map((host) => {
         const lineage = hostLineage(host, snapshot?.hosts ?? []);
         const working = snapshot?.conversations.find((item) => item.hostIds.some((id) => lineage.includes(id)) && ['running', 'waiting-review', 'waiting-user', 'recovering', 'human-control'].includes(item.status));
-        return <div className={`${styles.hostRow} ${activeHostId && lineage.includes(activeHostId) ? styles.selected : ''}`} key={host.id}>
+        return <div className={`${styles.hostRow} ${activeHostId && lineage.includes(activeHostId) ? styles.selected : ''}`} key={host.id}
+          onContextMenu={(event) => openContextMenu(event, hostActions(host), `${host.label} 主机操作`)}>
           <button className={styles.hostSelect} onClick={() => navigate(() => void connectHost(host.id))} title={`${host.username}@${host.address}:${host.port}`} disabled={connecting.includes(host.id)}>
             <Icon name="server" /><span>{host.label}<small>{connecting.includes(host.id) ? '正在连接…' : working ? statusLabel[working.status] : `${host.username}@${host.address}`}</small></span>
             <i className={`${styles.dot} ${host.status === 'connected' ? styles.online : ''}`} />
@@ -141,21 +279,18 @@ export function App(): React.JSX.Element {
           <button className={styles.hostMore} aria-label={`${host.label} 更多操作`} title="主机操作" aria-haspopup="menu" aria-expanded={hostMenu?.hostId === host.id}
             onClick={(event) => setHostMenu(hostMenu?.hostId === host.id ? null : { hostId: host.id, anchor: event.currentTarget })}><Icon name="more" /></button>
           {hostMenu?.hostId === host.id && <AnchoredMenu anchor={hostMenu.anchor} label={`${host.label} 主机操作`} close={() => setHostMenu(null)}>
-            <button role="menuitem" onClick={() => navigate(() => { setHostMenu(null); setDialog({ kind: 'host', hostId: host.id }); })}><Icon name="settings" />编辑主机</button>
-            <button role="menuitem" onClick={() => navigate(() => { setHostMenu(null); setDialog({ kind: 'safety', hostId: host.id }); })}><Icon name="shield" />安全设置</button>
-            <button role="menuitem" onClick={() => navigate(() => { setHostMenu(null); void connectHost(host.id, true); })}><Icon name="terminal" />新终端</button>
-            <button role="menuitem" onClick={() => navigate(() => disconnect(host))}><Icon name="disconnect" />断开 SSH</button>
-            <button role="menuitem" className={styles.dangerText} onClick={() => { setHostMenu(null); setConfirmation({ title: `移除 ${host.label}？`, message: '从主机列表移除该连接配置，历史对话和审计记录会保留。不会删除服务器上的数据。', label: '移除主机', action: () => window.cloudhelm.deleteHost(host.id) }); }}>移除主机</button>
+            <MenuEntryList entries={hostActions(host)} />
           </AnchoredMenu>}
         </div>;
       })}{!hosts.length && <button className={styles.addHostEmpty} onClick={() => navigate(() => setDialog({ kind: 'host' }))}><Icon name="plus" />添加第一台主机</button>}</div>
       <div className={styles.sectionHead}><span>AI 对话历史</span><button title="新的自由对话" aria-label="新的自由对话" onClick={() => navigate(() => useUi.getState().newConversation(null))}><Icon name="plus" /></button></div>
-      <div className={styles.historyList}>{snapshot && <HistoryList hosts={snapshot.hosts} select={(id) => navigate(() => useUi.getState().selectConversation(id))} />}</div>
-      <div className={styles.sidebarFoot}><button className={settingsOpen ? styles.selected : ''} onClick={() => navigate(() => useUi.getState().setSettingsOpen(!settingsOpen))}><Icon name="settings" />设置</button><small>CloudHelm · 0.1</small></div>
+      <div className={styles.historyList}>{snapshot && <HistoryList hosts={snapshot.hosts} select={(id) => navigate(() => useUi.getState().selectConversation(id))} menu={conversationActions} />}</div>
+      <div className={styles.sidebarFoot}><button className={settingsOpen ? styles.selected : ''} onClick={() => navigate(() => useUi.getState().setSettingsOpen(!settingsOpen))}><Icon name="settings" />设置</button><small>{appVersion ? `CloudHelm · ${appVersion}` : 'CloudHelm'}</small></div>
     </aside>
 
     <main className={styles.workspace}>
       <header className={styles.toolbar}><div className={styles.tabs}>{tabs.map((tab) => <div key={tab.id} className={`${styles.tab} ${!settingsOpen && activeTabId === tab.id ? styles.activeTab : ''}`}
+        onContextMenu={(event) => openContextMenu(event, tabActions(tab), `${tabLabel(tab)} 标签操作`)}
         onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
         onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); event.stopPropagation(); navigate(() => closeTab(tab)); } }}>
         <button className={styles.tabSelect} onClick={() => navigate(() => useUi.getState().selectTab(tab.id))}><Icon name={tab.kind === 'terminal' ? 'terminal' : tab.kind === 'files' ? 'folder' : 'chat'} size={14} /><span>{tabLabel(tab)}</span></button>
@@ -171,7 +306,8 @@ export function App(): React.JSX.Element {
             {activeHost && <button title="断开 SSH" aria-label="断开 SSH" onClick={() => disconnect(activeHost)}><Icon name="disconnect" size={13} /></button>}
           </div>
           {activeTerminal.taskId && <div className={styles.terminalNotice}>{activeTerminal.replacementTerminalId ? 'AI 已切换到新的专用终端。此终端保留供你查看输出或继续人工操作。' : activeTerminal.state === 'human' ? '可以直接输入命令；只有发送消息或点击“继续 AI”才会启动 AI。' : 'AI 执行期间禁止输入。按 Ctrl+C 或点击“停止”，待命令退出后即可输入；停止不会启动新对话。'}</div>}
-          <TerminalView terminalId={activeTerminal.id} report={reportTerminalError} />
+          <TerminalView terminalId={activeTerminal.id} report={reportTerminalError} onQuote={quoteTerminal}
+            onNewTerminal={activeHost ? () => void connectHost(activeHost.id, true) : undefined} />
         </div> : activeTab?.kind === 'files' ? <FilesPage key={activeTab.id} hostId={activeTab.hostId} host={hostName(activeTab.hostId)} report={setError} />
           : activeTab?.kind === 'report' && snapshot?.conversations.find((item) => item.id === activeTab.conversationId) ? <ReportPage conversation={snapshot.conversations.find((item) => item.id === activeTab.conversationId)!} operations={snapshot.operations.filter((item) => item.taskId === activeTab.conversationId)} report={setError} />
             : <div className={styles.empty}><span className={styles.emptyGlyph}><Icon name="terminal" size={36} /></span><h1>{activeHost ? activeHost.label : '你的服务器，随时连接'}</h1><p>{activeHost ? '点击连接，打开真实 SSH 终端。右侧对话仍限定在这台主机。' : '从左侧选择主机，开始 SSH 会话。AI 助手会一直在旁边。'}</p>
@@ -189,10 +325,13 @@ export function App(): React.JSX.Element {
     </div></div>}
     {sensitiveInput && <div className={styles.scrim}><InputCard key={sensitiveInput.id} input={sensitiveInput} host={hostName(sensitiveInput.hostId)} report={setError} later={() => setHiddenInputs((items) => [...items, sensitiveInput.id])} /></div>}
     {error && <ErrorDialog key={JSON.stringify([error.code, error.context])} notice={error} close={dismissError} configureModel={() => useUi.getState().setSettingsOpen(true)} />}
+    <ContextMenuHost />
   </div>;
 }
 
-function HistoryList({ hosts, select }: { hosts: HostView[]; select(id: string): void }): React.JSX.Element {
+function HistoryList({ hosts, select, menu }: {
+  hosts: HostView[]; select(id: string): void; menu(conversation: TaskView): ContextMenuEntry[];
+}): React.JSX.Element {
   const snapshot = useUi((state) => state.snapshot);
   const selected = useUi((state) => state.selectedConversationId);
   const conversations = [...(snapshot?.conversations ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -205,7 +344,9 @@ function HistoryList({ hosts, select }: { hosts: HostView[]; select(id: string):
   }
   return <>{[...groups].map(([key, items]) => <details key={key} className={styles.historyGroup} open>
     <summary>{key === 'chat' ? '自由对话' : key === 'legacy' ? '旧版多主机记录' : hosts.find((host) => host.id === key)?.label ?? '历史主机'}</summary>
-    {items.map((item) => <button key={item.id} className={`${styles.historyRow} ${selected === item.id ? styles.selected : ''}`} onClick={() => select(item.id)}>
+    {items.map((item) => <button key={item.id} className={`${styles.historyRow} ${selected === item.id ? styles.selected : ''}`}
+      onContextMenu={(event) => openContextMenu(event, menu(item), `${item.goal} 对话操作`)}
+      onClick={() => select(item.id)}>
       <Icon name="chat" size={13} /><span>{item.goal}<small>{statusLabel[item.status]}</small></span>
     </button>)}
   </details>)}{!conversations.length && <p className={styles.historyEmpty}>发送第一条消息后，对话会自动保存在这里。</p>}</>;

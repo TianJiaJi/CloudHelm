@@ -3,6 +3,7 @@ import { ClarificationCoordinator, SafetyGate, type TerminalManager } from '@clo
 import { AiRiskEvaluator, BashAnalyzer, loadClarificationExtension } from '@cloudhelm/adapters';
 import { redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision } from '@cloudhelm/core';
 import type { AppEvent, ApprovalView, ConversationMessage, OperationView, InterruptionSource, UserInterruption, ReviewMode, TaskStatus, TaskView } from '@cloudhelm/contracts';
+import { isActiveTaskStatus } from '@cloudhelm/contracts';
 import type { LocalScope } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 import { compactAgentContext, generationTokenBudget, recoveryContextMessage, restoredConversationMessages } from './context-manager.js';
@@ -231,6 +232,15 @@ export class TaskRunner {
   }
 
   ownsTerminal(terminalId: string): boolean { return [...this.terminalByHost.values()].includes(terminalId); }
+
+  /** Finished conversations may leave the worker; live ones must stay. */
+  get canDelete(): boolean { return !isActiveTaskStatus(this.status); }
+
+  /** Releases the task's terminals after the conversation has been deleted. */
+  dispose(): void {
+    for (const terminalId of this.terminalByHost.values()) this.terminal.close(terminalId);
+    this.terminalByHost.clear();
+  }
 
   addAuthorization(hosts: RuntimeHost[], localScopes: LocalScope[]): void {
     for (const host of hosts) if (!this.hosts.some((candidate) => candidate.id === host.id)) {

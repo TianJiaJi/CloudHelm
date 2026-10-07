@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell } from 'electron';
 import { SqliteStore, listModelProviders } from '@cloudhelm/adapters';
 import type { AppEvent, DesktopAPI, HostDraft, LocalScope, ReviewMode } from '@cloudhelm/contracts';
 import { AppState } from './app-state.js';
@@ -74,6 +74,7 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:test-host', (_event, input: Parameters<DesktopAPI['testHostConnection']>[0]) => hostTester.test(input));
   registerConversationIpc({ state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
   ipcMain.handle('cloudhelm:snapshot', () => state.snapshot());
+  ipcMain.handle('cloudhelm:app-version', () => app.getVersion());
   ipcMain.handle('cloudhelm:add-host', (_event, host: HostDraft) => state.addHost(host));
   ipcMain.handle('cloudhelm:edit-host', (_event, hostId: string, host: HostDraft, newSecret?: string) => state.editHost(hostId, host, newSecret));
   ipcMain.handle('cloudhelm:set-host-secret', (_event, hostId: string, secret: string) => {
@@ -93,6 +94,13 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:save-review-settings', async (_event, settings: Parameters<DesktopAPI['saveReviewSettings']>[0]) => {
     state.saveReviewSettings(settings);
     await runtime.call({ method: 'set-review-key', jevKey: state.reviewKey() });
+  });
+  ipcMain.handle('cloudhelm:shortcuts', () => state.shortcuts());
+  ipcMain.handle('cloudhelm:save-shortcuts', (_event, settings: Parameters<DesktopAPI['saveShortcuts']>[0]) => state.saveShortcuts(settings));
+  ipcMain.handle('cloudhelm:read-clipboard', () => clipboard.readText());
+  ipcMain.handle('cloudhelm:write-clipboard', (_event, text: string) => {
+    if (typeof text !== 'string' || text.length > 200_000) throw new Error('Invalid clipboard content');
+    clipboard.writeText(text);
   });
   ipcMain.handle('cloudhelm:test-model', (_event, profile: Parameters<DesktopAPI['testModelConnection']>[0]) => runtime.call({ method: 'test-model', profile: state.testProfile(profile) }));
   ipcMain.handle('cloudhelm:available-models', () => state.availableModels());
@@ -145,6 +153,22 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:read-terminal-log', (_event, terminalId: string) => state.readTerminalLog(terminalId));
 }
 
+/**
+ * macOS keeps a system application menu, but its default items bind Cmd+N to a
+ * new window and Cmd+W to close the window. Both are owned by the workspace
+ * shortcuts now, so the menu is rebuilt without those accelerators.
+ */
+function macApplicationMenu(): Menu {
+  return Menu.buildFromTemplate([
+    { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'services' },
+      { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
+      { type: 'separator' }, { role: 'quit' }] },
+    { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }] }
+  ]);
+}
+
 function createWindow(): void {
   window = new BrowserWindow({
     width: 1440, height: 920, minWidth: 980, minHeight: 640,
@@ -168,8 +192,10 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(async () => {
-  // Remove Electron's default Windows menu before creating any windows.
-  if (process.platform === 'win32') Menu.setApplicationMenu(null);
+  // Windows keeps no application menu. macOS keeps the system app and edit
+  // menus minus accelerators that conflict with workspace shortcuts.
+  if (process.platform === 'darwin') Menu.setApplicationMenu(macApplicationMenu());
+  else Menu.setApplicationMenu(null);
   store = new SqliteStore(join(app.getPath('userData'), 'cloudhelm.sqlite'));
   state = new AppState(store, publish);
   runtime = new RuntimeBridge((event) => {

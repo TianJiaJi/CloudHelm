@@ -119,3 +119,55 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    needs: verify
+    # Only pushes to the default branch can publish; every other run builds only.
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether to publish this version
+        id: decision
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            CHANGED=$(git diff-tree --no-commit-id --name-only -r "$SHA" | grep -c '^version\.json$' || true)
+          else
+            CHANGED=$(git diff --name-only "$BEFORE" "$SHA" | grep -c '^version\.json$' || true)
+          fi
+          if [ "$CHANGED" -gt 0 ]; then CHANGED_FLAG=true; else CHANGED_FLAG=false; fi
+          VERSION=$(node -e "console.log(require('./version.json').version)")
+          if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then TAG_EXISTS=true; else TAG_EXISTS=false; fi
+          echo "version.json changed: $CHANGED_FLAG, tag v$VERSION exists: $TAG_EXISTS"
+          VERSION_FILE_CHANGED=$CHANGED_FLAG TAG_EXISTS=$TAG_EXISTS node scripts/release-decision.mjs
+      - name: Download built installers
+        if: steps.decision.outputs.should-publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: CloudHelm-*
+          path: release-assets
+      - name: Create prerelease with installers
+        if: steps.decision.outputs.should-publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.decision.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' assets < <(find release-assets -type f -print0)
+          if [ "${#assets[@]}" -eq 0 ]; then echo 'No built installers found' >&2; exit 1; fi
+          gh release create "$TAG" --prerelease --generate-notes --title "CloudHelm $TAG" "${assets[@]}"
+      - name: Skip publishing
+        if: steps.decision.outputs.should-publish != 'true'
+        env:
+          REASON: ${{ steps.decision.outputs.reason }}
+        run: echo "$REASON"

@@ -12,6 +12,7 @@ vi.mock('electron', () => ({ safeStorage: {
 
 class MemoryStore {
   private readonly buckets = new Map<string, Map<string, unknown>>();
+  readonly removedLogs: string[] = [];
   get<T>(bucket: string, id: string): T | undefined {
     return structuredClone(this.buckets.get(bucket)?.get(id)) as T | undefined;
   }
@@ -21,6 +22,17 @@ class MemoryStore {
     values.set(id, structuredClone(value)); this.buckets.set(bucket, values);
   }
   remove(bucket: string, id: string): void { this.buckets.get(bucket)?.delete(id); }
+  removeWhere(bucket: string, field: string, value: string): void {
+    const values = this.buckets.get(bucket);
+    if (!values) return;
+    for (const [key, record] of [...values]) if ((record as Record<string, unknown>)[field] === value) values.delete(key);
+  }
+  removePrefix(bucket: string, idPrefix: string): void {
+    const values = this.buckets.get(bucket);
+    if (!values) return;
+    for (const key of [...values.keys()]) if (key.startsWith(idPrefix)) values.delete(key);
+  }
+  removeLogs(terminalId: string): void { this.removedLogs.push(terminalId); }
   cleanupLogs(): void {}
   appendLog(): void {}
 }
@@ -219,4 +231,67 @@ it('persists deliberate interruption metadata separately from observed process o
   const restored = setup(store).state.snapshot();
   expect(restored.messages[0]?.interruption).toEqual(interruption);
   expect(restored.operations[0]).toMatchObject({ status: 'failed', exitCode: 130, interruption });
+});
+
+describe('conversation deletion', () => {
+  it('removes a finished conversation with its records and terminal logs', () => {
+    const { state, store } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    state.record({ type: 'task-message', taskId: task.id, role: 'user', text: '目标', createdAt: 1 });
+    state.record({ type: 'operation', value: { id: 'op', taskId: task.id, hostId: 'host', kind: 'command', preview: 'ls', status: 'succeeded', createdAt: 1, logRef: 'term-1' } });
+    state.record({ type: 'terminal-state', terminalId: 'term-1', hostId: 'host', taskId: task.id, state: 'agent' });
+    state.deleteTask(task.id);
+    expect(store.removedLogs.sort()).toEqual(['operation:op', 'term-1'].sort());
+    const restored = setup(store).state.snapshot();
+    expect(restored.conversations).toEqual([]);
+    expect(restored.messages).toEqual([]);
+    expect(restored.operations).toEqual([]);
+    expect(restored.terminals).toEqual([]);
+  });
+  it('keeps other conversations and their logs untouched', () => {
+    const { state, store } = setup();
+    state.saveProfile(customProfile());
+    const removed = conversation(state);
+    const kept = conversation(state);
+    state.record({ type: 'task-message', taskId: removed.id, role: 'user', text: '删除', createdAt: 1 });
+    state.record({ type: 'task-message', taskId: kept.id, role: 'user', text: '保留', createdAt: 2 });
+    state.deleteTask(removed.id);
+    const restored = setup(store).state.snapshot();
+    expect(restored.conversations.map((item) => item.id)).toEqual([kept.id]);
+    expect(restored.messages.map((item) => item.text)).toEqual(['保留']);
+  });
+  it.each(['running', 'waiting-review', 'waiting-user', 'recovering', 'human-control', 'answered'] as const)(
+    'refuses to delete a conversation that still owns live work (%s)', (status) => {
+      const { state } = setup();
+      state.saveProfile(customProfile());
+      const task = conversation(state);
+      state.record({ type: 'task-status', taskId: task.id, status });
+      expect(() => state.deleteTask(task.id)).toThrow(/进行中/u);
+    });
+  it('rejects unknown conversations', () => {
+    expect(() => setup().state.deleteTask('missing')).toThrow();
+  });
+});
+
+describe('shortcut settings persistence', () => {
+  it('stores bindings, explicit clears and the master switch', () => {
+    const { state, store } = setup();
+    const stored = { bindings: { 'tab.close': 'ctrl+w', 'terminal.clear': '' }, enabled: false };
+    state.saveShortcuts(stored);
+    expect(state.shortcuts()).toEqual(stored);
+    expect(setup(store).state.shortcuts()).toEqual(stored);
+  });
+  it('defaults to enabled shortcuts when nothing is stored', () => {
+    expect(setup().state.shortcuts()).toEqual({ bindings: {}, enabled: true });
+  });
+  it.each([
+    ['non-object bindings', { bindings: 'ctrl+w', enabled: true }],
+    ['array bindings', { bindings: ['ctrl+w'], enabled: true }],
+    ['numeric values', { bindings: { 'tab.close': 5 }, enabled: true }],
+    ['unknown characters', { bindings: { 'tab.close': 'ctrl+shift+t!!' }, enabled: true }],
+    ['oversized action ids', { bindings: { [ 'x'.repeat(80) ]: 'ctrl+w' }, enabled: true }]
+  ])('rejects malformed shortcut settings (%s)', (_name, settings) => {
+    expect(() => setup().state.saveShortcuts(settings as never)).toThrow();
+  });
 });

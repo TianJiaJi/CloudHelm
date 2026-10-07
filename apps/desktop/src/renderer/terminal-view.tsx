@@ -3,13 +3,23 @@ import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useUi } from './store.js';
 import { fitTerminal } from './terminal-fit.js';
+import { useShortcuts } from './shortcut-store.js';
+import { isMacPlatform, menuHint, type ShortcutActionId, type ShortcutContext } from './shortcuts.js';
+import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
+import { copyText, readClipboardText } from './clipboard.js';
+import { registerTerminalActions } from './terminal-actions.js';
 import styles from './ui.module.css';
 
-export function TerminalView({ terminalId, report }: { terminalId: string; report(error: string): void }): React.JSX.Element {
+export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
+  terminalId: string; report(error: string): void; onQuote?(): void; onNewTerminal?(): void;
+}): React.JSX.Element {
   const holder = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const shown = useRef(0);
   const tab = useUi((state) => state.terminals[terminalId]);
+  const bindings = useShortcuts((state) => state.bindings);
+  const shortcutsEnabled = useShortcuts((state) => state.enabled);
+  const isMac = isMacPlatform();
 
   useEffect(() => {
     const element = holder.current;
@@ -46,8 +56,16 @@ export function TerminalView({ terminalId, report }: { terminalId: string; repor
     const stopFitting = fitTerminal(xterm, element, (cols, rows) => {
       void window.cloudhelm.resizeTerminal(terminalId, cols, rows).catch(showError);
     });
+    const unregister = registerTerminalActions(terminalId, {
+      getSelection: () => xterm.getSelection(),
+      paste: (text) => xterm.paste(text),
+      selectAll: () => xterm.selectAll(),
+      clear: () => xterm.clear(),
+      focus: () => xterm.focus()
+    });
     return () => {
-      stopFitting(); dispose.dispose(); media.removeEventListener('change', updateTheme); xterm.dispose(); terminal.current = null; shown.current = 0;
+      unregister(); stopFitting(); dispose.dispose(); media.removeEventListener('change', updateTheme); xterm.dispose();
+      terminal.current = null; shown.current = 0;
     };
   }, [terminalId, report]);
 
@@ -60,5 +78,28 @@ export function TerminalView({ terminalId, report }: { terminalId: string; repor
     shown.current = tab.offset + tab.buffer.length;
   }, [terminalId, tab?.buffer, tab?.offset]);
 
-  return <div className={styles.terminal} aria-label="SSH terminal"><div className={styles.terminalViewport} ref={holder} /></div>;
+  function hint(id: ShortcutActionId, context: ShortcutContext = 'terminal'): string | undefined {
+    const value = menuHint(id, bindings, isMac, context, shortcutsEnabled);
+    return value ? value.hint : undefined;
+  }
+
+  function menuEntries(): ContextMenuEntry[] {
+    const xterm = terminal.current;
+    if (!xterm) return [];
+    return [
+      { id: 'copy', label: '复制', icon: 'copy', hint: hint('terminal.copy'), disabled: !xterm.hasSelection(),
+        run: () => void copyText(xterm.getSelection()).then((ok) => { if (!ok) report('无法访问剪贴板，请重试或手动选择内容。'); }) },
+      { id: 'paste', label: '粘贴', icon: 'attach', hint: hint('terminal.paste'),
+        run: () => void readClipboardText().then((text) => { if (text) xterm.paste(text); }).catch(() => report('无法读取剪贴板。')) },
+      { id: 'selectAll', label: '全选', hint: hint('terminal.selectAll'), run: () => xterm.selectAll() },
+      { id: 'd1', separator: true },
+      { id: 'quote', label: '引用输出到 AI', hint: hint('terminal.quote'), disabled: !onQuote, run: () => onQuote?.() },
+      { id: 'clear', label: '清屏（仅本地显示）', hint: hint('terminal.clear'), run: () => xterm.clear() },
+      { id: 'd2', separator: true },
+      { id: 'new', label: '新终端', icon: 'plus', hint: hint('terminal.new'), disabled: !onNewTerminal, run: () => onNewTerminal?.() }
+    ];
+  }
+
+  return <div className={styles.terminal} aria-label="SSH terminal" data-shortcut-scope="terminal"
+    onContextMenu={(event) => openContextMenu(event, menuEntries(), '终端操作')}><div className={styles.terminalViewport} ref={holder} /></div>;
 }

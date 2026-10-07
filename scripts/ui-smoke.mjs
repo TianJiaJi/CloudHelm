@@ -6,6 +6,7 @@ import { checkHostTestControls } from './host-test-ui-probe.mjs';
 import { checkConversationTimeline } from './check-conversation-timeline.mjs';
 import { checkViewportLayout } from './check-viewport-layout.mjs';
 import { checkUserMessageActions } from './check-user-message-actions.mjs';
+import { checkMenusAndShortcuts } from './check-menus-shortcuts.mjs';
 import { checkTerminalLayout } from './check-terminal-layout.mjs';
 import { checkErrorControl } from './check-error-control.mjs';
 import { checkTerminalControl } from './check-terminal-control.mjs';
@@ -291,6 +292,7 @@ try {
   await checkConversationTimeline(page, screenshot);
   await checkViewportLayout(page, screenshot);
   await checkUserMessageActions(page, screenshot);
+  await checkMenusAndShortcuts(page, screenshot);
   await checkTerminalLayout(page, screenshot);
   await exerciseNavigation();
   await exerciseInputIsolation();

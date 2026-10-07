@@ -70,6 +70,22 @@ export class SqliteStore {
     this.db.delete(records).where(and(eq(records.bucket, bucket), eq(records.id, id))).run();
   }
 
+  /** Removes records whose JSON field matches a value (conversation cleanup). */
+  removeWhere(bucket: string, field: string, value: string): void {
+    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/u.test(field)) throw new Error('Invalid record field');
+    this.raw.prepare(`DELETE FROM records WHERE bucket = ? AND json_extract(value, '$.${field}') = ?`).run(bucket, value);
+  }
+
+  /** Removes records whose id starts with a literal prefix. */
+  removePrefix(bucket: string, idPrefix: string): void {
+    const escaped = idPrefix.replace(/[\\%_]/gu, (char) => `\\${char}`);
+    this.raw.prepare("DELETE FROM records WHERE bucket = ? AND id LIKE ? ESCAPE '\\'").run(bucket, `${escaped}%`);
+  }
+
+  removeLogs(terminalId: string): void {
+    this.raw.prepare('DELETE FROM terminal_logs WHERE terminal_id = ?').run(terminalId);
+  }
+
   appendLog(terminalId: string, data: string): void {
     const insert = this.raw.prepare('INSERT INTO terminal_logs(terminal_id, created_at, bytes, data) VALUES (?, ?, ?, ?)');
     for (let offset = 0; offset < data.length; offset += 8192) {

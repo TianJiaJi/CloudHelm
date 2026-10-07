@@ -5,6 +5,7 @@ const invoke = <T>(method: string, ...args: unknown[]): Promise<T> => ipcRendere
 
 const api: DesktopAPI = {
   snapshot: () => invoke('snapshot'),
+  appVersion: () => invoke('app-version'),
   addHost: (host) => invoke('add-host', host),
   editHost: (hostId, host, newSecret) => invoke('edit-host', hostId, host, newSecret),
   testHostConnection: (input) => invoke('test-host', input),
@@ -14,6 +15,10 @@ const api: DesktopAPI = {
   testModelConnection: (profile) => invoke('test-model', profile),
   availableModels: () => invoke('available-models'),
   saveReviewSettings: (settings) => invoke('save-review-settings', settings),
+  shortcuts: () => invoke('shortcuts'),
+  saveShortcuts: (settings) => invoke('save-shortcuts', settings),
+  readClipboard: () => invoke('read-clipboard'),
+  writeClipboard: (text) => invoke('write-clipboard', text),
   listModelProviders: () => invoke('list-model-providers'),
   modelProviderSettings: (providerId) => invoke('model-provider-settings', providerId),
   disconnectHost: (hostId) => invoke('disconnect-host', hostId),
@@ -42,6 +47,7 @@ const api: DesktopAPI = {
   acceptConversation: (taskId) => invoke('accept-task', taskId),
   listRemote: (hostId, path) => invoke('list-remote', hostId, path),
   readTerminalLog: (terminalId) => invoke('read-terminal-log', terminalId),
+  deleteConversation: (id) => invoke('delete-conversation', id),
   onEvent: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, value: AppEvent) => listener(value);
     ipcRenderer.on('cloudhelm:event', handler);

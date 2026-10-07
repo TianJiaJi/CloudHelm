@@ -3,10 +3,26 @@ import { safeStorage } from 'electron';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
 import { OutputRedactor } from '@cloudhelm/core';
-import { HostDraftSchema, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type TaskView } from '@cloudhelm/contracts';
+import { HostDraftSchema, isActiveTaskStatus, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; credentialRevision?: string }
+interface StoredShortcuts { bindings: Record<string, string>; enabled: boolean }
+
+const SHORTCUT_ACTION_LIMIT = 128;
+const SHORTCUT_BINDING_PATTERN = /^[a-z0-9+]{0,40}$/u;
+
+function validBindings(input: unknown): Record<string, string> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const entries = Object.entries(input as Record<string, unknown>);
+  if (entries.length > SHORTCUT_ACTION_LIMIT) return {};
+  const result: Record<string, string> = {};
+  for (const [key, value] of entries) {
+    if (!/^[a-z][a-z0-9.]{1,40}$/u.test(key) || typeof value !== 'string' || !SHORTCUT_BINDING_PATTERN.test(value)) continue;
+    result[key] = value;
+  }
+  return result;
+}
 
 export class AppState {
   private readonly hosts = new Map<string, HostView>();
@@ -121,6 +137,45 @@ export class AppState {
     this.publish();
   }
 
+  /** Conversations with live work stay until the user finishes them first. */
+  assertDeletable(id: string): TaskView {
+    const task = this.getTask(id);
+    if (isActiveTaskStatus(task.status)) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
+    return task;
+  }
+
+  /** Permanently removes a finished conversation, its records and its terminal logs. */
+  deleteTask(id: string): void {
+    this.assertDeletable(id);
+    const logKeys = new Set<string>();
+    for (const operation of this.operations.values()) {
+      if (operation.taskId !== id) continue;
+      logKeys.add(`operation:${operation.id}`);
+      if (operation.logRef) logKeys.add(operation.logRef);
+    }
+    for (const terminal of this.terminals.values()) if (terminal.taskId === id) logKeys.add(terminal.id);
+    this.flushLogs();
+    this.tasks.delete(id);
+    for (const [key, operation] of [...this.operations]) if (operation.taskId === id) this.operations.delete(key);
+    for (const [key, approval] of [...this.approvals]) if (approval.taskId === id) this.approvals.delete(key);
+    for (const [key, input] of [...this.inputs]) if (input.taskId === id) this.inputs.delete(key);
+    for (const [key, request] of [...this.clarifications]) if (request.taskId === id) this.clarifications.delete(key);
+    for (let index = this.messages.length - 1; index >= 0; index--) if (this.messages[index]!.taskId === id) this.messages.splice(index, 1);
+    for (const [key, terminal] of [...this.terminals]) {
+      if (terminal.taskId !== id) continue;
+      this.terminals.delete(key);
+      this.redactors.delete(key);
+      this.logBuffer.delete(key);
+    }
+    this.store.remove('tasks', id);
+    this.store.removeWhere('operations', 'taskId', id);
+    this.store.removeWhere('messages', 'taskId', id);
+    this.store.removeWhere('clarifications', 'taskId', id);
+    this.store.removePrefix('model-requests', `${id}:`);
+    for (const key of logKeys) this.store.removeLogs(key);
+    this.publish();
+  }
+
   updateHost(id: string, change: Partial<HostView>): HostView {
     const host = { ...this.getHost(id), ...change };
     this.hosts.set(id, host);
@@ -184,6 +239,20 @@ export class AppState {
   }
 
   reviewKey(): string | undefined { return this.secret('jev-key:vercel-ai-gateway'); }
+
+  /** Shortcut preferences are local UI state; unknown action ids are dropped on read. */
+  shortcuts(): StoredShortcuts {
+    const stored = this.store.get<Partial<StoredShortcuts>>('settings', 'shortcuts');
+    if (!stored || typeof stored !== 'object') return { bindings: {}, enabled: true };
+    return { bindings: validBindings(stored.bindings), enabled: stored.enabled !== false };
+  }
+
+  saveShortcuts(settings: StoredShortcuts): void {
+    if (!settings || typeof settings !== 'object') throw new Error('Invalid shortcut settings');
+    const bindings = validBindings(settings.bindings);
+    if (Object.keys(bindings).length !== Object.keys(settings.bindings ?? {}).length) throw new Error('Invalid shortcut bindings');
+    this.store.put('settings', 'shortcuts', { bindings, enabled: settings.enabled !== false });
+  }
 
   runtimeProfile(selection?: ModelChoice & { baseUrl?: string }): RuntimeProfile {
     const choice = selection ?? this.profile;

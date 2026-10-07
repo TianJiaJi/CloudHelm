@@ -1,4 +1,4 @@
-/* global window */
+/* global window, document */
 import assert from 'node:assert/strict';
 
 export async function checkMiddleClick(page, screenshot) {
@@ -15,6 +15,12 @@ export async function checkMiddleClick(page, screenshot) {
   assert.equal(await dev.locator('..').getAttribute('class'), beforeClass, 'Closing a background tab must not select it');
   assert.equal(await page.evaluate(() => window.fixture.calls.filter((call) => call.kind === 'close').length), 1);
   await page.getByRole('textbox', { name: '给 AI 的消息' }).fill('中键关闭运行中的终端');
+  // The composer briefly disables sending while the panel re-projects its
+  // conversation; wait for it to become actionable instead of racing a render.
+  await page.waitForFunction(() => {
+    const button = document.querySelector('button[aria-label="发送消息"]');
+    return !!button && !button.hasAttribute('disabled');
+  });
   await page.getByRole('button', { name: '发送消息' }).click();
   await page.evaluate(async () => {
     const snapshot = await window.cloudhelm.snapshot();
