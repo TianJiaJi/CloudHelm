@@ -47,7 +47,11 @@ function fixture(command = 'sudo apt install docker.io') {
   const result = bridge.execute(operation, operationFingerprint(operation), abort.signal);
   const ready = () => vi.waitFor(() => expect(channel.commands).toEqual([command]), { timeout: 15000 });
   const auth = () => channel.challenge(`challenge-${requests.length}`);
-  return { channel, terminal, terminalId, coordinator, requests, auto, result, ready, auth, abort,
+  return { channel, terminal, terminalId, coordinator, requests, auto, result, ready, auth, abort, bridge,
+    again: (id: string, nextCommand = command) => {
+      const next = { ...operation, id, command: nextCommand };
+      return bridge.execute(next, operationFingerprint(next), abort.signal);
+    },
     disconnect: () => { generation++; } };
 }
 
@@ -150,4 +154,47 @@ describe('bounded ordinary apt confirmation', () => {
       expect((await f.result).status).toBe('unknown'); expect(f.channel.writes).toEqual(['n\n']);
     }
   );
+});
+
+
+it('reuses only successfully verified credentials, with no ordinary stdin or second popup', async () => {
+  const f = fixture('sudo docker ps'); await f.ready(); f.auth();
+  await f.coordinator.answer(f.requests[0]!.id, 'verified-fixture'); f.channel.complete();
+  expect(await f.result).toMatchObject({ authentication: 'succeeded' });
+  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2));
+  f.channel.challenge('second-auth'); expect(f.requests).toHaveLength(1);
+  expect(f.channel.answers.at(-1)).toEqual({ id: 'second-auth', answer: 'verified-fixture' });
+  f.channel.complete(); await next; expect(f.channel.writes).toEqual([]); f.bridge.clearTask('task');
+});
+
+it('forgets a reused password when challenged again, and prompts instead of looping', async () => {
+  const f = fixture('sudo docker ps'); await f.ready(); f.auth();
+  await f.coordinator.answer(f.requests[0]!.id, 'old'); f.channel.complete(); await f.result;
+  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2));
+  f.channel.challenge('cached'); f.channel.challenge('retry'); expect(f.requests).toHaveLength(2);
+  await f.coordinator.answer(f.requests[1]!.id, 'new'); f.channel.emit('Sorry, try again.\n'); f.channel.complete();
+  expect(await next).toMatchObject({ status: 'succeeded', authentication: 'succeeded' }); f.bridge.clearTask('task');
+});
+
+it('does not cache a password after a failed operation, or retain it after a task pause', async () => {
+  const f = fixture('sudo docker ps'); await f.ready(); f.auth();
+  await f.coordinator.answer(f.requests[0]!.id, 'unverified'); f.channel.emit('payload failed\n'); f.channel.complete(1); await f.result;
+  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2));
+  f.channel.challenge('second'); expect(f.requests).toHaveLength(2);
+  await f.coordinator.answer(f.requests[1]!.id, 'verified'); f.channel.complete(); await next;
+  f.bridge.clearTask('task');
+  const third = f.again('third'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(3));
+  f.channel.challenge('third'); expect(f.requests).toHaveLength(3); f.channel.complete(); await third;
+});
+
+it('does not suspend a live task for an unsupported sudo status probe', async () => {
+  const f = fixture('sudo -n -l');
+  expect(await f.result).toMatchObject({ status: 'failed', failureKind: 'unsupported', effects: 'none' });
+  expect(f.terminal.isAgentOwner(f.terminalId)).toBe(true); expect(f.channel.commands).toEqual([]);
+});
+
+it('lets the model recover from sudo -n requiring a password without manual takeover', async () => {
+  const f = fixture('sudo -n true'); await f.ready(); f.channel.emit('sudo: a password is required\n'); f.channel.complete(1);
+  expect(await f.result).toMatchObject({ authentication: 'required', effects: 'none', requiresUserAction: false });
+  expect(f.terminal.isAgentOwner(f.terminalId)).toBe(true);
 });

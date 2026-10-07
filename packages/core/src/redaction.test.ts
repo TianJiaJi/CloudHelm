@@ -39,3 +39,10 @@ it('does not leak continuation lines of a quoted credential', () => {
     + redactor.push('last secret line"\nnormal output\n') + redactor.finish();
   expect(output).not.toContain('secret line'); expect(output).toContain('normal output');
 });
+
+it('keeps numeric token limits useful while masking credential values and preserving JSON', () => {
+  const output = redactOutput('{"COPY_MAX_TOKENS":4096,"apiKey":"private value","output_tokens":"512"}');
+  expect(JSON.parse(output)).toEqual({ COPY_MAX_TOKENS: 4096, apiKey: '[REDACTED]', output_tokens: '512' });
+  expect(redactOutput('COPY_MAX_TOKENS=4096\nACCESS_TOKEN=hidden')).toBe('COPY_MAX_TOKENS=4096\nACCESS_TOKEN=[REDACTED]');
+  expect(redactOutput('MAX_TOKENS=unexpected-secret')).not.toContain('unexpected-secret');
+});

@@ -54,10 +54,11 @@ async function setup(completeImmediately = true) {
     await control.openBarrier;
     return id;
   });
+  const clearCredentials = vi.fn();
   const runner = new TaskRunner(task, [host], { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'dummy', baseUrl: fixture.baseUrl },
     [], terminal, terminal, openTerminal,
-    { event: (event) => events.push(structuredClone(event)), requestApproval: async () => false, cancelApproval() {} });
-  return { runner, terminal, sessions, events, openTerminal, control, fixture, requests: () => requests };
+    { clearCredentials, event: (event) => events.push(structuredClone(event)), requestApproval: async () => false, cancelApproval() {} });
+  return { clearCredentials, runner, terminal, sessions, events, openTerminal, control, fixture, requests: () => requests };
 }
 
 describe('stop and explicit continuation', () => {
@@ -65,6 +66,7 @@ describe('stop and explicit continuation', () => {
     const f = await setup();
     try {
       await f.runner.start();
+      expect(f.clearCredentials).toHaveBeenCalled();
       const id = f.sessions[0]!.id;
       f.runner.terminalInput(id, 'pwd\n');
       f.runner.stopOperation();
@@ -86,6 +88,7 @@ describe('stop and explicit continuation', () => {
       if (source === 'ctrl-c') f.runner.terminalInput(id, '\u0003'); else f.runner.stopOperation(source);
       f.runner.stopOperation(source); // Repeated clicks cannot inject duplicate controls or requests.
       await running;
+      expect(f.clearCredentials).toHaveBeenCalled();
       expect(f.requests()).toBe(1);
       expect(f.sessions[0]!.channel.writes).toEqual(source === 'terminal-close' ? [] : ['\u0003']);
       expect(() => f.runner.terminalInput(id, 'pwd\n')).toThrow('等待命令退出');

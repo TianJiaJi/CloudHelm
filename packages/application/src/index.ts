@@ -4,3 +4,5 @@ export * from './terminal-manager.js';
 export * from './host-serial-executor.js';
 export * from './clarification-coordinator.js';
 export * from './privileged-sessions.js';
+export * from './permission-aware-executor.js';
+export * from './sudo-credential-cache.js';

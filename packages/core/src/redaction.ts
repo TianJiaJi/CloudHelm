@@ -4,7 +4,12 @@ export function redactOutput(input: string): string {
   return input
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu, '[REDACTED PRIVATE KEY]')
     .replace(/(Authorization:\s*(?:Bearer|Basic)\s+)[^\s\r\n]+/giu, '$1[REDACTED]')
-    .replace(new RegExp(`(["']?${key}["']?\\s*[=:：]\\s*)("(?:\\\\.|[^"\\\\])*"|'[^']*'|[^\\s,;}\\r\\n]+)`, 'giu'), '$1[REDACTED]')
+    .replace(new RegExp(`(["']?${key}["']?\\s*[=:：]\\s*)("(?:\\\\.|[^"\\\\])*"|'[^']*'|[^\\s,;}\\r\\n]+)`, 'giu'), (match, prefix: string, value: string) => {
+      if (/(?:max|input|output|digest|completion)[_-]tokens["']?\s*[=:：]/iu.test(prefix)
+        && /^(?:\d+|"\d+"|'\d+')$/u.test(value)) return match;
+      const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : '';
+      return prefix + quote + '[REDACTED]' + quote;
+    })
     .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/gu, '[REDACTED KEY]');
 }
 

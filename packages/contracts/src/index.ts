@@ -82,7 +82,9 @@ export interface TaskView {
 }
 
 export interface OperationView {
-  failureKind?: 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unknown';
+  authentication?: 'succeeded' | 'required' | 'failed';
+  authenticationAttempts?: number;
+  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unknown';
   effects?: 'none' | 'possible';
   loginAs?: string;
   runAs?: string;
