@@ -52,6 +52,9 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus }: {
       if (pointer) return;
       if (!menu.contains(event.target as Node)) menu.hidePopover();
     }
+    function dismissOnPointerDown(event: PointerEvent): void {
+      if (!menu.contains(event.target as Node)) menu.hidePopover();
+    }
     menu.showPopover();
     position();
     menu.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
@@ -59,10 +62,12 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus }: {
     observer.observe(menu);
     window.addEventListener('resize', position);
     window.addEventListener('scroll', dismissOnScroll, true);
+    if (pointer) window.addEventListener('pointerdown', dismissOnPointerDown, true);
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', position);
       window.removeEventListener('scroll', dismissOnScroll, true);
+      window.removeEventListener('pointerdown', dismissOnPointerDown, true);
       menu.hidePopover();
       // Only take focus back when the menu currently owns it; a menu item that
       // opened a dialog must keep its own focus.
@@ -71,7 +76,9 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus }: {
     };
   }, [anchorKey, element, restoreFocus]);
 
-  return <div ref={ref} popover="auto" role="menu" aria-label={label} className={styles.menuSurface}
+  // macOS fires contextmenu before pointerup. Auto popovers would dismiss on
+  // that same opening gesture; pointer menus dismiss on the next pointerdown.
+  return <div ref={ref} popover={pointer ? 'manual' : 'auto'} role="menu" aria-label={label} className={styles.menuSurface}
     onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
     onClick={(event) => { if ((event.target as Element).closest('[role="menuitem"]')) close(); }}
     onToggle={(event) => { if ((event.nativeEvent as ToggleEvent).newState === 'closed') close(); }}
