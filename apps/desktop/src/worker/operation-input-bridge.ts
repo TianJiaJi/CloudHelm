@@ -1,15 +1,19 @@
-import { InteractionCoordinator, type InteractionSink, type TerminalManager } from '@cloudhelm/application';
+import { InteractionCoordinator, SudoCredentialCache, type InteractionSink, type TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, SshTransport } from '@cloudhelm/adapters';
-import { isSudo, operationFingerprint, type ExecutionOptions, type InputRequest, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
+import { describeSudoOutcome, isSudoStatusProbe, isSudo, operationFingerprint, type ExecutionOptions, type InputRequest, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 import { aptHasNoRemovals, inputPlan } from './operation-input-plan.js';
 
 /** The reviewed command remains unchanged. Only the process transport owns sudo's credential channel. */
 export class OperationInputBridge implements OperationExecutor {
   private readonly analyzer = new BashAnalyzer();
+  private readonly credentials = new SudoCredentialCache();
+  clearTask(taskId: string): void { this.credentials.clearTask(taskId); }
+  clearTerminal(terminalId: string): void { this.credentials.clearTerminal(terminalId); }
 
   constructor(private readonly terminal: TerminalManager, private readonly ssh: SshTransport,
     private readonly interactions: InteractionCoordinator,
-    private readonly onAutoConfirmation?: (taskId: string, hostId: string) => void) {}
+    private readonly onAutoConfirmation?: (taskId: string, hostId: string) => void,
+    private readonly onCredentialReuse?: (taskId: string, hostId: string, operationId: string) => void) {}
 
   async execute(operation: ProposedOperation, fingerprint: string, signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
     if (operation.kind !== 'command') return this.terminal.execute(operation, fingerprint, signal, options);
@@ -24,6 +28,8 @@ export class OperationInputBridge implements OperationExecutor {
     const analysis = await this.analyzer.analyze(operation.command);
     if (analysis.hasError) throw new Error('Cannot authenticate an incomplete command parse');
     if (!current()) throw new Error('Operation authorization expired during analysis');
+    if (isSudoStatusProbe(analysis)) return { operationId: operation.id, status: 'failed', failureKind: 'unsupported', effects: 'none',
+      stdoutTail: 'No command sent. sudo status/list/validate probes are not supported by isolated per-operation authentication and do not establish whether the next sudo command can work. Execute the actual bounded sudo operation through normal review; the private authentication channel will request input when needed. This is a recoverable tool limitation, not an authentication rejection.' };
     const plan = inputPlan(analysis);
     if (!plan) {
       if (analysis.calls.some((call) => /(?:^|\/)(?:sudo|su)$/u.test(call.name))) {
@@ -33,12 +39,17 @@ export class OperationInputBridge implements OperationExecutor {
       }
       return this.terminal.execute(operation, fingerprint, signal, options);
     }
+    const binding = { ...operation.scope, connectionGeneration };
+    let lastAnswer: Buffer | undefined;
+    let reused = false;
+    const dropAnswer = () => { lastAnswer?.fill(0); lastAnswer = undefined; };
     let active = true;
     let waiting: string | undefined;
     let attempts = 0;
     const maxAttempts = 3 * Math.max(1, analysis.steps?.filter(({ call }) => isSudo(call)).length ?? 0);
     const cancel = () => {
       if (!active) return;
+      this.credentials.clearTask(taskId); dropAnswer();
       if (waiting) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
       waiting = undefined;
       this.interactions.cancelForTerminal(terminalId);
@@ -55,6 +66,18 @@ export class OperationInputBridge implements OperationExecutor {
         cancel(); return;
       }
       waiting = challenge.id;
+      // Reuse at most once. A new challenge after reuse means it was not accepted.
+      if (reused) { this.credentials.forget(binding); dropAnswer(); }
+      const cached = !reused && attempts === 1 ? this.credentials.read(binding) : undefined;
+      if (cached !== undefined) {
+        reused = true;
+        if (current() && this.terminal.answerAuthentication(terminalId, operation.id, challenge.id, cached)) {
+          waiting = undefined;
+          this.onCredentialReuse?.(taskId, hostId, operation.id);
+          return;
+        }
+        this.credentials.forget(binding); cancel(); return;
+      }
       const sink: InteractionSink = {
         isWaiting: (request) => active && current() && waiting === challenge.id
           && request.operationId === operation.id && request.connectionGeneration === connectionGeneration,
@@ -63,6 +86,7 @@ export class OperationInputBridge implements OperationExecutor {
           const sent = this.terminal.answerAuthentication(terminalId, operation.id, challenge.id, answer);
           waiting = undefined;
           if (!sent) cancel();
+          else { dropAnswer(); lastAnswer = Buffer.from(answer); }
           return sent;
         }
       };
@@ -70,7 +94,7 @@ export class OperationInputBridge implements OperationExecutor {
       const details: Omit<InputRequest, 'id' | 'expiresAt'> = {
         taskId, operationId: operation.id, hostId, terminalId, terminalGeneration, connectionGeneration,
         kind: 'secret', recipient: 'sudo', prompt: 'sudo 身份验证',
-        reason: `为了完成“${goal}”，本次已审核的 sudo 命令需要密码。密码仅交给 sudo 的独立认证进程，不进入命令输入、AI 上下文或日志。`
+        reason: `为了完成“${goal}”，本次已审核的 sudo 命令需要密码。密码仅交给 sudo 的独立认证进程，不进入命令输入、AI 上下文或日志。成功后可在本任务运行期间内存复用最多 5 分钟；暂停、断线、认证失败或任务结束即清除。`
       };
       void this.interactions.request(details, sink).then((status) => {
         if (status !== 'submitted' && active) cancel();
@@ -91,17 +115,16 @@ export class OperationInputBridge implements OperationExecutor {
     const leaseCheck = setInterval(() => { if (!current()) cancel(); }, 100);
     signal?.addEventListener('abort', cancel, { once: true });
     try {
-      const result = await this.terminal.execute(operation, fingerprint, signal, options);
-      // sudo itself reports authentication/policy rejection. Ordinary payload errors remain failures.
-      if (plan.auth && result.status === 'failed' && /(?:^|[\r\n])sudo:\s/iu.test(result.stdoutTail)) {
-        result.requiresUserAction = true;
-        result.failureKind = 'authentication-failed';
-        result.effects = 'possible';
-        this.terminal.suspend(terminalId);
-      }
+      const result = describeSudoOutcome(analysis, await this.terminal.execute(operation, fingerprint, signal, options), attempts);
+      if (result.authentication === 'succeeded' && lastAnswer && current()) this.credentials.remember(binding, lastAnswer);
+      if (result.authentication === 'failed' || result.status === 'unknown' || result.status === 'handed-over') this.credentials.clearTask(taskId);
+      if (result.authentication === 'failed') this.terminal.suspend(terminalId);
       return result;
+    } catch (error) {
+      this.credentials.clearTask(taskId);
+      throw error;
     } finally {
-      active = false;
+      active = false; dropAnswer();
       if (waiting) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
       clearInterval(leaseCheck);
       signal?.removeEventListener('abort', cancel);

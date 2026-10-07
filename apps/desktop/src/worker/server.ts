@@ -1,8 +1,8 @@
 import { PrivilegedRuntime } from './privileged-runtime.js';
 import { safeDiagnostic } from '@cloudhelm/core';
 import { eventDiagnostic } from './diagnostic-events.js';
-import { HostSerialExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
-import { HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
+import { HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
+import { BashAnalyzer, HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import type { RawTerminal } from '@cloudhelm/core';
 import type { ApprovalView, InputRequestView } from '@cloudhelm/contracts';
@@ -23,6 +23,7 @@ export class WorkerServer {
   private readonly terminal: TerminalManager;
   private readonly executor: HostSerialExecutor;
   private readonly privileged: PrivilegedRuntime;
+  private readonly commands: OperationInputBridge;
   private readonly hosts = new Map<string, RuntimeHost>();
   private readonly interactions: InteractionCoordinator;
   private readonly tasks = new Map<string, TaskRunner>();
@@ -34,7 +35,7 @@ export class WorkerServer {
       data: (terminalId, data, operationId) => this.post({ event: { type: 'terminal-data', terminalId, data, operationId } }),
       completed: (result) => { for (const runner of this.tasks.values()) runner.recordRemoteResult(result); },
       state: (terminalId, state) => {
-        if (state !== 'agent') this.interactions?.cancelForTerminal(terminalId);
+        if (state !== 'agent') { this.interactions?.cancelForTerminal(terminalId); this.commands?.clearTerminal(terminalId); }
         this.post({ event: { type: 'terminal-state', terminalId,
           hostId: this.terminal.hostOf(terminalId) ?? '', taskId: this.terminal.taskOf(terminalId), state } });
       }
@@ -47,14 +48,15 @@ export class WorkerServer {
       } } }),
       closed: (id) => this.post({ event: { type: 'input-close', id } })
     });
-    const commands = new OperationInputBridge(this.terminal, this.ssh, this.interactions,
+    this.commands = new OperationInputBridge(this.terminal, this.ssh, this.interactions,
       (taskId, hostId) => this.post({ event: { type: 'task-message', taskId, role: 'system',
-        text: `已审核的安装操作在主机 ${hostId} 上需要普通继续确认，APT 报告 0 项删除，已自动回答 y。`, createdAt: Date.now() } }));
+        text: `已审核的安装操作在主机 ${hostId} 上需要普通继续确认，APT 报告 0 项删除，已自动回答 y。`, createdAt: Date.now() } }),
+      (taskId, hostId, operationId) => this.post({ diagnostic: { event: 'authentication.reused', taskId, hostId, operationId } }));
     this.privileged = new PrivilegedRuntime({ terminal: this.terminal, ssh: this.ssh,
-      ordinary: new FileOperationExecutor(this.terminal, this.ssh, commands),
+      ordinary: new FileOperationExecutor(this.terminal, this.ssh, this.commands),
       jump: (host) => host.jumpHostId ? this.hosts.get(host.jumpHostId) : undefined,
       input: (request, signal) => this.requestPrivateInput(request, signal) });
-    this.executor = new HostSerialExecutor(this.privileged);
+    this.executor = new HostSerialExecutor(new PermissionAwareExecutor(this.privileged, new BashAnalyzer()));
   }
 
   private post(message: RuntimeMessage): void {
@@ -119,6 +121,7 @@ export class WorkerServer {
         if (this.tasks.has(call.task.id)) throw new Error('Task is already active');
         const runner = new TaskRunner(call.task, call.hosts, call.profile, call.priorOperations ?? [], this.terminal, this.executor,
           (hostId, taskId) => this.openTerminal(hostId, taskId), {
+            clearCredentials: () => this.commands.clearTask(call.task.id),
             diagnostic: (diagnostic) => this.send({ diagnostic: safeDiagnostic(diagnostic) }),
             event: (event) => this.post({ event } as RuntimeMessage),
             requestApproval: (view) => this.requestApproval(view),

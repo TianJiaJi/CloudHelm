@@ -1,3 +1,4 @@
+import { operationFeedback } from './operation-feedback.js';
 import { createHash } from 'node:crypto';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { Agent } from '@earendil-works/pi-agent-core';
@@ -17,6 +18,7 @@ import { WorkJournal } from './work-journal.js';
 import { LocalFileAccess } from './local-file-access.js';
 
 export interface TaskSignals {
+  clearCredentials?(): void;
   diagnostic?(event: DiagnosticEvent): void;
   event(event: AppEvent | { type: 'approval-open'; value: ApprovalView } | { type: 'approval-close'; id: string }
     | { type: 'operation'; value: OperationView } | { type: 'task-status'; taskId: string; status: TaskStatus; summary?: string; requestCount?: number }): void;
@@ -271,6 +273,7 @@ export class TaskRunner {
 
   /** Releases the task's terminals after the conversation has been deleted. */
   dispose(): void {
+    this.signals.clearCredentials?.();
     this.privileged?.close();
     for (const terminalId of this.terminalByHost.values()) this.terminal.close(terminalId);
     this.terminalByHost.clear();
@@ -311,6 +314,7 @@ export class TaskRunner {
   updateHostSafety(hostId: string, mode: ReviewMode, protectedPaths: string[], revision: number): void {
     const host = this.hosts.find((candidate) => candidate.id === hostId);
     if (!host) return;
+    this.signals.clearCredentials?.();
     host.defaultMode = mode;
     host.protectedPaths = [...protectedPaths];
     host.policyRevision = revision;
@@ -362,7 +366,7 @@ export class TaskRunner {
       this.lastFailureKey = '';
     }
     return {
-      content: [{ type: 'text' as const, text: `Operation ID: ${operation.id}\nHost: ${hostLabel}\nStatus: ${result.status}\nExit: ${result.exitCode ?? 'unknown'}\nFailure kind: ${result.failureKind ?? 'none'}\nEffects: ${result.effects ?? (result.status === 'succeeded' ? 'completed' : 'possible')}\nOutput tail:\n${redactOutput(result.stdoutTail)}` }],
+      content: [{ type: 'text' as const, text: operationFeedback(result, hostLabel) }],
       details: undefined, isError: result.status !== 'succeeded'
     };
   }
@@ -410,6 +414,7 @@ export class TaskRunner {
         if (!operation) return;
         operation.status = result.status === 'succeeded' ? 'succeeded' : result.status === 'failed' ? 'failed' : 'unknown';
         operation.exitCode = result.exitCode;
+        operation.authentication = result.authentication; operation.authenticationAttempts = result.authenticationAttempts;
         operation.failureKind = result.failureKind; operation.effects = result.effects;
         operation.logRef = result.logRef;
         operation.outputTail = redactOutput(result.stdoutTail);
@@ -465,6 +470,7 @@ export class TaskRunner {
     if (!operation) return;
     operation.status = result.status === 'succeeded' ? 'succeeded' : result.status === 'failed' ? 'failed' : 'unknown';
     operation.exitCode = result.exitCode;
+    operation.authentication = result.authentication; operation.authenticationAttempts = result.authenticationAttempts;
     operation.failureKind = result.failureKind; operation.effects = result.effects;
     operation.outputTail = redactOutput(result.stdoutTail);
     operation.logRef = result.logRef;
@@ -530,7 +536,7 @@ export class TaskRunner {
 
   private setStatus(status: TaskStatus, summary?: string): void {
     this.status = status;
-    if (!this.isRunning()) this.privileged?.close();
+    if (!this.isRunning()) { this.signals.clearCredentials?.(); this.privileged?.close(); }
     if (!this.isRunning()) for (const id of this.terminalByHost.values()) this.terminal.releaseIdle(id);
     this.signals.event({ type: 'task-status', taskId: this.task.id, status, summary, requestCount: this.requestCount });
   }

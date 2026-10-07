@@ -111,7 +111,7 @@ try:
     if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and '\0' not in arg for arg in argv):
         raise ValueError('Invalid process arguments')
     environment = {key: os.environ[key] for key in ('HOME', 'USER', 'LOGNAME') if key in os.environ}
-    environment.update(PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', LANG='C', LC_ALL='C', TERM='xterm-256color')
+    environment.update(PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', LANG='C.UTF-8', LC_ALL='C.UTF-8', TERM='xterm-256color', PAGER='cat', GIT_PAGER='cat', SYSTEMD_PAGER='cat', SYSTEMD_PAGERSECURE='1', GIT_TERMINAL_PROMPT='0', GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.quotepath', GIT_CONFIG_VALUE_0='false')
     user = pwd.getpwuid(os.getuid())
     cwd = launch['cwd']
     directory = '~' + cwd[len(user.pw_dir):] if cwd == user.pw_dir or cwd.startswith(user.pw_dir + '/') else cwd

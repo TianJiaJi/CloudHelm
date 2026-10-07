@@ -170,6 +170,17 @@ describe('restored conversations and fixed request overhead', () => {
     expect(JSON.stringify(message)).not.toContain('long output');
   });
 
+  it('resumes successful work without restarting probes but keeps partial failures in verification', () => {
+    expect(JSON.stringify(recoveryContextMessage([{ ...operation, status: 'succeeded', authentication: 'succeeded', exitCode: 0 }])))
+      .toContain('Continue the first unfinished task step');
+    expect(JSON.stringify(recoveryContextMessage([{ ...operation, status: 'failed', failureKind: 'authentication-required', effects: 'none' }])))
+      .toContain('No unresolved operation');
+    for (const effects of ['possible', undefined] as const) {
+      expect(JSON.stringify(recoveryContextMessage([{ ...operation, status: 'failed', effects }])))
+        .toContain('first verify actual remote state');
+    }
+  });
+
   it('counts actual Pi system instructions, authorization paths and tool schemas in the input budget', () => {
     const agent = new Agent({ streamFn: () => { throw new Error('This context-only test must not send a model request'); }, initialState: {
       systemPrompt: `CloudHelm authorization paths: ${JSON.stringify(Array.from({ length: 100 }, (_, index) => `/selected/directory/${index}`))}`,

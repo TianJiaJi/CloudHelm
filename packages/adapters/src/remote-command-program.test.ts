@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -52,6 +53,16 @@ os.execvp(sys.argv[2], sys.argv[2:])
 }
 
 describe.skipIf(process.platform === 'win32')('real process transport without command wrappers', () => {
+  it('finishes git log without a pager and preserves Chinese commit messages', async () => {
+    const f = await fixture();
+    const git = (args: string[]) => execFileSync('git', args, { cwd: f.directory, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+    git(['init', '-q']);
+    git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', '修复部署流程']);
+    // If the helper fails to override configured paging, this terminates with 91.
+    git(['config', 'core.pager', 'sh -c "exit 91"']);
+    f.launch(['git', 'log', '--oneline', '-3']);
+    expect(await f.complete()).toMatchObject({ code: 0, output: expect.stringContaining('修复部署流程') });
+  });
   it('shows the full remote prompt and exact command, and initializes the PTY size', async () => {
     const f = await fixture();
     f.launch(['stty', 'size'], false, 'stty size');

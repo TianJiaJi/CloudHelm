@@ -1,5 +1,6 @@
 /** Sanitized diagnostics only. Never transport credentials or raw model/IPC objects. */
 export interface DiagnosticRecord {
+  authentication?: string; authenticationAttempts?: number; failureKind?: string; effects?: string;
   event: string; level?: 'debug' | 'info' | 'error';
   taskId?: string; hostId?: string; operationId?: string; requestId?: string;
   text?: string; command?: string; cwd?: string; path?: string; role?: string;

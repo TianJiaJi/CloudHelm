@@ -14,7 +14,8 @@ export function eventDiagnostic(message: RuntimeMessage) {
     case 'operation': return safeDiagnostic({ event: 'operation', taskId: event.value.taskId, hostId: event.value.hostId,
       operationId: event.value.id, runAs: event.value.runAs, loginAs: event.value.loginAs, status: event.value.status, exitCode: event.value.exitCode,
       command: event.value.kind === 'command' ? event.value.preview : undefined,
-      text: event.value.kind === 'command' ? event.value.outputTail : undefined });
+      text: event.value.kind === 'command' ? event.value.outputTail : undefined,
+      authentication: event.value.authentication, authenticationAttempts: event.value.authenticationAttempts, failureKind: event.value.failureKind, effects: event.value.effects });
     case 'input-open': return safeDiagnostic({ event: 'authentication.open', taskId: event.value.taskId,
       hostId: event.value.hostId, operationId: event.value.operationId, requestId: event.value.id, status: event.value.kind });
     case 'input-close': return safeDiagnostic({ event: 'authentication.close', requestId: event.id });
