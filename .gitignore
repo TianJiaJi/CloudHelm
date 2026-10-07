@@ -28,6 +28,9 @@ desktop.ini
 .cursor/
 .aider*
 
+# ---- 浏览器自动化产物 ----
+.playwright-cli/
+
 # ---- 依赖 ----
 node_modules/
 bower_components/
