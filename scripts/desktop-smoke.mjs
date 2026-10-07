@@ -2,7 +2,7 @@
 import { checkClarificationRuntime } from './check-clarification-runtime.mjs';
 import assert from 'node:assert/strict';
 import console from 'node:console';
-import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from '@playwright/test';
 import { checkPrivateKeyPicker } from './private-key-picker-probe.mjs';
 import { checkHostConnectionTest } from './host-connection-probe.mjs';
+import { DesktopProcess, cleanupDesktopSmoke, withTimeout } from './desktop-process.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = path.join(root, 'apps/desktop');
@@ -34,12 +35,24 @@ delete environment.ELECTRON_RENDERER_URL;
 let application;
 let page;
 let stderr = '';
+const instances = new Set();
+let currentProcess;
 
-try {
+async function launch() {
   application = await electron.launch({ executablePath,
     args: packaged ? [] : [path.join(desktop, 'out/main/index.js')], env: environment, timeout: 30_000 });
+  currentProcess = new DesktopProcess(application);
+  instances.add(currentProcess);
   application.process().stderr?.on('data', (chunk) => { stderr += String(chunk); });
+  // Retain descendants for cleanup even if firstWindow fails and the main process exits.
+  await currentProcess.capture();
   page = await application.firstWindow({ timeout: 30_000 });
+  await currentProcess.capture();
+  return page;
+}
+
+try {
+  page = await launch();
   const rendererErrors = [];
   page.on('pageerror', (error) => rendererErrors.push(error.message));
   await page.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
@@ -82,12 +95,9 @@ try {
   if (packaged) assert.equal(runtime.packaged, true);
   page = await checkClarificationRuntime(page, async () => {
     // Crash only this isolated smoke-test instance, preserving its temporary database.
-    const previous = application;
-    await new Promise((resolve) => { previous.process().once('exit', resolve); previous.process().kill('SIGKILL'); });
-    application = await electron.launch({ executablePath,
-      args: packaged ? [] : [path.join(desktop, 'out/main/index.js')], env: environment, timeout: 30_000 });
-    application.process().stderr?.on('data', (chunk) => { stderr += String(chunk); });
-    const next = await application.firstWindow({ timeout: 30_000 });
+    await currentProcess.crash();
+    instances.delete(currentProcess);
+    const next = await launch();
     next.on('pageerror', (error) => rendererErrors.push(error.message));
     await next.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
     return next;
@@ -106,10 +116,18 @@ try {
   assert.ok(afterCanceledQuit.profile, 'Application state must remain readable after a canceled/repeated quit');
   console.log(JSON.stringify({ check: 'desktop-smoke', ...boundary, ...runtime }, null, 2));
 } catch (error) {
-  if (page && !page.isClosed()) await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
+  // Print the original failure before diagnostics or cleanup can fail themselves.
+  console.error(error);
+  process.exitCode = 1;
+  if (page && !page.isClosed()) await withTimeout(() => page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, timeout: 5_000 }), 6_000, 'Failure screenshot').catch(() => {});
   if (stderr) console.error(stderr.slice(-8000));
-  throw error;
+  await writeFile(path.join(output, 'failure.log'), `${error instanceof Error ? error.stack : String(error)}\n${stderr}`)
+    .catch((failure) => console.warn('Could not write smoke failure log', failure));
 } finally {
-  await application?.close().catch(() => { application.process().kill(); });
-  await rm(userData, { recursive: true, force: true });
+  await cleanupDesktopSmoke(instances, userData, (message, error) => {
+    console.warn(message, error);
+    process.exitCode = 1;
+  });
 }
+// A failed Playwright transport must not keep this CLI alive after bounded cleanup.
+process.exit(process.exitCode ?? 0);
