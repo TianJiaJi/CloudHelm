@@ -71,6 +71,8 @@ try {
   assert.ok(boundary.providers > 0);
   await checkPrivateKeyPicker(application, page);
   await checkHostConnectionTest(page, path.join(desktop, 'package.json'));
+  // utilityProcess.fork only accepts string arguments; the packaged run passes an empty
+  // bundle directory and the probe then skips its shared-chunk analyzer import.
   const runtime = await application.evaluate(async ({ app, safeStorage, utilityProcess }, input) => {
     const appPath = app.getAppPath();
     const grammarPath = input.packaged ? `${process.resourcesPath}/tree-sitter-bash.wasm` : input.grammarPath;
@@ -86,7 +88,7 @@ try {
       probe.on('exit', (code) => { if (code !== 0) { clearTimeout(timeout); reject(new Error(`Native/WASM probe exited ${code}`)); } });
     });
     return { packaged: app.isPackaged, appPath, native, safeStorageAvailable: available, credentialRoundtrip };
-  }, { packaged, grammarPath: path.join(desktop, 'resources/tree-sitter-bash.wasm'), probePath: path.join(root, 'scripts/desktop-probe.mjs'), bundleDirectory: packaged ? undefined : path.join(desktop, 'out/main') });
+  }, { packaged, grammarPath: path.join(desktop, 'resources/tree-sitter-bash.wasm'), probePath: path.join(root, 'scripts/desktop-probe.mjs'), bundleDirectory: packaged ? '' : path.join(desktop, 'out/main') });
   assert.equal(runtime.native.sqliteRoundtrip, true);
   assert.equal(runtime.native.wasmParsed, true);
   if (!packaged) {
