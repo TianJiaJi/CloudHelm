@@ -1,0 +1,4 @@
+#!/bin/sh
+# 提交前把 version.json 的版本同步到各 package.json 与 README.md（见 scripts/pre-commit-version.mjs）。
+root=$(git rev-parse --show-toplevel) || exit 1
+exec node "$root/scripts/pre-commit-version.mjs"

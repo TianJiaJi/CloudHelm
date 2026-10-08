@@ -46,7 +46,7 @@ CloudHelm 是一个带 AI 助手的桌面 SSH 客户端，面向个人开发者�
 
 产物保留 7 天。当提交更新根目录 `version.json` 的版本号并推送到默认分支时，CI 会自动把三平台安装包发布到 [GitHub Releases](https://github.com/TianJiaJi/CloudHelm/releases)（标记为预发布，自动生成更新说明）；未更新版本号的提交只构建、不发布。安装包当前未签名／公证。CI 构建成功不等于安装和所有交互流程已完成人工验收。
 
-修改版本号只需编辑根目录 `version.json` 并运行 `pnpm version:set`，它会同步各包版本与 README 说明；`pnpm version:check` 校验一致性。
+修改版本号只需编辑根目录 `version.json` 并提交：`pnpm install` 会启用 pre-commit 钩子（`.githooks/pre-commit`），提交时自动把版本同步进各包 `package.json` 与 README 说明并一并暂存；也可手动运行 `pnpm version:set`。`pnpm version:check` 在 CI 中兜底校验一致性。
 
 从源码启动需要 Node.js 24、pnpm 11.9.0，以及本平台原生模块构建工具：
 

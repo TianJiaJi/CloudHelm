@@ -16,6 +16,7 @@
     "lint:deps": "depcruise --config .dependency-cruiser.cjs apps packages",
     "lint:lines": "node scripts/check-lines.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm lint && pnpm lint:deps && pnpm lint:lines && pnpm version:check",
+    "prepare": "node scripts/setup-hooks.mjs",
     "version:set": "node scripts/set-version.mjs",
     "version:check": "node scripts/set-version.mjs --check",
     "test:ui": "node scripts/ui-smoke.mjs",
