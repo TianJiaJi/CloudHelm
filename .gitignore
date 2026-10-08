@@ -130,3 +130,4 @@ tmp/
 secrets.json
 credentials.json
 .service-account.json
+plans/*
