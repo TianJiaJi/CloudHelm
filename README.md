@@ -4,7 +4,7 @@ CloudHelm 是一个带 AI 助手的桌面 SSH 客户端，面向个人开发者�
 
 **不需要先创建任务。** 点击主机打开终端，直接开始对话；后台自动记录操作与审核过程。每个新对话只绑定发起时的一台主机，未连接主机的自由对话不能操作远端。
 
-当前版本为 **0.1.0，开发中**，采用 [AGPL-3.0-only](LICENSE) 许可证。桌面构建目标为 macOS Apple Silicon、macOS Intel 和 Windows x64；自动测试与真实环境验收的区别见[验收状态](docs/STATUS.md)。
+当前版本为 **0.2.0，开发中**，采用 [AGPL-3.0-only](LICENSE) 许可证。桌面构建目标为 macOS Apple Silicon、macOS Intel 和 Windows x64；自动测试与真实环境验收的区别见[验收状态](docs/STATUS.md)。
 
 ## 可以做什么
 
