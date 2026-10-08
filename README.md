@@ -44,7 +44,7 @@ CloudHelm 是一个带 AI 助手的桌面 SSH 客户端，面向个人开发者�
 | macOS Intel | `CloudHelm-macos-x64` | DMG |
 | Windows x64 | `CloudHelm-windows-x64` | NSIS 安装 EXE |
 
-产物保留 7 天。当提交更新根目录 `version.json` 的版本号并推送到默认分支时，CI 会自动把三平台安装包发布到 [GitHub Releases](https://github.com/TianJiaJi/CloudHelm/releases)（标记为预发布，自动生成更新说明）；未更新版本号的提交只构建、不发布。安装包当前未签名／公证。CI 构建成功不等于安装和所有交互流程已完成人工验收。
+产物保留 7 天。当提交更新根目录 `version.json` 的版本号并推送到 `dev` 分支（开发仓库主线；总仓库的默认分支同理）时，CI 会自动把三平台安装包发布到 [GitHub Releases](https://github.com/TianJiaJi/CloudHelm/releases)（标记为预发布，自动生成更新说明）；未更新版本号的提交只构建、不发布。发布失败或中断需要补发时，可在 Actions 手动运行 CI 并勾选 `force_publish`，为标签尚未创建的当前版本补建预发行。安装包当前未签名／公证。CI 构建成功不等于安装和所有交互流程已完成人工验收。
 
 修改版本号只需编辑根目录 `version.json` 并提交：`pnpm install` 会启用 pre-commit 钩子（`.githooks/pre-commit`），提交时自动把版本同步进各包 `package.json` 与 README 说明并一并暂存；也可手动运行 `pnpm version:set`。`pnpm version:check` 在 CI 中兜底校验一致性。
 

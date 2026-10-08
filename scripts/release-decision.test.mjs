@@ -13,6 +13,17 @@ describe('release decision', () => {
       .toMatchObject({ shouldPublish: false });
   });
 
+  it('补发时不看 version.json 是否变更，但已存在的标签仍然不重复发布', () => {
+    expect(decideRelease({ version: '0.2.1', versionFileChanged: false, tagExists: false, forcePublish: true }))
+      .toMatchObject({ shouldPublish: true, tag: 'v0.2.1', reason: expect.stringContaining('补发 v0.2.1') });
+    expect(decideRelease({ version: '0.2.1', versionFileChanged: true, tagExists: true, forcePublish: true }))
+      .toMatchObject({ shouldPublish: false, reason: expect.stringContaining('已存在') });
+    expect(decideRelease({ version: '', versionFileChanged: false, tagExists: false, forcePublish: true }))
+      .toMatchObject({ shouldPublish: false, reason: '缺少版本号' });
+    expect(decideRelease({ version: '0.2.1', versionFileChanged: true, tagExists: false, forcePublish: false }))
+      .toMatchObject({ shouldPublish: true });
+  });
+
   it('never publishes without a usable version', () => {
     expect(decideRelease({ version: '', versionFileChanged: true, tagExists: false })).toMatchObject({ shouldPublish: false, reason: '缺少版本号' });
   });

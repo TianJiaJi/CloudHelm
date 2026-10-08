@@ -136,9 +136,9 @@ pnpm --filter @cloudhelm/desktop exec electron-builder --win nsis --x64 --publis
 
 1. 编辑根目录 `version.json`（只改这一处）。`pnpm install` 的 prepare 生命周期会把 git `core.hooksPath` 指向 `.githooks`，提交时 pre-commit 钩子自动同步根与各 workspace `package.json` 的 `version`（含 `apps/desktop`，即 electron-builder 与 `app.getVersion()` 的来源）以及 README 版本说明并加入暂存；不想用钩子时可手动运行 `pnpm version:set <新版本>`。
 2. 提交并推送 `version.json` 与同步结果到默认分支。
-3. CI 在三平台构建与检查全部通过后，若本次 push 修改了 `version.json` 且 `v<版本>` 标签不存在，自动创建 GitHub Release（**标记为预发布**，自动生成更新说明）并附上 DMG×2 与 NSIS 安装包；其余情况只构建、不发布。
+3. CI 在三平台构建与检查全部通过后，若本次 push 修改了 `version.json` 且 `v<版本>` 标签不存在，自动创建 GitHub Release（**标记为预发布**，自动生成更新说明）并附上 DMG×2 与 NSIS 安装包；其余情况只构建、不发布。发布 job 只在推送到 `dev`（开发仓库主线）或默认分支（总仓库）时运行，其余分支的推送只构建。
 
-判定逻辑在 `scripts/release-decision.mjs`（含单元测试）；同步逻辑在 `scripts/set-version.mjs`（`--check` 供 CI 校验），钩子逻辑在 `scripts/pre-commit-version.mjs`（含单元测试；版本不一致且未改 `version.json` 时会拦截提交，避免不一致进入仓库）。同一版本的标签已存在时不会重复发布；如发布中断需要补发，可在 GitHub 上手动用同一标签创建 Release。
+判定逻辑在 `scripts/release-decision.mjs`（含单元测试）；同步逻辑在 `scripts/set-version.mjs`（`--check` 供 CI 校验），钩子逻辑在 `scripts/pre-commit-version.mjs`（含单元测试；版本不一致且未改 `version.json` 时会拦截提交，避免不一致进入仓库）。同一版本的标签已存在时不会重复发布；如发布中断需要补发，可在 Actions 页面手动运行 CI 并勾选 `force_publish`（标签不存在时自动补发当前版本）。
 
 [CI 工作流](../.github/workflows/ci.yml) 在 push、Pull Request 和手动触发时运行：
 
