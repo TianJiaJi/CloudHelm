@@ -8,10 +8,12 @@ import console from 'node:console';
 import {
   README_FILE, VERSION_FILE, PACKAGE_FILES, buildSyncedFiles, findInconsistencies, parseVersionFile
 } from './set-version.mjs';
+import { CHANGELOG_FILE, hasVersionEntry, withDefaultEntry } from './changelog.mjs';
 
 /**
  * pre-commit 钩子：让「只改 version.json」成为一次完整提交。
  * - version.json 已暂存：以它为准重写各 package.json 与 README，并把这些文件加入暂存区；
+ *   同时若 CHANGELOG.md 缺该版本条目，自动补一条默认更新日志（缺条目只补写不拦截）。
  * - version.json 未暂存但磁盘或暂存区不一致：拦截提交，提示手动同步，避免不一致进入仓库。
  * 版本一致性以 version.json 为唯一权威来源（见 AGENTS.md）。
  */
@@ -79,7 +81,7 @@ export async function runHook(root, io = {}) {
     diskProblems,
     indexProblems
   });
-  if (decision.action === 'block') return { ...decision, rewritten: [], staged: [] };
+  if (decision.action === 'block') return { ...decision, rewritten: [], staged: [], changelogDefault: false };
 
   const synced = buildSyncedFiles(version, packageTexts, readmeText);
   const rewritten = [];
@@ -89,10 +91,16 @@ export async function runHook(root, io = {}) {
     await writeFile(path.join(root, file), text);
     rewritten.push(file);
   }
+  // 升版提交缺更新日志条目时自动补默认条目（缺条目只补写不拦截，见 scripts/changelog.mjs）。
+  const changelogText = await readFile(path.join(root, CHANGELOG_FILE), 'utf8').catch(() => '');
+  const changelogDefault = decision.action === 'sync' && Boolean(changelogText) && !hasVersionEntry(changelogText, version);
+  if (changelogDefault) await writeFile(path.join(root, CHANGELOG_FILE), withDefaultEntry(changelogText, version));
+
   // 工作区与暂存区不一致的同步文件一律并入本次提交，保证提交快照自身一致。
-  const staged = await git.dirtyFiles(SYNC_FILES);
+  const syncFiles = decision.action === 'sync' && changelogText ? [...SYNC_FILES, CHANGELOG_FILE] : SYNC_FILES;
+  const staged = await git.dirtyFiles(syncFiles);
   if (staged.length) await git.add(staged);
-  return { ...decision, version, problems: [...new Set([...diskProblems, ...indexProblems])], rewritten, staged };
+  return { ...decision, version, problems: [...new Set([...diskProblems, ...indexProblems])], rewritten, staged, changelogDefault };
 }
 
 async function main() {
@@ -105,6 +113,7 @@ async function main() {
     return;
   }
   if (result.action !== 'sync') return;
+  if (result.changelogDefault) console.log(`pre-commit 缺更新日志条目，已补默认条目：${CHANGELOG_FILE}（可润色后 amend 或补充提交）`);
   if (result.rewritten.length) console.log(`pre-commit 已同步版本文件：${result.rewritten.join('、')}`);
   if (result.staged.length) console.log(`pre-commit 已加入暂存：${result.staged.join('、')}`);
 }

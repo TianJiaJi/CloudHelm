@@ -1,7 +1,7 @@
 {
   "name": "cloudhelm",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@11.9.0",
   "engines": {
@@ -15,10 +15,11 @@
     "lint": "eslint apps packages scripts",
     "lint:deps": "depcruise --config .dependency-cruiser.cjs apps packages",
     "lint:lines": "node scripts/check-lines.mjs",
-    "check": "pnpm typecheck && pnpm test && pnpm lint && pnpm lint:deps && pnpm lint:lines && pnpm version:check",
+    "check": "pnpm typecheck && pnpm test && pnpm lint && pnpm lint:deps && pnpm lint:lines && pnpm version:check && pnpm changelog:check",
     "prepare": "node scripts/setup-hooks.mjs",
     "version:set": "node scripts/set-version.mjs",
     "version:check": "node scripts/set-version.mjs --check",
+    "changelog:check": "node scripts/changelog.mjs --check",
     "test:ui": "node scripts/ui-smoke.mjs",
     "test:desktop": "node scripts/desktop-smoke.mjs",
     "test:desktop:packaged": "node scripts/desktop-smoke.mjs --packaged",

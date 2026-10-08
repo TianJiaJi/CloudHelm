@@ -4,7 +4,7 @@ CloudHelm 是一个带 AI 助手的桌面 SSH 客户端，面向个人开发者�
 
 **不需要先创建任务。** 点击主机打开终端，直接开始对话；后台自动记录操作与审核过程。每个新对话只绑定发起时的一台主机，未连接主机的自由对话不能操作远端。
 
-当前版本为 **0.2.1，开发中**，采用 [AGPL-3.0-only](LICENSE) 许可证。桌面构建目标为 macOS Apple Silicon、macOS Intel 和 Windows x64；自动测试与真实环境验收的区别见[验收状态](docs/STATUS.md)。
+当前版本为 **0.2.2，开发中**，采用 [AGPL-3.0-only](LICENSE) 许可证。桌面构建目标为 macOS Apple Silicon、macOS Intel 和 Windows x64；自动测试与真实环境验收的区别见[验收状态](docs/STATUS.md)。
 
 ## 可以做什么
 
@@ -44,9 +44,9 @@ CloudHelm 是一个带 AI 助手的桌面 SSH 客户端，面向个人开发者�
 | macOS Intel | `CloudHelm-macos-x64` | DMG |
 | Windows x64 | `CloudHelm-windows-x64` | NSIS 安装 EXE |
 
-产物保留 7 天。当提交更新根目录 `version.json` 的版本号并推送到 `dev` 分支（开发仓库主线；总仓库的默认分支同理）时，CI 会自动把三平台安装包发布到 [GitHub Releases](https://github.com/TianJiaJi/CloudHelm/releases)（标记为预发布，自动生成更新说明）；未更新版本号的提交只构建、不发布。发布失败或中断需要补发时，可在 Actions 手动运行 CI 并勾选 `force_publish`，为标签尚未创建的当前版本补建预发行。安装包当前未签名／公证。CI 构建成功不等于安装和所有交互流程已完成人工验收。
+产物保留 7 天。当提交更新根目录 `version.json` 的版本号并推送到 `dev` 分支（开发仓库主线；总仓库的默认分支同理）时，CI 会自动把三平台安装包发布到 [GitHub Releases](https://github.com/TianJiaJi/CloudHelm/releases)（标记为预发布；说明正文取自 [CHANGELOG.md](CHANGELOG.md) 对应版本的更新日志，末尾附加自动提交清单，缺条目时回退为纯自动生成）；未更新版本号的提交只构建、不发布。发布失败或中断需要补发时，可在 Actions 手动运行 CI 并勾选 `force_publish`，为标签尚未创建的当前版本补建预发行。安装包当前未签名／公证。CI 构建成功不等于安装和所有交互流程已完成人工验收。
 
-修改版本号只需编辑根目录 `version.json` 并提交：`pnpm install` 会启用 pre-commit 钩子（`.githooks/pre-commit`），提交时自动把版本同步进各包 `package.json` 与 README 说明并一并暂存；也可手动运行 `pnpm version:set`。`pnpm version:check` 在 CI 中兜底校验一致性。
+修改版本号只需编辑根目录 `version.json` 并提交：`pnpm install` 会启用 pre-commit 钩子（`.githooks/pre-commit`），提交时自动把版本同步进各包 `package.json` 与 README 说明并一并暂存；也可手动运行 `pnpm version:set`。`pnpm version:check` 在 CI 中兜底校验一致性。更新版本号后请在 [CHANGELOG.md](CHANGELOG.md) 补写该版本的更新内容（上一版本到本版本之间的全部更新）；忘了写不拦截，提交升版时钩子会自动补一条「修复了一些已知问题」默认条目，之后可继续润色。
 
 从源码启动需要 Node.js 24、pnpm 11.9.0，以及本平台原生模块构建工具：
 

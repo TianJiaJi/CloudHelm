@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { README_FILE, VERSION_FILE, PACKAGE_FILES } from './set-version.mjs';
+import { CHANGELOG_FILE, DEFAULT_CHANGELOG_ENTRY } from './changelog.mjs';
 import { SYNC_FILES, resolveHookDecision, runHook } from './pre-commit-version.mjs';
 
 const packageText = (version) => `${JSON.stringify({ name: 'pkg', private: true, version }, null, 2)}\n`;
@@ -11,24 +12,27 @@ const readmeText = (version) => `# CloudHelm\n\n当前版本为 **${version}，�
 
 const fixtures = [];
 
-async function makeRepo({ diskVersion, indexVersion = diskVersion }) {
+async function makeRepo({ diskVersion, indexVersion = diskVersion, changelog = '# 更新日志\n\n说明\n' }) {
   const root = await mkdtemp(path.join(tmpdir(), 'cloudhelm-hook-'));
   fixtures.push(root);
   for (const file of [...PACKAGE_FILES, README_FILE]) await mkdir(path.dirname(path.join(root, file)), { recursive: true });
   for (const file of PACKAGE_FILES) await writeFile(path.join(root, file), packageText(diskVersion));
   await writeFile(path.join(root, README_FILE), readmeText(diskVersion));
   await writeFile(path.join(root, VERSION_FILE), `${JSON.stringify({ version: diskVersion }, null, 2)}\n`);
+  await writeFile(path.join(root, CHANGELOG_FILE), changelog);
   const indexText = (file) => file === README_FILE ? readmeText(indexVersion) : packageText(indexVersion);
   return { root, indexText };
 }
 
 function fakeIo({ staged = [], dirty = [], indexText }) {
   const addCalls = [];
+  const dirtyCalls = [];
   return {
     addCalls,
+    dirtyCalls,
     io: {
       stagedFiles: async () => staged,
-      dirtyFiles: async () => dirty,
+      dirtyFiles: async (files) => { dirtyCalls.push(files); return dirty; },
       indexText: async (file) => indexText(file),
       add: async (files) => { addCalls.push(files); }
     }
@@ -108,5 +112,42 @@ describe('pre-commit version hook behaviour', () => {
     expect(result.action).toBe('pass');
     expect(result.rewritten).toEqual([]);
     expect(addCalls).toEqual([]);
+  });
+
+  it('升版提交缺更新日志条目时补写默认条目并把 CHANGELOG.md 并入本次提交', async () => {
+    const { root, indexText } = await makeRepo({ diskVersion: '0.1.0', indexVersion: '0.1.0' });
+    await writeFile(path.join(root, VERSION_FILE), `${JSON.stringify({ version: '0.2.0' }, null, 2)}\n`);
+    const { io, addCalls, dirtyCalls } = fakeIo({ staged: [VERSION_FILE], dirty: [...SYNC_FILES, CHANGELOG_FILE], indexText });
+    const result = await runHook(root, io);
+    expect(result.action).toBe('sync');
+    expect(result.changelogDefault).toBe(true);
+    const text = await readFile(path.join(root, CHANGELOG_FILE), 'utf8');
+    expect(text).toContain('## 0.2.0 - ');
+    expect(text).toContain(`- ${DEFAULT_CHANGELOG_ENTRY}`);
+    expect(dirtyCalls[0]).toEqual([...SYNC_FILES, CHANGELOG_FILE]);
+    expect(addCalls).toEqual([[...SYNC_FILES, CHANGELOG_FILE]]);
+  });
+
+  it('已有更新日志条目时不覆盖手写内容，也不补默认条目', async () => {
+    const entry = '# 更新日志\n\n## 0.2.0 - 2026-01-01\n\n### 新增\n\n- 手写条目\n';
+    const { root, indexText } = await makeRepo({ diskVersion: '0.1.0', indexVersion: '0.1.0', changelog: entry });
+    await writeFile(path.join(root, VERSION_FILE), `${JSON.stringify({ version: '0.2.0' }, null, 2)}\n`);
+    const { io, dirtyCalls } = fakeIo({ staged: [VERSION_FILE], dirty: [...SYNC_FILES, CHANGELOG_FILE], indexText });
+    const result = await runHook(root, io);
+    expect(result.action).toBe('sync');
+    expect(result.changelogDefault).toBe(false);
+    expect(await readFile(path.join(root, CHANGELOG_FILE), 'utf8')).toBe(entry);
+    expect(dirtyCalls[0]).toEqual([...SYNC_FILES, CHANGELOG_FILE]);
+  });
+
+  it('version.json 未参与提交时不补写更新日志', async () => {
+    const changelog = '# 更新日志\n\n说明\n';
+    const { root, indexText } = await makeRepo({ diskVersion: '0.2.0', changelog });
+    const { io, dirtyCalls } = fakeIo({ staged: ['docs/STATUS.md'], dirty: [], indexText });
+    const result = await runHook(root, io);
+    expect(result.action).toBe('pass');
+    expect(result.changelogDefault).toBe(false);
+    expect(await readFile(path.join(root, CHANGELOG_FILE), 'utf8')).toBe(changelog);
+    expect(dirtyCalls[0]).toEqual(SYNC_FILES);
   });
 });

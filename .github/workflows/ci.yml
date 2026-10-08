@@ -166,16 +166,37 @@ jobs:
         with:
           pattern: CloudHelm-*
           path: release-assets
+      - name: Prepare release notes from CHANGELOG
+        if: steps.decision.outputs.should-publish == 'true'
+        id: notes
+        env:
+          VERSION: ${{ steps.decision.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 更新日志小节正文作为 Release 说明；缺条目或提取失败时回退纯自动生成（不拦截）。
+          if node scripts/changelog.mjs "$VERSION" > release-notes.md 2> notes-error.log && [ -s release-notes.md ]; then
+            echo "has-notes=true" >> "$GITHUB_OUTPUT"
+          else
+            cat notes-error.log >&2 || true
+            echo "CHANGELOG.md 缺少 $VERSION 的条目或提取失败，Release 说明回退为自动生成" >&2
+            echo "has-notes=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create prerelease with installers
         if: steps.decision.outputs.should-publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.decision.outputs.tag }}
+          HAS_NOTES: ${{ steps.notes.outputs.has-notes }}
         run: |
           set -euo pipefail
           mapfile -d '' assets < <(find release-assets -type f -print0)
           if [ "${#assets[@]}" -eq 0 ]; then echo 'No built installers found' >&2; exit 1; fi
-          gh release create "$TAG" --prerelease --generate-notes --title "CloudHelm $TAG" "${assets[@]}"
+          # --notes-file 内容前置、--generate-notes 的提交清单附加在后；缺条目时只用自动生成。
+          if [ "$HAS_NOTES" = 'true' ]; then
+            gh release create "$TAG" --prerelease --generate-notes --title "CloudHelm $TAG" --notes-file release-notes.md "${assets[@]}"
+          else
+            gh release create "$TAG" --prerelease --generate-notes --title "CloudHelm $TAG" "${assets[@]}"
+          fi
       - name: Skip publishing
         if: steps.decision.outputs.should-publish != 'true'
         env:
