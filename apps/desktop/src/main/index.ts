@@ -1,3 +1,4 @@
+import { ReferenceStore } from './reference-store.js';
 import { DiagnosticLogger, diagnosticSettings } from './diagnostic-logger.js';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
@@ -18,6 +19,7 @@ let window: BrowserWindow | null = null;
 let store: SqliteStore;
 let state: AppState;
 let runtime: RuntimeBridge;
+let references: ReferenceStore;
 const untrustedFingerprints = new Map<string, string>();
 const connecting = new Map<string, Promise<void>>();
 const selectedLocalPaths = new Map<string, LocalScope>();
@@ -74,7 +76,7 @@ async function connectOnce(hostId: string): Promise<void> {
 function registerIpc(): void {
   const hostTester = new HostConnectionTester(state, (host, jump) => runtime.call({ method: 'test-host', host, jump }));
   ipcMain.handle('cloudhelm:test-host', (_event, input: Parameters<DesktopAPI['testHostConnection']>[0]) => hostTester.test(input));
-  registerConversationIpc({ sessionRoot: join(app.getPath('userData'), 'pi-sessions'), state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
+  registerConversationIpc({ store, references, sessionRoot: join(app.getPath('userData'), 'pi-sessions'), state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
   ipcMain.handle('cloudhelm:snapshot', () => state.snapshot());
   ipcMain.handle('cloudhelm:app-version', () => app.getVersion());
   ipcMain.handle('cloudhelm:add-host', (_event, host: HostDraft) => state.addHost(host));
@@ -192,9 +194,11 @@ void app.whenReady().then(async () => {
   else Menu.setApplicationMenu(null);
   store = new SqliteStore(join(app.getPath('userData'), 'cloudhelm.sqlite'));
   state = new AppState(store, publish);
+  references = new ReferenceStore(store, state);
   const diagnostics = new DiagnosticLogger(diagnosticSettings(!!process.env.ELECTRON_RENDERER_URL, process.env, app.getPath('userData')));
   diagnostics.write({ event: 'runtime.started', level: 'info' });
   runtime = new RuntimeBridge((event) => {
+    if (event.type === 'terminal-command' || event.type === 'terminal-data' || event.type === 'terminal-state') references.record(event);
     state.record(event);
     if (!window?.isFocused() && Notification.isSupported()
       && (event.type === 'approval-open' || event.type === 'input-open'

@@ -29,7 +29,7 @@ export async function checkViewportLayout(page, screenshot) {
     await page.getByRole('textbox', { name: '给 AI 的消息' }).focus();
     const geometry = await page.evaluate(() => {
       const bounds = document.querySelector('#root > div').getBoundingClientRect();
-      const composer = document.querySelector('textarea[aria-label="给 AI 的消息"]').getBoundingClientRect();
+      const composer = document.querySelector('[role="textbox"][aria-label="给 AI 的消息"]').getBoundingClientRect();
       return { top: bounds.top, bottom: bounds.bottom, scrollY: window.scrollY,
         composerVisible: composer.top >= 0 && composer.bottom <= window.innerHeight };
     });

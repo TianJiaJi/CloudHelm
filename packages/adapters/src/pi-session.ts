@@ -1,3 +1,4 @@
+import type { MessageDocument } from '@cloudhelm/core';
 import { PiReasoningStream, reasoningView } from './pi-reasoning.js';
 import { modelThinking } from './model-catalog.js';
 import type { ThinkingLevel, ThinkingView } from '@cloudhelm/core';
@@ -68,6 +69,8 @@ class PiConversationSession implements ConversationSession {
   private preferred: ThinkingLevel;
   private selected: SessionProfile;
   private active: SessionProfile;
+  private readonly pendingDocuments: Array<MessageDocument | undefined> = [];
+  private readonly documents = new Map<string, MessageDocument>();
   private readonly projected = new Set<string>();
   private usageReady = false;
   private switched = false;
@@ -79,6 +82,12 @@ class PiConversationSession implements ConversationSession {
     this.reasoningStream = new PiReasoningStream((value) => options.event({ type: 'reasoning-progress', value }));
     this.active = { ...options.profile };
     this.selected = this.active;
+    for (const entry of session.sessionManager.getBranch()) {
+      if (entry.type === 'custom' && entry.customType === 'cloudhelm-message-document') {
+        const saved = entry.data as { entryId: string; document: MessageDocument };
+        this.documents.set(saved.entryId, saved.document);
+      }
+    }
     const saved = [...session.sessionManager.getBranch()].reverse().find((entry) => entry.type === 'custom' && entry.customType === 'cloudhelm-thinking');
     const value = saved?.type === 'custom' ? saved.data : undefined;
     this.preferred = options.thinkingLevel ?? (typeof value === 'string' && ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value) ? value as ThinkingLevel : session.thinkingLevel);
@@ -193,9 +202,12 @@ class PiConversationSession implements ConversationSession {
     this.session.setThinkingLevel(this.preferred);
     this.publishThinking();
   }
-  prompt(text: string): Promise<void> {
+  contextTokens(): number {
+    return this.session.getContextUsage()?.tokens ?? Math.ceil(Buffer.byteLength(JSON.stringify(this.session.messages), 'utf8') / 2) + 4096;
+  }
+  prompt(text: string, document?: MessageDocument): Promise<void> {
     if (this.running) return Promise.reject(new Error('会话正在处理，请等待当前请求结束'));
-    const run = this.runPrompt(text).finally(() => {
+    const run = this.runPrompt(text, document).finally(() => {
       if (this.running === run) this.running = undefined;
       this.reasoningStream.clear();
       this.options.event({ type: 'activity' });
@@ -204,17 +216,18 @@ class PiConversationSession implements ConversationSession {
     this.options.event({ type: 'activity' });
     return run;
   }
-  private async runPrompt(text: string): Promise<void> {
+  private async runPrompt(text: string, document?: MessageDocument): Promise<void> {
     this.failure = undefined;
     this.options.assertActive();
     await this.prepareModel();
     this.options.assertActive();
+    this.pendingDocuments.push(document);
     await this.session.prompt(text, { expandPromptTemplates: false });
     this.project();
     this.publishUsage();
     if (this.failure) throw this.failure;
   }
-  async steer(text: string): Promise<void> { await this.session.steer(text); }
+  async steer(text: string, document?: MessageDocument): Promise<void> { this.pendingDocuments.push(document); await this.session.steer(text); }
   async context(text: string): Promise<void> {
     await this.session.sendCustomMessage({ customType: 'cloudhelm-control', content: text, display: false }, { triggerTurn: false });
   }
@@ -223,7 +236,7 @@ class PiConversationSession implements ConversationSession {
     await this.running?.catch(() => {});
     await this.session.waitForIdle();
   }
-  clearQueue(): void { this.session.clearQueue(); }
+  clearQueue(): void { this.session.clearQueue(); this.pendingDocuments.length = 0; }
   dispose(): void {
     this.reasoningStream.clear();
     this.session.dispose();
@@ -241,11 +254,19 @@ class PiConversationSession implements ConversationSession {
           text: `[需求澄清回答]\n${answer}`, createdAt: message.timestamp } });
       }
       if (message.role !== 'user' && message.role !== 'assistant') continue;
+      if (message.role === 'user' && !this.documents.has(entry.id) && this.pendingDocuments.length) {
+        const document = this.pendingDocuments.shift();
+        if (document) {
+          this.documents.set(entry.id, document);
+          this.session.sessionManager.appendCustomEntry('cloudhelm-message-document', { entryId: entry.id, document });
+        }
+      }
+      const document = this.documents.get(entry.id);
       const text = typeof message.content === 'string' ? message.content
         : message.content.filter((part) => part.type === 'text').map((part) => part.text).join('').trim();
       const reasoning = message.role === 'assistant' ? reasoningView(message) : undefined;
-      if (text || reasoning) this.options.event({ type: 'text', value: { entryId: entry.id, reasoning,
-        role: message.role === 'assistant' ? 'agent' : 'user', text, createdAt: message.timestamp,
+      if (text || reasoning) this.options.event({ type: 'text', value: { entryId: entry.id, reasoning, document,
+        role: message.role === 'assistant' ? 'agent' : 'user', text: document ? document.parts.map((part) => part.type === 'text' ? part.text : part.reference.kind === 'terminal' ? '[Terminal]' : '[粘贴文本]').join('') : text, createdAt: message.timestamp,
         model: message.role === 'assistant' ? { provider: message.provider, modelId: message.model } : undefined } });
     }
   }

@@ -88,7 +88,7 @@ export class TaskRunner {
     this.localFiles = new LocalFileAccess(task.localScopes ?? []);
   }
 
-  async start(restored = false, thinkingLevel?: import('@cloudhelm/core').ThinkingLevel): Promise<void> {
+  async start(restored = false, thinkingLevel?: import('@cloudhelm/core').ThinkingLevel, document?: import('@cloudhelm/core').MessageDocument, initialMessage?: string, intent?: string): Promise<void> {
     const version = this.controlVersion;
     if (!restored) this.setStatus('running');
     const gate = this.createGate();
@@ -135,7 +135,7 @@ export class TaskRunner {
         if (event.type === 'thinking') this.signals.event({ type: 'thinking', taskId: this.task.id, value: event.value });
         if (event.type === 'activity') this.publishExecution();
         if (event.type === 'text') {
-          if (event.value.role === 'user') this.currentGoal = `${this.task.goal}\n用户最近补充：${event.value.text}`;
+          if (event.value.role === 'user' && !event.value.document) this.currentGoal = `${this.task.goal}\n用户最近补充：${event.value.text}`;
           this.signals.event({ type: 'task-message', taskId: this.task.id, ...event.value });
         }
         if (event.type === 'usage') this.signals.event({ type: 'context-usage', taskId: this.task.id,
@@ -165,7 +165,8 @@ export class TaskRunner {
     if (restored || interrupted) { this.needsRecovery = true; this.setStatus('paused'); return; }
     this.setStatus('running');
     try {
-      await this.agent.prompt(this.task.goal);
+      this.currentGoal = intent ?? (document ? this.task.goal : initialMessage ?? this.task.goal);
+      await this.agent.prompt(initialMessage ?? this.task.goal, document);
       if (this.status === 'running') this.finishRun();
     } catch (error) {
       if (this.status === 'running') this.setStatus('failed', error instanceof Error ? error.message : String(error));
@@ -175,7 +176,9 @@ export class TaskRunner {
   answerClarification(id: string, answers: unknown): void { this.clarification.answer(id, answers); }
   cancelClarification(id: string): void { this.clarification.cancel(id); }
 
-  message(text: string): void {
+  contextTokens(): number | undefined { return this.agent?.contextTokens?.(); }
+
+  message(text: string, document?: import('@cloudhelm/core').MessageDocument, intent?: string): void {
     if (this.status === 'waiting-user') throw new Error('请先回答需求澄清，或停止本轮对话');
     if (!this.agent) throw new Error('Task has not started');
     if (this.agent.isStreaming && !['running', 'waiting-review'].includes(this.status)) throw new Error('AI 正在暂停，请稍后再发送消息。');
@@ -185,27 +188,27 @@ export class TaskRunner {
       && ['answered', 'ready-for-review', 'accepted'].includes(this.status)) this.replayProtected.clear();
     if (['paused', 'failed', 'recovering', 'human-control'].includes(this.status)) this.needsRecovery = true;
     this.remoteBlocked = undefined;
-    this.currentGoal = `${this.task.goal}\n用户最近补充：${text}`;
+    this.currentGoal = `${this.task.goal}\n用户最近补充：${intent ?? (document ? document.parts.filter((part) => part.type === 'text').map((part) => part.text).join('') || '请分析这段终端输出' : text)}`;
     this.journal.resetReport();
     if (this.agent.isStreaming) {
-      void this.agent.steer(text).catch((error: unknown) => this.blockRemote(String(error)));
+      void this.agent.steer(text, document).catch((error: unknown) => this.blockRemote(String(error)));
       return;
     }
     this.noProgress = 0;
     this.runStartCount = this.operationCount;
     this.journal.resetReport();
     this.setStatus('running');
-    void this.continueWithMessage(this.agent, text);
+    void this.continueWithMessage(this.agent, text, document);
   }
 
-  private async continueWithMessage(agent: ConversationSession, text: string): Promise<void> {
+  private async continueWithMessage(agent: ConversationSession, text: string, document?: import('@cloudhelm/core').MessageDocument): Promise<void> {
     try {
       if (this.needsRecovery) {
         await agent.context(recoveryContextMessage([...this.priorOperations, ...this.operations.values()]));
         this.needsRecovery = false;
       }
       await this.appendInterruptionContext(agent);
-      await agent.prompt(text);
+      await agent.prompt(text, document);
       if (this.status === 'running') this.finishRun();
     } catch (error) {
       if (this.status === 'running') this.setStatus('failed', error instanceof Error ? error.message : String(error));

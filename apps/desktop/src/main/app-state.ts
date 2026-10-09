@@ -166,6 +166,10 @@ export class AppState {
     }
     for (const terminal of this.terminals.values()) if (terminal.taskId === id) logKeys.add(terminal.id);
     this.flushLogs();
+    for (const message of this.messages.filter((message) => message.taskId === id)) {
+      for (const part of message.document?.parts ?? []) if (part.type === 'reference') this.store.removeReference(part.reference.id);
+    }
+    this.store.removeWhere('message-receipts', 'conversationId', id);
     this.tasks.delete(id);
     for (const [key, operation] of [...this.operations]) if (operation.taskId === id) this.operations.delete(key);
     for (const [key, approval] of [...this.approvals]) if (approval.taskId === id) this.approvals.delete(key);
@@ -435,7 +439,7 @@ export class AppState {
       case 'task-message': {
         const existing = event.entryId ? this.messages.find((message) => message.taskId === event.taskId && message.entryId === event.entryId) : undefined;
         if (existing && (!event.reasoning || JSON.stringify(existing.reasoning) === JSON.stringify(event.reasoning))) return;
-        const message = { entryId: event.entryId, taskId: event.taskId, role: event.role, text: event.text, reasoning: event.reasoning, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
+        const message = { document: event.document, entryId: event.entryId, taskId: event.taskId, role: event.role, text: event.text, reasoning: event.reasoning, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
         if (existing) Object.assign(existing, message); else this.messages.push(message);
         if (event.role === 'agent') delete this.reasoningProgress[event.taskId];
         this.store.put('messages', event.entryId ? `${event.taskId}:${event.entryId}` : `${event.createdAt}:${randomUUID()}`, message);
@@ -508,7 +512,7 @@ export class AppState {
       case 'snapshot': break;
     }
     if (event.type !== 'terminal-data') this.publish();
-    if (event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'terminal-replaced' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
+    if (event.type === 'message-preparation' || event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'terminal-replaced' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
   }
 
   publish(): void { if (!this.closed) this.emit({ type: 'snapshot', value: this.snapshot() }); }

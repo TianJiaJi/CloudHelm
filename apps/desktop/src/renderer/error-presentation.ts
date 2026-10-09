@@ -30,6 +30,8 @@ const rules: ErrorRule[] = [
     title: '模型身份验证未通过', description: '请检查当前供应商的 API Key 是否有效，以及它是否有权使用所选模型。', severity: 'warning', action: 'model-settings' },
   { code: 'model-quota', pattern: /insufficient_quota|rate_limit_exceeded|Too Many Requests|HTTP 429|status(?: code)?[: =]+429/iu,
     title: '模型服务暂时无法接受请求', description: '可能已达到调用频率或账户额度限制。请稍后再试，或到供应商处检查账户额度。', severity: 'warning' },
+  { code: 'model-connection', pattern: /\bConnection error\.|\bAPIConnectionError\b|\bfetch failed\b|\bFailed to fetch\b/iu,
+    title: '模型连接中断', description: '本次请求未能正常收到模型回复。可能是网络、代理或模型服务暂时异常，请检查后点击“继续 AI”。已有消息和引用已保留；继续前可先查看已完成的操作。', severity: 'warning' },
   { code: 'ssh-agent', pattern: /SSH Agent is unavailable/iu, title: 'SSH Agent 尚未就绪',
     description: '请启动本机 SSH Agent 并加载私钥，或在主机设置中改用私钥文件或密码连接。', severity: 'warning' },
   { code: 'ssh-credentials', pattern: /SSH password is required|Private key path is required|All configured authentication methods failed|Authentication failed|Cannot parse privateKey|Invalid private key|Encrypted private/iu,

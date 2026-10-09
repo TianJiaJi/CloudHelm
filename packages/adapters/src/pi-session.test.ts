@@ -156,3 +156,23 @@ describe('native Pi session compatibility', () => {
     } finally { if (key === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = key; }
   });
 });
+
+it('persists inline reference display metadata by native entry ID and restores it without resending originals', async () => {
+  const root = await directory();
+  const f = await setup(async () => ({ text: 'answer', usage }), { storage: { directory: root, id: 'reference-session', restore: false } });
+  const document = { requestId: 'stable-request', parts: [{ type: 'text' as const, text: 'explain ' },
+    { type: 'reference' as const, reference: { id: 'body-id', kind: 'terminal' as const, capturedAt: 1 } }] };
+  await f.session.prompt('explain FULL ORIGINAL OUTPUT', document);
+  const user = f.events.find((event) => event.type === 'text' && event.value.role === 'user');
+  expect(user?.type === 'text' && user.value.document).toEqual(document);
+  expect(user?.type === 'text' && user.value.text).toBe('explain [Terminal]');
+  const count = f.fixture.requests.length;
+  f.session.dispose();
+  const events: SessionEvent[] = [];
+  const restored = await createConversationSession({ ...f.options, event: (event) => events.push(event), storage: { directory: root, id: 'reference-session', restore: true } });
+  cleanup.push(() => restored.dispose());
+  expect(f.fixture.requests.length).toBe(count);
+  const history = events.find((event) => event.type === 'text' && event.value.role === 'user');
+  expect(history?.type === 'text' && history.value.document).toEqual(document);
+  expect(history?.type === 'text' && history.value.entryId).toBe(user?.type === 'text' && user.value.entryId);
+});

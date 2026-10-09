@@ -31,6 +31,7 @@ async function paste(field: HTMLElement): Promise<void> {
   const text = await readClipboardText();
   if (!text) return;
   if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) insertFieldText(field, text);
+  else if (field.dataset.messageEditor) field.dispatchEvent(new CustomEvent('cloudhelm-paste', { detail: text }));
   else document.execCommand('insertText', false, text);
 }
 
@@ -52,8 +53,8 @@ export function editMenuEntries(field: HTMLElement, bindings: ShortcutBindings, 
     if (!document.execCommand(cut ? 'cut' : 'copy')) report(cut ? '无法剪切所选内容。' : '无法访问剪贴板，请重试或手动选择内容。');
   };
   const entries: ContextMenuEntry[] = [
-    { id: 'undo', label: '撤销', hint: hint('edit.undo'), run: () => { field.focus(); document.execCommand('undo'); } },
-    { id: 'redo', label: '重做', hint: hint('edit.redo'), run: () => { field.focus(); document.execCommand('redo'); } },
+    { id: 'undo', label: '撤销', hint: hint('edit.undo'), run: () => { field.focus(); if (field.dataset.messageEditor) field.dispatchEvent(new CustomEvent('cloudhelm-edit', { detail: 'undo' })); else document.execCommand('undo'); } },
+    { id: 'redo', label: '重做', hint: hint('edit.redo'), run: () => { field.focus(); if (field.dataset.messageEditor) field.dispatchEvent(new CustomEvent('cloudhelm-edit', { detail: 'redo' })); else document.execCommand('redo'); } },
     { id: 'd1', separator: true }
   ];
   if (!sensitive) {

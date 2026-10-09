@@ -69,6 +69,17 @@ https://user:${secrets[2]}@example.com/v1?access_token=${secrets[3]}`;
     expect(value.action).toBeUndefined();
   });
 
+  it.each(['Connection error.', 'APIConnectionError: Connection error.', 'fetch failed', 'Failed to fetch'])(
+    'identifies model transport failure %s without suggesting SSH reconnection or exposing credentials', (message) => {
+      const value = presentError(`Error invoking remote method 'cloudhelm:send-message': Error: ${message}\nAuthorization: Bearer private phrase\nhttps://user:secret@example.com`);
+      expect(value).toMatchObject({ code: 'model-connection', title: '模型连接中断', severity: 'warning' });
+      expect(value.description).toContain('继续 AI');
+      expect(value.description).toContain('已有消息和引用已保留');
+      expect(value.description).not.toContain('重新连接主机');
+      expect(JSON.stringify(value)).not.toMatch(/private phrase|secret|https:\/\//u);
+    }
+  );
+
   it('preserves pre-authentication handshake failures without exposing raw error content', () => {
     const value = presentError(new Error("Error invoking remote method 'cloudhelm:connect-host': Error: Connection lost before handshake; private key with spaces"));
     expect(value.code).toBe('ssh-handshake-closed');

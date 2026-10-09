@@ -1,3 +1,4 @@
+import { openIntegratedShell } from './shell-integration.js';
 import { redactOutput } from '@cloudhelm/core';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -226,6 +227,12 @@ export class SshTransport {
   async removeCommandProgram(hostId: string, script: string): Promise<void> {
     if (!/^\/tmp\/cloudhelm-run\.[A-Za-z0-9]+\/process\.py$/u.test(script)) throw new Error('Invalid command transport path');
     await this.execFixed(hostId, `rm -f -- ${script}; rmdir -- ${path.posix.dirname(script)}`);
+  }
+
+  async integratedShell(hostId: string, cols = 100, rows = 30) {
+    const client = this.connections.get(hostId);
+    if (!client) throw new Error('Host is not connected');
+    return openIntegratedShell(client, cols, rows);
   }
 
   async shell(hostId: string, cols = 100, rows = 30): Promise<ClientChannel> {

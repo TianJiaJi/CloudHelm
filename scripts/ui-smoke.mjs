@@ -1,3 +1,4 @@
+import { checkMessageReferences } from './check-message-references.mjs';
 import { checkReasoningContent } from './check-reasoning-content.mjs';
 import { checkExecutionThinking } from './check-execution-thinking.mjs';
 import { checkComposer } from './check-composer.mjs';
@@ -122,9 +123,9 @@ async function exerciseConversation() {
   assert.equal((await calls()).filter((call) => call.kind === 'model').at(-1).model.provider, 'anthropic');
   await page.getByRole('textbox', { name: '给 AI 的消息' }).fill('草稿不会丢');
   await page.getByRole('button', { name: /开发服务器 deployer@/ }).click();
-  assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).inputValue(), '');
+  assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).textContent(), '');
   await page.getByRole('button', { name: '生产服务器', exact: true }).click();
-  assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).inputValue(), '草稿不会丢');
+  assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).textContent(), '草稿不会丢');
 }
 
 async function exerciseNavigation() {
@@ -321,6 +322,7 @@ try {
   await exerciseAsyncErrors();
   await checkErrorControl(page, screenshot);
   await checkExecutionThinking(page, screenshot);
+  await checkMessageReferences(page, screenshot);
   await checkReasoningContent(page, screenshot);
   await checkTerminalControl(page, screenshot);
   await checkMiddleClick(page, screenshot);

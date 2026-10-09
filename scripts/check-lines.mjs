@@ -6,6 +6,7 @@ import console from 'node:console';
 async function sourceFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const found = await Promise.all(entries.map(async (entry) => {
+    if (entry.isDirectory() && ['node_modules', 'out', 'dist', '.cache'].includes(entry.name)) return [];
     const name = path.join(directory, entry.name);
     return entry.isDirectory() ? sourceFiles(name) : /\.(?:ts|tsx|css|mjs|cjs)$/u.test(entry.name) ? [name] : [];
   }));

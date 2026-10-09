@@ -26,9 +26,11 @@ interface TerminalRecord {
   owner: Owner;
   channel: RawTerminal;
   pending?: PendingCommand;
+  commandRunning?: boolean;
 }
 
 export interface TerminalEvents {
+  command?(terminalId: string, generation: number, event: { phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }): void;
   data(terminalId: string, data: string, operationId?: string): void;
   completed?(result: OperationResult): void;
   state(terminalId: string, owner: Owner): void;
@@ -46,6 +48,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       id: randomUUID(), hostId, taskId, home, generation: 1, owner: taskId ? 'agent' : 'human', channel
     };
     this.terminals.set(terminal.id, terminal);
+    channel.onCommand?.((event) => { terminal.commandRunning = event.phase === 'start'; this.events.command?.(terminal.id, terminal.generation, event); });
     channel.onData((data) => this.receive(terminal, data));
     channel.onDisplay?.((data) => this.events.data(terminal.id, data));
     channel.onClose(() => this.closeRecord(terminal));
@@ -103,6 +106,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     const terminal = this.require(id);
     if (!humanIntent) { if (this.isProtocolResponse(data)) terminal.channel.write(data); return; }
     if (terminal.owner !== 'human' || terminal.pending) throw new Error('终端暂不可输入，请先停止 AI 并等待命令退出');
+    if (!terminal.commandRunning && /[\r\n]/u.test(data)) this.events.command?.(terminal.id, terminal.generation, { phase: 'unavailable' });
     terminal.channel.write(data);
   }
 
@@ -180,6 +184,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       const pending: PendingCommand = { output: '', redactor: new OutputRedactor(), operationId: operation.id, settle: resolve,
         remoteCompletion, completeRemote, reported: false };
       terminal.pending = pending;
+      this.events.command?.(terminal.id, terminal.generation, { phase: 'start', command: operation.command });
       signal?.addEventListener('abort', () => {
         if (terminal.pending !== pending) return;
         terminal.generation++;
@@ -215,6 +220,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     const pending = terminal.pending;
     if (!pending) return;
     terminal.pending = undefined;
+    this.events.command?.(terminal.id, terminal.generation, { phase: 'end', exitCode });
     pending.output = (pending.output + pending.redactor.finish()).slice(-65_536);
     pending.completeRemote(exitCode === undefined ? 'unknown' : 'exited');
     const result: OperationResult = { operationId: pending.operationId,

@@ -8,3 +8,5 @@ export * from './su-session.js';
 export * from './pi-session.js';
 export * from './pi-session-model.js';
 export * from './pi-selected-read.js';
+export * from './pi-content-model.js';
+export * from './shell-integration.js';

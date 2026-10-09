@@ -30,8 +30,11 @@ export async function checkClarificationRuntime(initialPage, restart) {
   try {
     const taskId = await page.evaluate(async (baseUrl) => {
       await window.cloudhelm.saveModelProfile({ provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'local-smoke-dummy', baseUrl });
-      const task = await window.cloudhelm.startConversation({ hostId: null, message: '帮助选择部署方式', localSelectionTokens: [] });
-      return task.id;
+      const result = await window.cloudhelm.sendStructured({ hostId: null, localSelectionTokens: [], document: {
+        requestId: 'desktop-folded-paste', parts: [{ type: 'text', text: '帮助选择部署方式\n' },
+          { type: 'reference', reference: { id: 'draft-paste', kind: 'paste', capturedAt: 1 }, content: '保留部署约束\n'.repeat(120) }]
+      } });
+      return result.conversationId;
     }, `http://127.0.0.1:${server.address().port}/v1`);
     const pending = async () => {
       let request;
@@ -47,6 +50,8 @@ export async function checkClarificationRuntime(initialPage, restart) {
     };
     const first = await pending();
     assert.equal(requests.length, 1);
+    assert.ok(requests[0].messages.some((message) => message.role === 'user' && (typeof message.content === 'string' ? message.content : message.content.map((part) => part.text ?? '').join('')).includes('保留部署约束\n'.repeat(120))),
+      'A folded paste is sent intact without an extra summarization request');
     assert.ok(requests[0].tools.some((tool) => tool.function.name === 'ask_user'));
     assert.ok(requests[0].tools.every((tool) => !['bash', 'write', 'edit', 'read'].includes(tool.function.name)));
     await answer(first.id);
@@ -59,6 +64,12 @@ export async function checkClarificationRuntime(initialPage, restart) {
     assert.equal(restored.clarifications.find((q) => q.id === abandoned.id).status, 'expired');
     assert.equal(restored.clarifications.find((q) => q.id === first.id).status, 'answered');
     assert.equal(restored.conversations.find((task) => task.id === taskId).status, 'paused');
+    const document = restored.messages.find((message) => message.document?.requestId === 'desktop-folded-paste')?.document;
+    assert.ok(document, 'structured display is persisted across an actual desktop restart');
+    const reference = document.parts.find((part) => part.type === 'reference').reference;
+    const body = await page.evaluate((id) => window.cloudhelm.readReference(id), reference.id);
+    assert.equal(body.original, '保留部署约束\n'.repeat(120));
+    assert.equal(body.summary, undefined);
     const late = await page.evaluate(async ({ taskId, requestId }) => {
       try { await window.cloudhelm.answerClarification(taskId, requestId, [{ id: 'environment', value: 'prod' }]); return 'accepted'; }
       catch { return 'rejected'; }

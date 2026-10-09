@@ -10,7 +10,7 @@ export async function checkExecutionThinking(page, screenshot) {
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   const stop = page.getByRole('button', { name: '停止执行', exact: true });
   await stop.waitFor();
-  assert.equal(await input.inputValue(), '');
+  assert.equal(await input.textContent(), '');
   assert.equal(await stop.isEnabled(), true, 'Stop is independent of draft content');
   await input.fill('补充消息');
   await input.press('Enter');
@@ -33,7 +33,7 @@ export async function checkExecutionThinking(page, screenshot) {
   await page.getByText('正在停止…模型已停；等待远端命令退出', { exact: true }).waitFor();
   assert.equal(await stopping.isDisabled(), true, 'IPC completion cannot prove remote exit');
   await input.press('Enter');
-  assert.equal(await input.inputValue(), '保留停止时的草稿');
+  assert.equal(await input.textContent(), '保留停止时的草稿');
   await screenshot('composer-stopping.png');
   await page.evaluate(async () => {
     const task = (await window.cloudhelm.snapshot()).conversations[0];
@@ -41,7 +41,7 @@ export async function checkExecutionThinking(page, screenshot) {
   });
   await page.getByText('模型已停；远端结果待核验，请勿重复执行', { exact: true }).waitFor();
   await page.getByRole('button', { name: '发送消息', exact: true }).waitFor();
-  assert.equal(await input.inputValue(), '保留停止时的草稿');
+  assert.equal(await input.textContent(), '保留停止时的草稿');
   assert.equal(await page.getByRole('button', { name: '移除 /Users/demo/service' }).count(), 1);
   const thinking = page.getByRole('button', { name: /^思考强度/u });
   await thinking.click();

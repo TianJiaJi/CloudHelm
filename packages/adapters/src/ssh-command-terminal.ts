@@ -1,9 +1,10 @@
+import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.js';
 import { StringDecoder } from 'node:string_decoder';
 import { CommandNotStartedError, isSudo, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
-export type CommandTransport = Pick<SshTransport, 'connectionGeneration' | 'prepareCommandProgram' | 'removeCommandProgram' | 'openPipe' | 'shell'>;
+export type CommandTransport = Pick<SshTransport, 'connectionGeneration' | 'prepareCommandProgram' | 'removeCommandProgram' | 'openPipe' | 'shell'> & Partial<Pick<SshTransport, 'integratedShell'>>;
 import { remoteCommandProgram } from './remote-command-program.js';
 
 /** Commands are process arguments; PTY input and sudo credentials have distinct channels. */
@@ -22,6 +23,8 @@ export class SshCommandTerminal implements RawTerminal {
   private syntheticPromptShown = false;
   private lineStart = true;
   private challenges = new Set<string>();
+  private command = (_event: ShellCommandEvent) => {};
+  onCommand(listener: (event: ShellCommandEvent) => void): void { this.command = listener; }
   private data = (_text: string) => {};
   private display = (_text: string) => {};
   private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects'>) => {};
@@ -174,7 +177,9 @@ export class SshCommandTerminal implements RawTerminal {
 
   private openHuman(): Promise<ClientChannel> {
     // Only explicit human takeover opens an interactive shell; the Agent never receives this route.
-    this.humanOpening ??= this.ssh.shell(this.hostId, this.cols, this.rows).then((channel) => {
+    this.humanOpening ??= (this.ssh.integratedShell ? this.ssh.integratedShell(this.hostId, this.cols, this.rows)
+      : this.ssh.shell(this.hostId, this.cols, this.rows).then((channel) => ({ channel, nonce: '' }))).then(({ channel, nonce }) => {
+      this.command({ phase: 'unavailable' });
       if (this.closed) { channel.end(); throw new Error('Terminal closed'); }
       this.human = channel;
       channel.setWindow(this.rows, this.cols, 0, 0);
@@ -183,7 +188,9 @@ export class SshCommandTerminal implements RawTerminal {
       this.display(`${this.syntheticPromptShown ? '\r\x1b[2K' : this.lineStart ? '' : '\r\n'}—— 终端已交还人工输入 ——\r\n`);
       this.syntheticPromptShown = false;
       this.lineStart = true;
-      channel.on('data', (chunk: Buffer) => { this.syntheticPromptShown = false; this.data(chunk.toString('utf8')); });
+      const decoder = new StringDecoder('utf8');
+      const parser = new ShellMarkerParser(nonce, (text) => this.data(text), (event) => this.command(event));
+      channel.on('data', (chunk: Buffer) => { this.syntheticPromptShown = false; parser.push(decoder.write(chunk)); });
       channel.on('close', () => this.close());
       channel.on('error', () => this.close());
       return channel;

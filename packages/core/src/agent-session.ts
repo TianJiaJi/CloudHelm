@@ -20,6 +20,7 @@ export interface ReasoningView {
 export interface ReasoningProgress { id: string; createdAt: number; model: { provider: string; modelId: string }; reasoning: ReasoningView }
 
 export interface SessionText {
+  document?: import('./message-content.js').MessageDocument;
   reasoning?: ReasoningView;
   entryId: string; role: 'user' | 'agent' | 'system'; text: string; createdAt: number;
   model?: { provider: string; modelId: string };
@@ -50,8 +51,9 @@ export interface SessionOptions {
 export interface ConversationSession {
   readonly isStreaming: boolean;
   readonly profile: SessionProfile;
-  prompt(text: string): Promise<void>;
-  steer(text: string): Promise<void>;
+  contextTokens?(): number;
+  prompt(text: string, document?: import('./message-content.js').MessageDocument): Promise<void>;
+  steer(text: string, document?: import('./message-content.js').MessageDocument): Promise<void>;
   context(text: string): Promise<void>;
   select(profile: SessionProfile): void;
   setThinking(level: ThinkingLevel): void;

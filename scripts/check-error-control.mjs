@@ -44,7 +44,7 @@ export async function checkErrorControl(page, screenshot) {
   await dialog.waitFor({ state: 'detached' });
   assert.deepEqual(await page.evaluate(() => window.fixture.calls.filter((call) => call.kind === 'stop-control').map((call) => call.id)), ['control-prod', 'control-prod']);
   await page.getByRole('button', { name: /prod 控制权测试/ }).click();
-  assert.equal(await composer.inputValue(), '保留这条未发送的消息');
+  assert.equal(await composer.textContent(), '保留这条未发送的消息');
   await page.evaluate(() => {
     const snapshot = window.fixture.controlSnapshot;
     const old = snapshot.conversations.find((task) => task.id === 'control-prod');

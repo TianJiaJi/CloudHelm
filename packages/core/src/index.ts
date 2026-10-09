@@ -10,3 +10,5 @@ export * from './sudo-outcome.js';
 export * from './agent-session.js';
 export * from './command-preflight.js';
 export * from './service-observation.js';
+
+export * from './message-content.js';

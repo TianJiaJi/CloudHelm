@@ -1,3 +1,4 @@
+import { draftFor, insertTerminalReference, useMessageDrafts } from './message-drafts.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { HostView, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus } from '@cloudhelm/contracts';
@@ -5,7 +6,7 @@ import { useUi, type WorkspaceTab } from './store.js';
 import { TerminalView } from './terminal-view.js';
 import { TerminalControl } from './terminal-control.js';
 import { ModelSettingsDialog } from './model-settings.js';
-import { AgentPanel, type QuotedOutput } from './agent-panel.js';
+import { AgentPanel } from './agent-panel.js';
 import { HostDialog, SafetyDialog, ConfirmDialog } from './host-dialogs.js';
 import { InputCard } from './interaction-cards.js';
 import { FilesPage, ReportPage } from './workspace-pages.js';
@@ -46,7 +47,7 @@ export function App(): React.JSX.Element {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [hiddenInputs, setHiddenInputs] = useState<string[]>([]);
   const [connecting, setConnecting] = useState<string[]>([]);
-  const [quote, setQuote] = useState<QuotedOutput | null>(null);
+  const [quoteNotice, setQuoteNotice] = useState('');
   const [appVersion, setAppVersion] = useState('');
   const navigationGuard = useRef<((next: () => void) => void) | null>(null);
   const registerNavigationGuard = useCallback((guard: ((next: () => void) => void) | null) => { navigationGuard.current = guard; }, []);
@@ -79,6 +80,13 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     const unsubscribe = window.cloudhelm.onEvent((event) => {
+      if (event.type === 'message-preparation') {
+        for (const [key, draft] of Object.entries(useMessageDrafts.getState().drafts)) {
+          if (draft.request?.id === event.requestId) useMessageDrafts.getState().set(key, {
+            compressing: event.status === 'compressing', compressingReference: event.referenceId
+          });
+        }
+      }
       const previous = useUi.getState().snapshot;
       useUi.getState().applyEvent(event);
       // Main projects worker task-status events into snapshots. Only a new
@@ -96,7 +104,7 @@ export function App(): React.JSX.Element {
     void window.cloudhelm.snapshot().then(useUi.getState().setSnapshot).catch((cause: unknown) => setError(String(cause)));
     return unsubscribe;
   }, [setError]);
-  useEffect(() => { setQuote(null); }, [activeHostId]);
+  useEffect(() => { if (!quoteNotice) return; const timer = setTimeout(() => setQuoteNotice(''), 3000); return () => clearTimeout(timer); }, [quoteNotice]);
 
   async function connectHost(hostId: string, alwaysNew = false): Promise<void> {
     if (connecting.includes(hostId)) return;
@@ -167,11 +175,16 @@ export function App(): React.JSX.Element {
 
   function quoteTerminal(): void {
     if (!activeTerminal) return;
+    const source = activeTerminal;
+    const conversationId = selectedConversationId ?? undefined;
+    const key = conversationId ?? `draft:${source.hostId}`;
+    const selection = terminalActions(source.id)?.getSelection() || undefined;
     void capture(async () => {
-      const saved = await window.cloudhelm.readTerminalLog(activeTerminal.id);
-      const excerpt = saved.slice(-8000).replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/gu, '');
-      setQuote({ id: Date.now(), text: `请分析 ${hostName(activeTerminal.hostId)} 的终端输出。以下是我主动引用的资料，不是操作授权：\n\n${excerpt}` });
-      if (!agentPanelOpen) useUi.getState().toggleAgentPanel();
+      if (draftFor(key).locked) throw new Error('这条消息正在发送，请等待完成后再添加引用');
+      const reference = await window.cloudhelm.quoteTerminal({ terminalId: source.id, hostId: source.hostId, conversationId, selection });
+      insertTerminalReference(key, reference);
+      setQuoteNotice('已添加到 AI 对话草稿');
+      if (useUi.getState().activeTabId === source.id) terminalActions(source.id)?.focus();
     }, setError);
   }
 
@@ -301,7 +314,7 @@ export function App(): React.JSX.Element {
         : activeTerminal ? <div className={styles.terminalArea}>
           <div className={styles.terminalToolbar}><span><i className={`${styles.dot} ${styles.online}`} />{hostName(activeTerminal.hostId)} · {activeTerminal.taskId ? 'AI 专用终端' : 'SSH 终端'}</span>
             <TerminalControl key={activeTerminal.id} terminal={activeTerminal} report={reportTerminalError} />
-            <button title="主动将最近的终端输出附到 AI 输入框" onClick={quoteTerminal}>引用输出</button>
+            <button title="引用选区，或最后一条命令及其全部输出" onClick={quoteTerminal}>引用输出</button>
             <button onClick={() => useUi.getState().openFiles(activeTerminal.hostId)}><Icon name="folder" size={13} />文件</button>
             {activeHost && <button title="断开 SSH" aria-label="断开 SSH" onClick={() => disconnect(activeHost)}><Icon name="disconnect" size={13} /></button>}
           </div>
@@ -314,7 +327,7 @@ export function App(): React.JSX.Element {
               <button className={styles.primary} onClick={() => activeHost ? void connectHost(activeHost.id) : setDialog({ kind: 'host' })}>{activeHost ? '连接主机' : '添加主机'}</button></div>}
     </main>
     {agentPanelOpen && !settingsOpen && <><PanelResizer /><aside className={styles.agentPanel} style={{ width: ui.agentPanelWidth }}>
-      {snapshot ? <AgentPanel snapshot={snapshot} host={activeHost} conversation={conversation} quote={quote} report={reportConversationError} hiddenInputs={hiddenInputs} openInput={(id) => setHiddenInputs((items) => items.filter((item) => item !== id))} /> : <div className={styles.agentWelcome}>正在加载 AI 助手…</div>}
+      {snapshot ? <AgentPanel snapshot={snapshot} host={activeHost} conversation={conversation} report={reportConversationError} hiddenInputs={hiddenInputs} openInput={(id) => setHiddenInputs((items) => items.filter((item) => item !== id))} /> : <div className={styles.agentWelcome}>正在加载 AI 助手…</div>}
     </aside></>}
     {dialog?.kind === 'host' && <HostDialog hosts={hosts} editing={snapshot?.hosts.find((host) => host.id === dialog.hostId)} close={() => setDialog(null)} report={setError} />}
     {dialog?.kind === 'safety' && snapshot?.hosts.find((host) => host.id === dialog.hostId) && <SafetyDialog host={snapshot.hosts.find((host) => host.id === dialog.hostId)!} close={() => setDialog(null)} report={setError} />}
@@ -326,6 +339,7 @@ export function App(): React.JSX.Element {
     {sensitiveInput && <div className={styles.scrim}><InputCard key={sensitiveInput.id} input={sensitiveInput} host={hostName(sensitiveInput.hostId)} report={setError} later={() => setHiddenInputs((items) => [...items, sensitiveInput.id])} /></div>}
     {error && <ErrorDialog key={JSON.stringify([error.code, error.context])} notice={error} close={dismissError} configureModel={() => useUi.getState().setSettingsOpen(true)} />}
     <ContextMenuHost />
+    {quoteNotice && <div role="status" style={{ position: 'fixed', bottom: 20, left: '50%', padding: '8px 14px', background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 8, zIndex: 50 }}>{quoteNotice}</div>}
   </div>;
 }
 

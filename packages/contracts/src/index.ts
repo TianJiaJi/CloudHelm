@@ -64,6 +64,7 @@ export interface ReasoningView {
 export interface ReasoningProgress { id: string; createdAt: number; model: { provider: string; modelId: string }; reasoning: ReasoningView }
 
 export interface ConversationMessage {
+  document?: import('./message-content.js').MessageDocument;
   reasoning?: ReasoningView; entryId?: string; interruption?: UserInterruption; taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
 export interface TerminalViewState { id: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed'; replacementTerminalId?: string }
 export interface ConversationStart { thinkingLevel?: ThinkingLevel; hostId: string | null; message: string; model?: ModelChoice; localSelectionTokens: string[] }
@@ -187,6 +188,8 @@ export interface ModelProviderSettings {
 }
 
 export type AppEvent =
+  | { type: 'terminal-command'; terminalId: string; generation: number; phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }
+  | { type: 'message-preparation'; requestId: string; referenceId?: string; status: 'compressing' | 'ready' }
   | { type: 'reasoning-progress'; taskId: string; value: ReasoningProgress | null }
   | { type: 'thinking'; taskId: string; value: ThinkingView }
   | { type: 'execution'; taskId: string; value: ExecutionView }
@@ -205,6 +208,11 @@ export type AppEvent =
 export interface ShortcutSettings { bindings: Record<string, string>; enabled: boolean }
 
 export interface DesktopAPI {
+  quoteTerminal(input: import('./message-content.js').TerminalQuoteRequest): Promise<import('./message-content.js').ReferenceInfo>;
+  readReference(id: string): Promise<import('./message-content.js').ReferenceBody>;
+  sendStructured(input: import('./message-content.js').StructuredSend): Promise<{ conversationId: string }>;
+  cancelMessage(requestId: string): Promise<void>;
+
   snapshot(): Promise<AppSnapshot>;
   /** Version of the packaged application, sourced from apps/desktop/package.json. */
   appVersion(): Promise<string>;
@@ -256,3 +264,5 @@ export interface DesktopAPI {
   deleteConversation(id: string): Promise<void>;
   onEvent(listener: (event: AppEvent) => void): () => void;
 }
+
+export * from './message-content.js';

@@ -1,3 +1,7 @@
+import { registerStructuredMessageIpc } from './structured-message-ipc.js';
+import type { SqliteStore } from '@cloudhelm/adapters';
+import type { ReferenceStore } from './reference-store.js';
+import type { MessageDocument } from '@cloudhelm/contracts';
 import { modelThinking } from '@cloudhelm/adapters';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -7,6 +11,7 @@ import type { AppState } from './app-state.js';
 import type { RuntimeBridge } from './runtime-bridge.js';
 
 interface Dependencies {
+  store?: SqliteStore; references?: ReferenceStore;
   sessionRoot: string;
   state: AppState;
   runtime: RuntimeBridge;
@@ -15,7 +20,7 @@ interface Dependencies {
   restoreSelections(tokens: string[], scopes: LocalScope[]): void;
 }
 
-export function registerConversationIpc({ sessionRoot, state, runtime, connectHost, takeSelections, restoreSelections }: Dependencies): void {
+export function registerConversationIpc({ store, references, sessionRoot, state, runtime, connectHost, takeSelections, restoreSelections }: Dependencies): void {
   function sessionDirectory(task: TaskView): string {
     if (!task.session || task.session.version !== 1 || task.session.id !== task.id || !/^[a-zA-Z0-9-]+$/u.test(task.id)) {
       throw new Error('旧对话仅供查看，请开始新对话。原生会话绑定不可用。');
@@ -45,7 +50,7 @@ export function registerConversationIpc({ sessionRoot, state, runtime, connectHo
       sessionDirectory: sessionDirectory(task) });
   }
 
-  ipcMain.handle('cloudhelm:start-conversation', async (_event, input: ConversationStart) => {
+  async function start(input: ConversationStart, document?: MessageDocument, initialMessage?: string, intent?: string): Promise<TaskView> {
     if (!input || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 100_000
       || (input.hostId !== null && (typeof input.hostId !== 'string' || !input.hostId.trim()))) throw new Error('请输入有效内容并选择主机');
     const profile = state.runtimeProfile(input.model);
@@ -57,16 +62,16 @@ export function registerConversationIpc({ sessionRoot, state, runtime, connectHo
       const task = state.createTask(input.message, input.hostId ? [input.hostId] : [], profile.modelId, scopes);
       persisted = true;
       state.setTaskModel(task.id, profile);
-      await runtime.call({ method: 'start-task', task, thinkingLevel: input.thinkingLevel, sessionDirectory: sessionDirectory(task), hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
+      await runtime.call({ method: 'start-task', task, document, initialMessage, intent, thinkingLevel: input.thinkingLevel, sessionDirectory: sessionDirectory(task), hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
       return task;
     } catch (error) {
       if (!persisted) restoreSelections(input.localSelectionTokens, scopes);
       throw error;
     }
-  });
+  }
 
-  ipcMain.handle('cloudhelm:send-message', async (_event, id: string, text: string, tokens: string[]) => {
-    if (typeof text !== 'string' || !text.trim() || text.length > 100_000) throw new Error('请输入有效内容');
+  async function send(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string): Promise<void> {
+    if (typeof text !== 'string' || !text.trim() || (!document && text.length > 100_000)) throw new Error('请输入有效内容');
     const task = state.getTask(id);
     if (task.status === 'waiting-user') throw new Error('请先回答需求澄清，或停止本轮对话');
     await ensureRuntime(task);
@@ -76,9 +81,12 @@ export function registerConversationIpc({ sessionRoot, state, runtime, connectHo
         await runtime.call({ method: 'authorize-task', taskId: id, hosts: [], localScopes: scopes });
         state.authorizeTask(id, [], scopes);
       }
-      await runtime.call({ method: 'task-message', taskId: id, text });
+      await runtime.call({ method: 'task-message', taskId: id, text, document, intent });
     } catch (error) { restoreSelections(tokens, scopes); throw error; }
-  });
+  }
+  ipcMain.handle('cloudhelm:start-conversation', (_event, input: ConversationStart) => start(input));
+  ipcMain.handle('cloudhelm:send-message', (_event, id: string, text: string, tokens: string[]) => send(id, text, tokens));
+  if (store && references) registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime });
 
   ipcMain.handle('cloudhelm:set-conversation-thinking', async (_event, id: string, level: import('@cloudhelm/contracts').ThinkingLevel) => {
     await ensureRuntime(state.getTask(id));
