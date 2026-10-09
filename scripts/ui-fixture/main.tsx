@@ -64,6 +64,7 @@ const api: DesktopAPI = {
     const conversation = { id: `chat${++sequence}`, goal: input.message, hostIds: input.hostId ? [input.hostId] : [], localScopes: [],
       status: 'running' as const, provider: input.model!.provider, modelId: input.model!.modelId,
       requestCount: 1, requestLimit: 100, createdAt: Date.now(), updatedAt: Date.now() };
+    Object.assign(conversation, { session: { version: 1, id: conversation.id } });
     view.conversations.push(conversation);
     view.messages.push({ taskId: conversation.id, role: 'user', text: input.message, createdAt: Date.now() });
     sync(); return conversation;
@@ -120,6 +121,7 @@ const fixture = {
   calls,
   inject(event: AppEvent): void {
     if (event.type === 'terminal-state') view.terminals.push({ id: event.terminalId, hostId: event.hostId, taskId: event.taskId, state: event.state });
+    if (event.type === 'context-compaction') { view.contextCompaction = { ...view.contextCompaction, [event.taskId]: event.status }; sync(); return; }
     if (event.type === 'context-usage') { view.contextUsage = { ...view.contextUsage, [event.taskId]: event.value }; sync(); return; }
     emit(event);
   },

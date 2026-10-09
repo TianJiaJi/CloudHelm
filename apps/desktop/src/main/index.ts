@@ -74,7 +74,7 @@ async function connectOnce(hostId: string): Promise<void> {
 function registerIpc(): void {
   const hostTester = new HostConnectionTester(state, (host, jump) => runtime.call({ method: 'test-host', host, jump }));
   ipcMain.handle('cloudhelm:test-host', (_event, input: Parameters<DesktopAPI['testHostConnection']>[0]) => hostTester.test(input));
-  registerConversationIpc({ state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
+  registerConversationIpc({ sessionRoot: join(app.getPath('userData'), 'pi-sessions'), state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
   ipcMain.handle('cloudhelm:snapshot', () => state.snapshot());
   ipcMain.handle('cloudhelm:app-version', () => app.getVersion());
   ipcMain.handle('cloudhelm:add-host', (_event, host: HostDraft) => state.addHost(host));

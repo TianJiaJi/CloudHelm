@@ -93,7 +93,7 @@ export function VerificationCard({ conversation, report }: { conversation: TaskV
     {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
       : conversation.report?.access.map((address) => <code className={styles.access} key={address}>{address}</code>)}
     <div className={styles.cardActions}><button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
-      {verified && <button className={styles.primary} onClick={() => void capture(() => window.cloudhelm.acceptConversation(conversation.id), report)}>验收完成</button>}
+      {verified && conversation.session && <button className={styles.primary} onClick={() => void capture(() => window.cloudhelm.acceptConversation(conversation.id), report)}>验收完成</button>}
     </div>
   </section>;
 }

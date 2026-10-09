@@ -1,4 +1,4 @@
-import type { AppEvent, ClarificationAnswer, ConversationMessage, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
+import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
 
 export interface RuntimeHost extends HostView { secret?: string }
 export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 'trust-required' }>
@@ -24,7 +24,7 @@ export type RuntimeCall =
   | { method: 'stop-terminal'; terminalId: string }
   | { method: 'resize'; terminalId: string; cols: number; rows: number }
   | { method: 'list-remote'; hostId: string; path: string }
-  | { method: 'start-task'; task: TaskView; hosts: RuntimeHost[]; profile: RuntimeProfile; priorOperations?: OperationView[]; history?: ConversationMessage[]; restored?: boolean }
+  | { method: 'start-task'; task: TaskView; hosts: RuntimeHost[]; profile: RuntimeProfile; priorOperations?: OperationView[]; sessionDirectory: string; restored?: boolean }
   | { method: 'authorize-task'; taskId: string; hosts: RuntimeHost[]; localScopes: LocalScope[] }
   | { method: 'task-message'; taskId: string; text: string }
   | { method: 'decide-approval'; approvalId: string; approved: boolean }

@@ -33,6 +33,7 @@ export class AppState {
   private readonly inputs = new Map<string, AppSnapshot['inputs'][number]>();
   private readonly clarifications = new Map<string, ClarificationRequest>();
   private readonly contextUsage: NonNullable<AppSnapshot['contextUsage']> = {};
+  private readonly contextCompaction: NonNullable<AppSnapshot['contextCompaction']> = {};
   private readonly messages: AppSnapshot['messages'] = [];
   private readonly logBuffer = new Map<string, string>();
   private readonly redactors = new Map<string, OutputRedactor>();
@@ -62,7 +63,7 @@ export class AppState {
 
   snapshot(): AppSnapshot {
     return {
-      contextUsage: { ...this.contextUsage },
+      contextUsage: { ...this.contextUsage }, contextCompaction: { ...this.contextCompaction },
       hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
@@ -132,6 +133,7 @@ export class AppState {
 
   acceptTask(id: string): void {
     const task = this.getTask(id);
+    if (!task.session) throw new Error('旧对话仅供查看，请开始新对话');
     if (task.status !== 'ready-for-review') throw new Error('Only a completed task awaiting review can be accepted');
     const accepted = { ...task, status: 'accepted' as const, updatedAt: Date.now() };
     this.tasks.set(id, accepted);
@@ -175,6 +177,7 @@ export class AppState {
     this.store.removeWhere('clarifications', 'taskId', id);
     this.store.removePrefix('model-requests', `${id}:`);
     delete this.contextUsage[id];
+    delete this.contextCompaction[id];
     for (const key of logKeys) this.store.removeLogs(key);
     this.publish();
   }
@@ -361,6 +364,7 @@ export class AppState {
       id: randomUUID(), goal: goal.trim(), hostIds: authorized, localScopes, status: 'draft', modelId, provider: this.profile.provider, baseUrl: this.profile.baseUrl,
       requestCount: 0, requestLimit: 100, createdAt: now, updatedAt: now
     };
+    task.session = { version: 1, id: task.id };
     this.tasks.set(task.id, task);
     this.store.put('tasks', task.id, task);
     this.publish();
@@ -416,9 +420,10 @@ export class AppState {
         break;
       }
       case 'task-message': {
-        const message = { taskId: event.taskId, role: event.role, text: event.text, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
+        if (event.entryId && this.messages.some((message) => message.taskId === event.taskId && message.entryId === event.entryId)) return;
+        const message = { entryId: event.entryId, taskId: event.taskId, role: event.role, text: event.text, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
         this.messages.push(message);
-        this.store.put('messages', `${event.createdAt}:${randomUUID()}`, message);
+        this.store.put('messages', event.entryId ? `${event.taskId}:${event.entryId}` : `${event.createdAt}:${randomUUID()}`, message);
         break;
       }
       case 'terminal-data': {
@@ -454,6 +459,9 @@ export class AppState {
         }
         break;
       }
+      case 'context-compaction':
+        if (this.tasks.has(event.taskId)) this.contextCompaction[event.taskId] = event.status;
+        break;
       case 'context-usage':
         if (this.tasks.has(event.taskId)) this.contextUsage[event.taskId] = event.value;
         break;
@@ -478,6 +486,7 @@ export class AppState {
 
   runtimeStopped(): void {
     for (const id of Object.keys(this.contextUsage)) delete this.contextUsage[id];
+    for (const id of Object.keys(this.contextCompaction)) delete this.contextCompaction[id];
     if (this.closed) return;
     for (const host of this.hosts.values()) if (host.status === 'connected' || host.status === 'connecting') {
       this.updateHost(host.id, { status: 'disconnected' });
@@ -487,7 +496,7 @@ export class AppState {
     for (const operation of this.operations.values()) if (['running', 'approved'].includes(operation.status)) {
       this.record({ type: 'operation', value: { ...operation, status: 'unknown', reason: '运行进程退出，远端结果待核验。' } });
     }
-    for (const task of this.tasks.values()) if (['running', 'waiting-review', 'human-control', 'paused'].includes(task.status)) {
+    for (const task of this.tasks.values()) if (task.session && ['running', 'waiting-review', 'human-control', 'paused'].includes(task.status)) {
       this.record({ type: 'task-status', taskId: task.id, status: 'recovering', summary: '运行进程已停止，请重新打开 CloudHelm 后核验远端状态。' });
     }
     for (const request of this.clarifications.values()) if (request.status === 'pending') {

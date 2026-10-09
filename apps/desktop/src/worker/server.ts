@@ -9,7 +9,7 @@ import type { ApprovalView, InputRequestView } from '@cloudhelm/contracts';
 import type { LogPage, RuntimeCall, RuntimeHost, RuntimeMessage } from '@cloudhelm/contracts/runtime';
 import { TaskRunner } from './task-runner.js';
 import { OperationInputBridge } from './operation-input-bridge.js';
-import { testModelConnection } from './conversation-model.js';
+import { testModelConnection } from '@cloudhelm/adapters';
 import { FileOperationExecutor } from './file-operation-executor.js';
 import { testHostConnection } from './host-connection-test.js';
 
@@ -117,6 +117,7 @@ export class WorkerServer {
       case 'resize': return this.terminal.resize(call.terminalId, call.cols, call.rows);
       case 'list-remote': return this.ssh.list(call.hostId, call.path);
       case 'start-task': {
+        if (!call.task.session || call.task.session.id !== call.task.id || !call.sessionDirectory) throw new Error('Native session binding required');
         if (!call.restored) this.send({ diagnostic: safeDiagnostic({ event: 'chat', level: 'info', taskId: call.task.id, role: 'user', text: call.task.goal }) });
         if (this.tasks.has(call.task.id)) throw new Error('Task is already active');
         const runner = new TaskRunner(call.task, call.hosts, call.profile, call.priorOperations ?? [], this.terminal, this.executor,
@@ -126,13 +127,17 @@ export class WorkerServer {
             event: (event) => this.post({ event } as RuntimeMessage),
             requestApproval: (view) => this.requestApproval(view),
             cancelApproval: (id) => this.cancelApproval(id)
-          }, call.history, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor), this.privileged.forTask(call.task.id));
+          }, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor), this.privileged.forTask(call.task.id),
+          { id: call.task.session.id, directory: call.sessionDirectory, restore: !!call.restored });
         this.tasks.set(call.task.id, runner);
         const start = runner.start(call.restored);
-        if (call.restored) await start;
-        else void start.catch((error: unknown) => this.post({ event: {
-          type: 'task-status', taskId: call.task.id, status: 'failed', summary: error instanceof Error ? error.message : String(error)
-        } }));
+        if (call.restored) {
+          try { await start; } catch (error) { this.tasks.delete(call.task.id); runner.dispose(); throw error; }
+        }
+        else void start.catch((error: unknown) => {
+          this.tasks.delete(call.task.id); runner.dispose();
+          this.post({ event: { type: 'task-status', taskId: call.task.id, status: 'failed', summary: error instanceof Error ? error.message : String(error) } });
+        });
         return;
       }
       case 'authorize-task': {
@@ -176,7 +181,7 @@ export class WorkerServer {
         const runner = this.tasks.get(call.taskId);
         if (!runner) return;
         if (!runner.canDelete) throw new Error('对话仍在运行，无法删除');
-        runner.dispose();
+        await runner.close();
         this.tasks.delete(call.taskId);
         return;
       }

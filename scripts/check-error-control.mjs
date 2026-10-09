@@ -7,7 +7,7 @@ export async function checkErrorControl(page, screenshot) {
   await composer.waitFor();
   await page.evaluate(async () => {
     const snapshot = await window.cloudhelm.snapshot();
-    snapshot.conversations = ['prod', 'dev'].map((hostId) => ({ id: `control-${hostId}`, goal: `${hostId} 控制权测试`,
+    snapshot.conversations = ['prod', 'dev'].map((hostId) => ({ id: `control-${hostId}`, session: { version: 1, id: `control-${hostId}` }, goal: `${hostId} 控制权测试`,
       hostIds: [hostId], localScopes: [], status: 'running', modelId: 'gpt-5.4', provider: 'openai',
       requestCount: 1, requestLimit: 100, createdAt: 1, updatedAt: 1 }));
     snapshot.terminals = snapshot.conversations.map((task) => ({ id: `terminal-${task.id}`, hostId: task.hostIds[0], taskId: task.id, state: 'agent' }));
@@ -45,5 +45,15 @@ export async function checkErrorControl(page, screenshot) {
   assert.deepEqual(await page.evaluate(() => window.fixture.calls.filter((call) => call.kind === 'stop-control').map((call) => call.id)), ['control-prod', 'control-prod']);
   await page.getByRole('button', { name: /prod 控制权测试/ }).click();
   assert.equal(await composer.inputValue(), '保留这条未发送的消息');
+  await page.evaluate(() => {
+    const snapshot = window.fixture.controlSnapshot;
+    const old = snapshot.conversations.find((task) => task.id === 'control-prod');
+    delete old.session; old.status = 'paused';
+    window.fixture.inject({ type: 'snapshot', value: structuredClone(snapshot) });
+  });
+  await page.getByText('此旧对话仅供查看，无法恢复模型上下文。请开始新对话。').waitFor();
+  assert.equal(await composer.isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: '继续 AI' }).count(), 0);
+  await screenshot('legacy-conversation-readonly.png');
 
 }

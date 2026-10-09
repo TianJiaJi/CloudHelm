@@ -47,6 +47,17 @@ export class SqliteStore {
     this.raw.exec(migration0001);
     this.raw.exec(migration0002);
     this.raw.exec(migration0003);
+    // Run destructive compatibility cleanup exactly once, atomically with its version marker.
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 4').get()) return;
+      this.raw.exec(`
+        DELETE FROM records WHERE bucket IN ('messages', 'model-requests', 'clarifications');
+        UPDATE records SET value = json_remove(json_set(value, '$.status',
+          CASE WHEN json_extract(value, '$.status') IN ('accepted', 'ready-for-review')
+          THEN json_extract(value, '$.status') ELSE 'paused' END), '$.session') WHERE bucket = 'tasks';
+        INSERT INTO schema_migrations(version, applied_at) VALUES (4, unixepoch());
+      `);
+    })();
     this.db = drizzle(this.raw);
   }
 

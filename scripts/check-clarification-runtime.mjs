@@ -47,6 +47,7 @@ export async function checkClarificationRuntime(initialPage, restart) {
     const first = await pending();
     assert.equal(requests.length, 1);
     assert.ok(requests[0].tools.some((tool) => tool.function.name === 'ask_user'));
+    assert.ok(requests[0].tools.every((tool) => !['bash', 'write', 'edit', 'read'].includes(tool.function.name)));
     await answer(first.id);
     assert.equal(requests.length, 2);
     assert.ok(requests[1].messages.some((message) => message.role === 'tool' && message.content.includes('"value":"test"')));
@@ -68,6 +69,12 @@ export async function checkClarificationRuntime(initialPage, restart) {
     assert.notEqual(next.generation, abandoned.generation);
     await answer(next.id);
     assert.equal(requests.length, 5);
+    assert.ok(requests[3].messages.some((message) => message.role === 'tool' && message.tool_call_id === 'ask-1' && message.content.includes('"value":"test"')),
+      'Native restoration keeps the original completed tool call and answer');
+    const projected = await page.evaluate(async (id) => (await window.cloudhelm.snapshot()).messages.filter((message) => message.taskId === id), taskId);
+    const entryIds = projected.flatMap((message) => message.entryId ? [message.entryId] : []);
+    assert.ok(entryIds.length >= 5);
+    assert.equal(new Set(entryIds).size, entryIds.length, 'restoration must not duplicate native projection entries');
     return page;
   } finally {
     server.closeAllConnections();

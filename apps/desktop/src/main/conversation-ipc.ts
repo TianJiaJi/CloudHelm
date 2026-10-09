@@ -1,9 +1,12 @@
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { ipcMain } from 'electron';
 import type { ClarificationAnswer, ConversationStart, LocalScope, ModelChoice, TaskView } from '@cloudhelm/contracts';
 import type { AppState } from './app-state.js';
 import type { RuntimeBridge } from './runtime-bridge.js';
 
 interface Dependencies {
+  sessionRoot: string;
   state: AppState;
   runtime: RuntimeBridge;
   connectHost(id: string): Promise<void>;
@@ -11,10 +14,17 @@ interface Dependencies {
   restoreSelections(tokens: string[], scopes: LocalScope[]): void;
 }
 
-export function registerConversationIpc({ state, runtime, connectHost, takeSelections, restoreSelections }: Dependencies): void {
+export function registerConversationIpc({ sessionRoot, state, runtime, connectHost, takeSelections, restoreSelections }: Dependencies): void {
+  function sessionDirectory(task: TaskView): string {
+    if (!task.session || task.session.version !== 1 || task.session.id !== task.id || !/^[a-zA-Z0-9-]+$/u.test(task.id)) {
+      throw new Error('旧对话仅供查看，请开始新对话。原生会话绑定不可用。');
+    }
+    return join(sessionRoot, task.session.id);
+  }
   const restoring = new Map<string, Promise<void>>();
   async function ensureRuntime(task: TaskView): Promise<void> {
     if (task.hostIds.length > 1) throw new Error('旧的多主机对话仅供查看，请在目标主机开始新的单主机对话。');
+    sessionDirectory(task);
     const pending = restoring.get(task.id);
     if (pending) return pending;
     const restore = restoreRuntime(task).finally(() => restoring.delete(task.id));
@@ -31,7 +41,7 @@ export function registerConversationIpc({ state, runtime, connectHost, takeSelec
       hosts: task.hostIds.map((id) => state.runtimeHost(id)),
       profile: profile!,
       priorOperations: snapshot.operations.filter((operation) => operation.taskId === task.id),
-      history: snapshot.messages.filter((message) => message.taskId === task.id) });
+      sessionDirectory: sessionDirectory(task) });
   }
 
   ipcMain.handle('cloudhelm:start-conversation', async (_event, input: ConversationStart) => {
@@ -45,8 +55,7 @@ export function registerConversationIpc({ state, runtime, connectHost, takeSelec
       const task = state.createTask(input.message, input.hostId ? [input.hostId] : [], profile.modelId, scopes);
       persisted = true;
       state.setTaskModel(task.id, profile);
-      state.record({ type: 'task-message', taskId: task.id, role: 'user', text: input.message, createdAt: Date.now() });
-      await runtime.call({ method: 'start-task', task, hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
+      await runtime.call({ method: 'start-task', task, sessionDirectory: sessionDirectory(task), hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
       return task;
     } catch (error) {
       if (!persisted) restoreSelections(input.localSelectionTokens, scopes);
@@ -70,7 +79,7 @@ export function registerConversationIpc({ state, runtime, connectHost, takeSelec
   });
 
   ipcMain.handle('cloudhelm:set-conversation-model', async (_event, id: string, choice: ModelChoice) => {
-    state.getTask(id);
+    sessionDirectory(state.getTask(id));
     const profile = state.runtimeProfile(choice);
     if (await runtime.call<boolean>({ method: 'has-task', taskId: id })) {
       await runtime.call({ method: 'set-conversation-model', taskId: id, profile });
@@ -95,6 +104,8 @@ export function registerConversationIpc({ state, runtime, connectHost, takeSelec
     // Authoritative state decides deletability before any runtime cleanup.
     state.assertDeletable(id);
     if (await runtime.call<boolean>({ method: 'has-task', taskId: id })) await runtime.call({ method: 'delete-task', taskId: id });
+    const task = state.getTask(id);
+    if (task.session) await rm(sessionDirectory(task), { recursive: true, force: true });
     state.deleteTask(id);
   });
 }

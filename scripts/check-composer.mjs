@@ -42,6 +42,16 @@ export async function checkComposer(page, screenshot) {
   await page.getByRole('button', { name: '上下文用量，上下文待统计' }).waitFor();
   await page.evaluate(async () => {
     const task = (await window.cloudhelm.snapshot()).conversations[0];
+    window.fixture.inject({ type: 'context-compaction', taskId: task.id, status: 'running' });
+  });
+  await page.getByRole('button', { name: '上下文用量，正在整理上下文…' }).waitFor();
+  await page.evaluate(async () => {
+    const task = (await window.cloudhelm.snapshot()).conversations[0];
+    window.fixture.inject({ type: 'context-compaction', taskId: task.id, status: 'complete' });
+  });
+  await page.getByRole('button', { name: '上下文用量，上下文待统计' }).waitFor();
+  await page.evaluate(async () => {
+    const task = (await window.cloudhelm.snapshot()).conversations[0];
     window.fixture.inject({ type: 'context-usage', taskId: task.id, value: {
       model: { provider: task.provider, modelId: task.modelId }, usedTokens: 32000, contextWindow: 128000,
       request: 2, source: 'estimate', updatedAt: Date.now()

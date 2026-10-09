@@ -315,3 +315,28 @@ describe('runtime context usage snapshots', () => {
     expect(state.snapshot().contextUsage).toEqual({});
   });
 });
+
+it('rebuilds native message projections idempotently and clears compaction status on worker exit', () => {
+  const { state, store } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  const message = { type: 'task-message' as const, taskId: task.id, entryId: 'native-entry', role: 'user' as const, text: 'stored intent', createdAt: 10 };
+  state.record(message);
+  state.record(message);
+  expect(state.snapshot().messages).toHaveLength(1);
+  expect(store.get('messages', `${task.id}:native-entry`)).toMatchObject({ entryId: 'native-entry' });
+  const restarted = setup(store).state;
+  restarted.record(message);
+  expect(restarted.snapshot().messages).toHaveLength(1);
+  restarted.record({ type: 'context-compaction', taskId: task.id, status: 'running' });
+  expect(restarted.snapshot().contextCompaction?.[task.id]).toBe('running');
+  restarted.setTaskModel(task.id, restarted.runtimeProfile());
+  expect(restarted.snapshot().contextCompaction?.[task.id]).toBe('running');
+  restarted.runtimeStopped();
+  expect(restarted.snapshot().contextCompaction).toEqual({});
+  store.removeWhere('messages', 'taskId', task.id);
+  const rebuilt = setup(store).state;
+  expect(rebuilt.snapshot().messages).toEqual([]);
+  rebuilt.record(message);
+  expect(rebuilt.snapshot().messages).toHaveLength(1);
+});

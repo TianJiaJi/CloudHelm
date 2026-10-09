@@ -60,8 +60,8 @@ const descriptions: Record<ReviewMode, string> = {
   permissive: '允许范围内自动执行，仍遵守保护路径与安全限制。'
 };
 
-export function ComposerFooter({ host, legacy, usage, pendingModel, report }: {
-  host?: HostView; legacy: boolean; usage?: ContextUsageView; pendingModel?: string; report(error: string): void;
+export function ComposerFooter({ host, legacy, usage, compaction, pendingModel, report }: {
+  compaction?: 'running' | 'complete' | 'failed'; host?: HostView; legacy: boolean; usage?: ContextUsageView; pendingModel?: string; report(error: string): void;
 }): React.JSX.Element {
   const permissions = useMenuAnchor();
   const context = useMenuAnchor();
@@ -69,7 +69,7 @@ export function ComposerFooter({ host, legacy, usage, pendingModel, report }: {
   const savingRef = useRef(false);
   const known = usage?.usedTokens != null && usage.contextWindow != null && usage.contextWindow > 0;
   const remaining = known ? Math.max(0, Math.min(100, Math.round(100 * (1 - usage.usedTokens! / usage.contextWindow!)))) : null;
-  const usageLabel = remaining === null ? '上下文待统计' : `${usage?.source === 'estimate' ? '约剩余' : '剩余'} ${remaining}%`;
+  const usageLabel = compaction === 'running' ? '正在整理上下文…' : remaining === null ? '上下文待统计' : `${usage?.source === 'estimate' ? '约剩余' : '剩余'} ${remaining}%`;
   const details = known ? `已用 ${usage.usedTokens!.toLocaleString()} / ${usage.contextWindow!.toLocaleString()} tokens\n${usage.source === 'provider' ? '模型返回的用量' : 'Pi SDK 估算（包含可用的模型统计）'}\n更新于 ${new Date(usage.updatedAt).toLocaleTimeString()}` : '发送消息后统计上下文用量';
   async function choose(mode: ReviewMode): Promise<void> {
     if (!host || savingRef.current || mode === host.defaultMode) return;

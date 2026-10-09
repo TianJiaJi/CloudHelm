@@ -50,7 +50,7 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
     {conversation && <div className={styles.agentActions}>
       <span className={styles.status}>{statusLabel[conversation.status]}</span>
       {(running || hasRunningOperation) && <button title="停止本轮 AI，并请求终止正在运行的命令" onClick={() => void capture(() => window.cloudhelm.stopOperation(conversation.id), report)}><Icon name="stop" size={13} />停止</button>}
-      {!running && ['paused', 'failed', 'human-control'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
+      {conversation.session && !running && ['paused', 'failed', 'human-control'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
     </div>}
     <div className={styles.agentScroll} ref={scroll}>
       {!conversation && <div className={styles.agentWelcome}><span className={styles.welcomeIcon}><Icon name="chat" size={25} /></span><h2>{host ? '这台服务器，需要做些什么？' : '有什么想聊的？'}</h2>
@@ -64,7 +64,7 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
         if (entry.kind === 'clarification') return <ClarificationCard key={entry.key} request={entry.value} />;
         if (entry.kind === 'operation') return <OperationCard key={entry.key} operation={entry.value} report={report} />;
         const message = entry.value;
-        if (message.role === 'user') return <UserMessage key={`${message.taskId}:${entry.key}`} message={message} canEdit={(conversation?.hostIds.length ?? 0) <= 1} report={report} />;
+        if (message.role === 'user') return <UserMessage key={`${message.taskId}:${entry.key}`} message={message} canEdit={!!conversation?.session && conversation.hostIds.length <= 1} report={report} />;
         return <article key={entry.key} className={styles.message}
           onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
           <strong>{message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}
@@ -78,12 +78,12 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
       {terminal && <button className={styles.agentTerminalLink} onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 专用终端<Icon name="chevron" size={12} /></button>}
       {conversation && ['ready-for-review', 'accepted', 'failed'].includes(conversation.status) && <VerificationCard conversation={conversation} report={report} />}
     </div>
-    <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} hostId={host?.id ?? null} conversation={conversation} host={host} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} quote={quote} report={report} />
+    <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} hostId={host?.id ?? null} conversation={conversation} host={host} compaction={conversation ? snapshot.contextCompaction?.[conversation.id] : undefined} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} quote={quote} report={report} />
   </>;
 }
 
-function Composer({ hostId, host, usage, conversation, profile, models, quote, report }: {
-  hostId: string | null; host?: HostView; usage?: import('@cloudhelm/contracts').ContextUsageView; conversation?: TaskView; profile: AppSnapshot['profile']; models: ModelOption[]; quote: QuotedOutput | null; report(error: string): void;
+function Composer({ hostId, host, usage, compaction, conversation, profile, models, quote, report }: {
+  hostId: string | null; host?: HostView; compaction?: 'running' | 'complete' | 'failed'; usage?: import('@cloudhelm/contracts').ContextUsageView; conversation?: TaskView; profile: AppSnapshot['profile']; models: ModelOption[]; quote: QuotedOutput | null; report(error: string): void;
 }): React.JSX.Element {
   const draftKey = conversation?.id ?? `draft:${hostId ?? 'chat'}`;
   const [text, setText] = useState(() => composerDrafts.get(draftKey)?.text ?? '');
@@ -95,7 +95,7 @@ function Composer({ hostId, host, usage, conversation, profile, models, quote, r
   const currentRequest = useUi((state) => conversation ? state.currentRequests[conversation.id] : undefined);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const waiting = conversation?.status === 'waiting-user';
-  const legacy = (conversation?.hostIds.length ?? 0) > 1;
+  const legacy = !!conversation && (!conversation.session || conversation.hostIds.length > 1);
   const pendingModel = conversation?.status === 'running' && currentRequest && (currentRequest.model.provider !== model.provider || currentRequest.model.modelId !== model.modelId);
   useEffect(() => {
     if (quote && !consumedQuotes.has(quote.id)) {
@@ -145,7 +145,7 @@ function Composer({ hostId, host, usage, conversation, profile, models, quote, r
     ];
   }
   return <div className={styles.composerWrap}>
-    {legacy && <p className={styles.notice}>这是一条旧版多主机记录，仅供查看。请从具体主机开始新对话。</p>}
+    {legacy && <p className={styles.notice}>此旧对话仅供查看，无法恢复模型上下文。请开始新对话。</p>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(); }}>
       {!!attachments.length && <div className={styles.attachments}>{attachments.map((item) => <span key={item.token}
         onContextMenu={(event) => openContextMenu(event, attachmentMenuEntries(item), '附件操作')}>
@@ -154,7 +154,7 @@ function Composer({ hostId, host, usage, conversation, profile, models, quote, r
         onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 180)}px`; }}
         onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
       <div className={styles.composerTools}><div className={styles.attachControl}>
-        <button type="button" aria-label="添加本地资料" title="添加本地资料" onClick={() => setAttachmentMenu(!attachmentMenu)}><Icon name="plus" size={18} /></button>
+        <button type="button" aria-label="添加本地资料" title="添加本地资料" disabled={legacy || waiting} onClick={() => setAttachmentMenu(!attachmentMenu)}><Icon name="plus" size={18} /></button>
         {attachmentMenu && <div className={styles.attachMenu}><button type="button" onClick={() => void attach('file')}><Icon name="file" />选择文件</button><button type="button" onClick={() => void attach('directory')}><Icon name="folder" />选择目录</button></div>}
       </div>
         {models.length ? <ModelPicker models={models} selected={model} disabled={switching || legacy} conversation={!!conversation} choose={chooseModel} />
@@ -162,6 +162,6 @@ function Composer({ hostId, host, usage, conversation, profile, models, quote, r
         <button type="submit" className={styles.sendButton} aria-label="发送消息" title="Enter 发送 · Shift + Enter 换行" disabled={!text.trim() || busy || switching || !models.length || legacy || waiting}><Icon name="arrow" size={16} /></button>
       </div>
     </form>
-    <ComposerFooter host={host} legacy={legacy} usage={usage} pendingModel={pendingModel ? model.modelId : undefined} report={report} />
+    <ComposerFooter compaction={compaction} host={host} legacy={legacy} usage={usage} pendingModel={pendingModel ? model.modelId : undefined} report={report} />
   </div>;
 }

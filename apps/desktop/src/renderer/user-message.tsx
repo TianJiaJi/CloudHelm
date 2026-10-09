@@ -58,7 +58,7 @@ export function UserMessage({ message, canEdit, report }: {
           onClick={() => void copy()} onBlur={() => setCopyState('idle')}>
           <Icon name={copyState === 'copied' ? 'check' : 'copy'} size={14} />
         </button>
-        <button type="button" ref={editButton} aria-label="编辑消息" title={canEdit ? '编辑消息' : '旧版多主机记录仅供查看'} disabled={!canEdit || busy}
+        <button type="button" ref={editButton} aria-label="编辑消息" title={canEdit ? '编辑消息' : '旧对话仅供查看'} disabled={!canEdit || busy}
           onClick={() => { if (!editing) { setDraft(message.text); setEditing(true); } }}><Icon name="edit" size={14} /></button>
       </div>
     </div>

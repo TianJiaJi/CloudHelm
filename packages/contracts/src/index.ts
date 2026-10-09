@@ -54,7 +54,7 @@ export interface PlanStep { id: string; title: string; status: 'pending' | 'runn
 export interface VerificationReport { summary: string; access: string[]; evidenceOperationIds: string[]; changes: string[]; recovery: string[] }
 export type InterruptionSource = 'stop-button' | 'ctrl-c' | 'terminal-close';
 export interface UserInterruption { source: InterruptionSource; requestedAt: number; operationIds: string[] }
-export interface ConversationMessage { interruption?: UserInterruption; taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
+export interface ConversationMessage { entryId?: string; interruption?: UserInterruption; taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
 export interface TerminalViewState { id: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed'; replacementTerminalId?: string }
 export interface ConversationStart { hostId: string | null; message: string; model?: ModelChoice; localSelectionTokens: string[] }
 export interface LocalScope { path: string; kind: 'file' | 'directory' }
@@ -71,6 +71,7 @@ export interface HostView extends HostDraft {
 }
 
 export interface TaskView {
+  session?: { version: 1; id: string };
   id: string;
   goal: string;
   hostIds: string[];
@@ -137,6 +138,7 @@ export interface InputRequestView {
 
 export interface AppSnapshot {
   contextUsage?: Record<string, ContextUsageView>;
+  contextCompaction?: Record<string, 'running' | 'complete' | 'failed'>;
   hosts: HostView[];
   conversations: TaskView[];
   terminals: TerminalViewState[];
@@ -169,7 +171,8 @@ export type AppEvent =
   | { type: 'terminal-state'; terminalId: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed' }
   | { type: 'terminal-replaced'; previousTerminalId: string; terminalId: string }
   | ({ type: 'task-message' } & ConversationMessage)
-  | { type: 'model-request'; taskId: string; model: ModelChoice; request: number; createdAt: number }
+  | { type: 'context-compaction'; taskId: string; status: 'running' | 'complete' | 'failed' }
+  | { type: 'model-request'; purpose?: 'conversation' | 'compaction'; taskId: string; model: ModelChoice; request: number; createdAt: number }
   | { type: 'work-progress'; taskId: string; plan: PlanStep[] }
   | { type: 'work-report'; taskId: string; report?: VerificationReport };
 

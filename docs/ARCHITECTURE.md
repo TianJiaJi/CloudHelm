@@ -17,7 +17,7 @@
 | 凭据保护 | 主进程使用 Electron safeStorage |
 | 验证 | Vitest、Playwright、ESLint、TypeScript、dependency-cruiser |
 
-确切依赖版本以各 workspace 的 `package.json` 和锁文件为准。没有引入 Vercel AI SDK，也没有整体嵌入 Pi Coding Agent。
+确切依赖版本以各 workspace 的 `package.json` 和锁文件为准。没有引入 Vercel AI SDK。Adapters 使用 Pi Coding Agent 的原生会话、语义压缩和只读分页工具；不开放其内置 Shell、写入或编辑能力。
 
 ## 分层依赖
 
@@ -86,7 +86,13 @@ Agent 终端通过结构化进程通道执行普通命令：字面量命令直�
 
 每次请求固定模型与凭据快照，界面切换在下一次请求边界生效；操作审核沿用产生该操作的请求配置。全局默认只影响新对话，Key／地址修订变化后旧对话恢复前需要明确重选。
 
-CloudHelm 保存权威对话和操作记录，Pi 管理当前运行上下文。[上下文整理](../apps/desktop/src/worker/context-manager.ts)根据所选模型窗口预留生成预算，保持工具调用与结果配对，缩短可检索日志并保留当前目标和参数；无法安全容纳时暂停发送。授权、凭据和控制权不依赖摘要恢复。
+CloudHelm 保存权威任务、审核和操作记录；[原生会话适配器](../packages/adapters/src/pi-session.ts)通过 `AgentSession`、`SessionManager` 管理完整模型 transcript、工具元数据和语义压缩。Utility process 独占写入 `userData/pi-sessions/<taskId>/*.jsonl`；SQLite 只绑定会话 ID，并缓存按 SDK entry ID 去重的消息投影。重启恢复严格校验绑定和 JSONL，缺失或损坏时拒绝继续，不退回空会话；恢复本身不请求模型、不执行工具。显式继续时注入当前权威操作结果，未知结果仍先核验。
+
+上下文占用由 SDK `getContextUsage()` 提供，不累计会话消耗，不计未发送草稿。压缩后缺少新 usage、重启或模型切换时显示待统计；估算与模型统计分别标明来源。压缩使用 SDK 摘要请求并计入请求上限，失败或取消后暂停。关闭模型／供应商自动重试、缓存预热、网络模型目录刷新及环境凭据回退；拦截会自动重试的溢出压缩。模型选择在下一请求准备边界应用，并先于该请求的自动压缩。
+
+会话只启用 CloudHelm 明确注册的工具和内置澄清扩展；不发现用户／项目的 Pi 资源。授权、凭据和终端控制权始终由 CloudHelm 重新校验。SDK 原生 read 负责 offset/limit 和输出截断，主机仍校验用户选定范围、符号链接、UTF-8 和 1 MiB 文件上限。
+
+迁移 0004 只运行一次：清理旧消息正文、旧模型请求缓存和旧澄清运行状态，旧任务元数据、操作审计及日志保留为只读；主机、凭据、保护路径、模型与快捷键配置保留。新会话 JSONL 不导入旧的展示文本。普通进程崩溃恢复经过桌面 smoke 验证；同步写入不等同于断电级耐久保证。
 
 默认主模型请求上限为 100；重复失败或拒绝达到 3 次、连续 10 轮没有记录到新操作时暂停。长命令的正常等待不单独计作一轮。运行时有请求上限字段，目前未提供完整的用户可调预算页面。
 
