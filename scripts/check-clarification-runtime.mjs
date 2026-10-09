@@ -18,6 +18,7 @@ export async function checkClarificationRuntime(initialPage, restart) {
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     const send = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: `reply-${index}`, object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     send({ role: 'assistant', content: '' });
+    send({ reasoning_content: '先确认部署环境，再执行后续检查。' });
     if (ask) send({ tool_calls: [{ index: 0, id: `ask-${index}`, type: 'function', function: { name: 'ask_user', arguments: JSON.stringify({ questions: [{ id: 'environment', prompt: '部署到哪个环境？', options: [{ value: 'test', label: '测试环境', recommended: true }, { value: 'prod', label: '生产环境' }] }] }) } }] });
     else send({ content: '已收到，使用测试环境。' });
     send({}, ask ? 'tool_calls' : 'stop');
@@ -29,8 +30,11 @@ export async function checkClarificationRuntime(initialPage, restart) {
   try {
     const taskId = await page.evaluate(async (baseUrl) => {
       await window.cloudhelm.saveModelProfile({ provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'local-smoke-dummy', baseUrl });
-      const task = await window.cloudhelm.startConversation({ hostId: null, message: '帮助选择部署方式', localSelectionTokens: [] });
-      return task.id;
+      const result = await window.cloudhelm.sendStructured({ hostId: null, localSelectionTokens: [], document: {
+        requestId: 'desktop-folded-paste', parts: [{ type: 'text', text: '帮助选择部署方式\n' },
+          { type: 'reference', reference: { id: 'draft-paste', kind: 'paste', capturedAt: 1 }, content: '保留部署约束\n'.repeat(120) }]
+      } });
+      return result.conversationId;
     }, `http://127.0.0.1:${server.address().port}/v1`);
     const pending = async () => {
       let request;
@@ -46,7 +50,10 @@ export async function checkClarificationRuntime(initialPage, restart) {
     };
     const first = await pending();
     assert.equal(requests.length, 1);
+    assert.ok(requests[0].messages.some((message) => message.role === 'user' && (typeof message.content === 'string' ? message.content : message.content.map((part) => part.text ?? '').join('')).includes('保留部署约束\n'.repeat(120))),
+      'A folded paste is sent intact without an extra summarization request');
     assert.ok(requests[0].tools.some((tool) => tool.function.name === 'ask_user'));
+    assert.ok(requests[0].tools.every((tool) => !['bash', 'write', 'edit', 'read'].includes(tool.function.name)));
     await answer(first.id);
     assert.equal(requests.length, 2);
     assert.ok(requests[1].messages.some((message) => message.role === 'tool' && message.content.includes('"value":"test"')));
@@ -57,6 +64,12 @@ export async function checkClarificationRuntime(initialPage, restart) {
     assert.equal(restored.clarifications.find((q) => q.id === abandoned.id).status, 'expired');
     assert.equal(restored.clarifications.find((q) => q.id === first.id).status, 'answered');
     assert.equal(restored.conversations.find((task) => task.id === taskId).status, 'paused');
+    const document = restored.messages.find((message) => message.document?.requestId === 'desktop-folded-paste')?.document;
+    assert.ok(document, 'structured display is persisted across an actual desktop restart');
+    const reference = document.parts.find((part) => part.type === 'reference').reference;
+    const body = await page.evaluate((id) => window.cloudhelm.readReference(id), reference.id);
+    assert.equal(body.original, '保留部署约束\n'.repeat(120));
+    assert.equal(body.summary, undefined);
     const late = await page.evaluate(async ({ taskId, requestId }) => {
       try { await window.cloudhelm.answerClarification(taskId, requestId, [{ id: 'environment', value: 'prod' }]); return 'accepted'; }
       catch { return 'rejected'; }
@@ -68,6 +81,14 @@ export async function checkClarificationRuntime(initialPage, restart) {
     assert.notEqual(next.generation, abandoned.generation);
     await answer(next.id);
     assert.equal(requests.length, 5);
+    assert.ok(requests[3].messages.some((message) => message.role === 'tool' && message.tool_call_id === 'ask-1' && message.content.includes('"value":"test"')),
+      'Native restoration keeps the original completed tool call and answer');
+    assert.ok(restored.messages.some((message) => message.taskId === taskId && message.reasoning?.text === '先确认部署环境，再执行后续检查。'),
+      'Desktop restart retains provider-returned thinking content');
+    const projected = await page.evaluate(async (id) => (await window.cloudhelm.snapshot()).messages.filter((message) => message.taskId === id), taskId);
+    const entryIds = projected.flatMap((message) => message.entryId ? [message.entryId] : []);
+    assert.ok(entryIds.length >= 5);
+    assert.equal(new Set(entryIds).size, entryIds.length, 'restoration must not duplicate native projection entries');
     return page;
   } finally {
     server.closeAllConnections();

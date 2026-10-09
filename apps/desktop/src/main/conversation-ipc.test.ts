@@ -16,7 +16,7 @@ function makeHost(id: string): HostView {
     protectedPaths: [], defaultMode: 'ai-review', policyRevision: 1 };
 }
 function makeConversation(hostIds: string[] = ['host-a']): TaskView {
-  return { id: 'conversation-one', goal: 'Inspect service', hostIds, localScopes: [], status: 'paused', provider: profile.provider,
+  return { session: { version: 1, id: 'conversation-one' }, id: 'conversation-one', goal: 'Inspect service', hostIds, localScopes: [], status: 'paused', provider: profile.provider,
     modelId: profile.modelId, credentialRevision: profile.credentialRevision, requestCount: 1, requestLimit: 100, createdAt: 1, updatedAt: 1 };
 }
 function deferred<T>() {
@@ -46,7 +46,7 @@ function setup(task = makeConversation(), running = false) {
     runtimeHost: vi.fn((id: string) => ({ ...hosts.find((host) => host.id === id)! })),
     snapshot: vi.fn(() => ({ operations: [], messages })),
     createTask: vi.fn((goal: string, hostIds: string[], modelId: string, localScopes: LocalScope[]) => {
-      const created = { ...makeConversation(hostIds), id: 'new-conversation', goal, modelId, localScopes };
+      const created = { ...makeConversation(hostIds), id: 'new-conversation', session: { version: 1 as const, id: 'new-conversation' }, goal, modelId, localScopes };
       conversations.set(created.id, created); return created;
     }),
     setTaskModel: vi.fn((id: string, next: RuntimeProfile) => { Object.assign(conversations.get(id)!, { provider: next.provider, modelId: next.modelId, credentialRevision: next.credentialRevision }); }),
@@ -68,7 +68,7 @@ function setup(task = makeConversation(), running = false) {
     const result = tokens.map((token) => selections.get(token)!); tokens.forEach((token) => selections.delete(token)); return result;
   });
   const restoreSelections = vi.fn((tokens: string[], scopes: LocalScope[]) => { tokens.forEach((token, index) => selections.set(token, scopes[index]!)); });
-  registerConversationIpc({ state: state as unknown as AppState, runtime: { call } as unknown as RuntimeBridge, connectHost, takeSelections, restoreSelections });
+  registerConversationIpc({ sessionRoot: '/tmp/cloudhelm-ipc-test-sessions', state: state as unknown as AppState, runtime: { call } as unknown as RuntimeBridge, connectHost, takeSelections, restoreSelections });
   return { state, call, connectHost, takeSelections, restoreSelections, active, conversations };
 }
 
@@ -268,4 +268,14 @@ describe('conversation deletion IPC', () => {
     expect(fixture.call).not.toHaveBeenCalledWith({ method: 'delete-task', taskId: 'conversation-one' });
     expect(fixture.state.deleteTask).not.toHaveBeenCalled();
   });
+});
+
+it.each(['send-message', 'resume-task', 'set-conversation-model'])('rejects legacy session continuation through %s before side effects', async (channel) => {
+  const task = makeConversation();
+  delete task.session;
+  const f = setup(task);
+  await expect(invoke(channel, task.id, channel === 'set-conversation-model' ? profile : 'continue', [])).rejects.toThrow('旧对话');
+  expect(f.call).not.toHaveBeenCalled();
+  expect(f.connectHost).not.toHaveBeenCalled();
+  expect(f.takeSelections).not.toHaveBeenCalled();
 });

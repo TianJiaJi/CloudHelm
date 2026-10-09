@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import type { AppEvent, AppSnapshot, DesktopAPI, TerminalViewState } from '@cloudhelm/contracts';
+import type { AppEvent, AppSnapshot, DesktopAPI, TerminalViewState, ReferenceBody } from '@cloudhelm/contracts';
 import { App } from '../../apps/desktop/src/renderer/app.js';
 import '../../apps/desktop/src/renderer/global.css';
 
@@ -22,13 +22,44 @@ const terminalEvent = (terminal: TerminalViewState): void => emit({ type: 'termi
 const unsupported = async (): Promise<never> => { throw new Error('UI smoke reached an unimplemented fixture method'); };
 const shortcutSettings = { bindings: {} as Record<string, string>, enabled: true };
 
+const referenceBodies = new Map<string, ReferenceBody>();
 const api: DesktopAPI = {
+  quoteTerminal: async (input) => {
+    const reference = { id: crypto.randomUUID(), kind: 'terminal' as const, terminalId: input.terminalId, hostId: input.hostId, hostLabel: '生产服务器', command: input.selection ? undefined : 'docker ps', capturedAt: Date.now() };
+    referenceBodies.set(reference.id, { reference, original: input.selection ?? '$ docker ps\nCONTAINER ID   IMAGE\nabc123        service:latest' });
+    calls.push({ kind: 'quote', input }); return reference;
+  },
+  readReference: async (id) => { const body = referenceBodies.get(id); if (!body) throw new Error('引用不存在'); return body; },
+  cancelMessage: async (id) => { calls.push({ kind: 'cancel-message', id }); },
+  sendStructured: async (input) => {
+    calls.push({ kind: 'structured', input });
+    const text = input.document.parts.map((part) => part.type === 'text' ? part.text : part.content ?? referenceBodies.get(part.reference.id)?.original ?? '').join('');
+    let id = input.conversationId;
+    if (id) await api.sendMessage(id, text, input.localSelectionTokens);
+    else id = (await api.startConversation({ ...input, message: text || '请分析这段终端输出' })).id;
+    if (input.document.parts.some((part) => part.type === 'reference')) {
+      const parts = input.document.parts.map((part) => {
+        if (part.type === 'text') return part;
+        if (part.content !== undefined) referenceBodies.set(part.reference.id, { reference: part.reference, original: part.content });
+        return { type: 'reference' as const, reference: part.reference };
+      });
+      const message = view.messages.filter((m) => m.taskId === id && m.role === 'user').at(-1)!;
+      message.document = { requestId: input.document.requestId, parts }; sync();
+    }
+    return { conversationId: id };
+  },
   snapshot: async () => structuredClone(view),
   onEvent: (listener) => { listeners.push(listener); return () => { listeners = listeners.filter((item) => item !== listener); }; },
   availableModels: async () => [
-    { provider: 'openai', modelId: 'gpt-5.4', name: 'GPT-5.4' },
-    { provider: 'anthropic', modelId: 'claude-sonnet', name: 'Claude Sonnet' }
+    { provider: 'openai', modelId: 'gpt-5.4', name: 'GPT-5.4', thinkingLevels: ['off', 'low', 'medium', 'high', 'xhigh'] },
+    { provider: 'anthropic', modelId: 'claude-sonnet', name: 'Claude Sonnet' },
+    { provider: 'cloudhelm-custom', modelId: 'long-model', name: 'Custom reasoning model with an exceptionally long display name' }
   ],
+  updateHostReviewMode: async (id, mode) => {
+    calls.push({ kind: 'review-mode', id, mode });
+    const host = view.hosts.find((item) => item.id === id)!;
+    host.defaultMode = mode; host.policyRevision++; sync();
+  },
   connectHost: async (id) => { calls.push({ kind: 'connect', id }); view.hosts.find((host) => host.id === id)!.status = 'connected'; sync(); },
   openTerminal: async (hostId) => {
     const terminal: TerminalViewState = { id: `term${++sequence}`, hostId, state: 'human' };
@@ -58,6 +89,7 @@ const api: DesktopAPI = {
     const conversation = { id: `chat${++sequence}`, goal: input.message, hostIds: input.hostId ? [input.hostId] : [], localScopes: [],
       status: 'running' as const, provider: input.model!.provider, modelId: input.model!.modelId,
       requestCount: 1, requestLimit: 100, createdAt: Date.now(), updatedAt: Date.now() };
+    Object.assign(conversation, { thinking: { levels: ['off', 'low', 'medium', 'high', 'xhigh'], selected: input.thinkingLevel ?? 'off', effective: input.thinkingLevel ?? 'off', pending: false }, session: { version: 1, id: conversation.id } });
     view.conversations.push(conversation);
     view.messages.push({ taskId: conversation.id, role: 'user', text: input.message, createdAt: Date.now() });
     sync(); return conversation;
@@ -65,7 +97,12 @@ const api: DesktopAPI = {
   sendMessage: async (id, message, tokens) => {
     calls.push({ kind: 'send', id, message, tokens }); view.messages.push({ taskId: id, role: 'user', text: message, createdAt: Date.now() }); sync();
   },
-  setConversationModel: async (id, model) => { calls.push({ kind: 'model', id, model }); Object.assign(view.conversations.find((item) => item.id === id)!, model); sync(); },
+  setConversationThinking: async (id, level) => {
+    const task = view.conversations.find((item) => item.id === id)!;
+    task.thinking = { levels: task.thinking!.levels, selected: level, effective: task.thinking!.effective, pending: true };
+    calls.push({ kind: 'thinking', id, level }); sync();
+  },
+  setConversationModel: async (id, model) => { calls.push({ kind: 'model', id, model }); Object.assign(view.conversations.find((item) => item.id === id)!, model, { thinking: { levels: model.provider === 'cloudhelm-custom' ? [] : ['off', 'low', 'medium', 'high'], selected: 'off', effective: 'off', pending: false } }); if (view.contextUsage) delete view.contextUsage[id]; sync(); },
   readTerminalLog: async () => 'ubuntu@prod:~$ docker ps\nCONTAINER ID   IMAGE\nabc123        service:latest',
   selectLocalPath: async (kind) => ({ token: `local-${kind}`, scope: { path: '/Users/demo/service', kind } }),
   selectPrivateKey: async () => { calls.push({ kind: 'select-private-key' }); return '/Users/demo/.ssh/server key'; },
@@ -113,7 +150,13 @@ window.cloudhelm = api;
 const fixture = {
   calls,
   inject(event: AppEvent): void {
+    if (event.type === 'execution') {
+      if (event.value.model === 'idle') view.conversations.find((task) => task.id === event.taskId)!.status = 'paused';
+      view.execution = { ...view.execution, [event.taskId]: event.value }; sync(); return; }
+    if (event.type === 'thinking') { view.conversations.find((task) => task.id === event.taskId)!.thinking = event.value; sync(); return; }
     if (event.type === 'terminal-state') view.terminals.push({ id: event.terminalId, hostId: event.hostId, taskId: event.taskId, state: event.state });
+    if (event.type === 'context-compaction') { view.contextCompaction = { ...view.contextCompaction, [event.taskId]: event.status }; sync(); return; }
+    if (event.type === 'context-usage') { view.contextUsage = { ...view.contextUsage, [event.taskId]: event.value }; sync(); return; }
     emit(event);
   },
   addInput(): void {

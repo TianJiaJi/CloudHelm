@@ -6,3 +6,4 @@ export * from './clarification-coordinator.js';
 export * from './privileged-sessions.js';
 export * from './permission-aware-executor.js';
 export * from './sudo-credential-cache.js';
+export * from './prepare-message.js';

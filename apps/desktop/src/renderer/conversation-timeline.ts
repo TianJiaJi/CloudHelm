@@ -9,7 +9,7 @@ type TimelineEntry =
 export function conversationTimeline(messages: ConversationMessage[], operations: OperationView[], clarifications: ClarificationRequest[] = []): TimelineEntry[] {
   const entries: TimelineEntry[] = [
     ...clarifications.map((value): TimelineEntry => ({ kind: 'clarification', key: `clarification:${value.id}`, value })),
-    ...messages.map((value, index): TimelineEntry => ({ kind: 'message', key: `message:${value.createdAt}:${index}`, value })),
+    ...messages.map((value, index): TimelineEntry => ({ kind: 'message', key: value.entryId ? `message:${value.entryId}` : `message:${value.createdAt}:${index}`, value })),
     ...operations.map((value): TimelineEntry => ({ kind: 'operation', key: `operation:${value.id}`, value }))
   ];
   // Millisecond timestamps can tie: user input precedes execution, and AI explanations follow it.

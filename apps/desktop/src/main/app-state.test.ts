@@ -295,3 +295,76 @@ describe('shortcut settings persistence', () => {
     expect(() => setup().state.saveShortcuts(settings as never)).toThrow();
   });
 });
+
+describe('runtime context usage snapshots', () => {
+  it('publishes usage without persisting it and clears it on model change, restart and runtime exit', () => {
+    const { state, store, events } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    const value = { model: { provider: task.provider!, modelId: task.modelId }, request: 1,
+      usedTokens: 100, contextWindow: 32000, source: 'provider' as const, updatedAt: 10 };
+    state.record({ type: 'context-usage', taskId: task.id, value });
+    expect(state.snapshot().contextUsage?.[task.id]).toEqual(value);
+    expect(events.at(-1)).toMatchObject({ type: 'snapshot', value: { contextUsage: { [task.id]: value } } });
+    expect(store.get<TaskView>('tasks', task.id)).not.toHaveProperty('contextUsage');
+    expect(setup(store).state.snapshot().contextUsage).toEqual({});
+    state.setTaskModel(task.id, state.runtimeProfile());
+    expect(state.snapshot().contextUsage).toEqual({});
+    state.record({ type: 'context-usage', taskId: task.id, value });
+    state.runtimeStopped();
+    expect(state.snapshot().contextUsage).toEqual({});
+  });
+});
+
+it('rebuilds native message projections idempotently and clears compaction status on worker exit', () => {
+  const { state, store } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  const message = { type: 'task-message' as const, taskId: task.id, entryId: 'native-entry', role: 'user' as const, text: 'stored intent', createdAt: 10 };
+  state.record(message);
+  state.record(message);
+  expect(state.snapshot().messages).toHaveLength(1);
+  expect(store.get('messages', `${task.id}:native-entry`)).toMatchObject({ entryId: 'native-entry' });
+  const restarted = setup(store).state;
+  restarted.record(message);
+  expect(restarted.snapshot().messages).toHaveLength(1);
+  restarted.record({ type: 'context-compaction', taskId: task.id, status: 'running' });
+  expect(restarted.snapshot().contextCompaction?.[task.id]).toBe('running');
+  restarted.setTaskModel(task.id, restarted.runtimeProfile());
+  expect(restarted.snapshot().contextCompaction?.[task.id]).toBe('running');
+  restarted.runtimeStopped();
+  expect(restarted.snapshot().contextCompaction).toEqual({});
+  store.removeWhere('messages', 'taskId', task.id);
+  const rebuilt = setup(store).state;
+  expect(rebuilt.snapshot().messages).toEqual([]);
+  rebuilt.record(message);
+  expect(rebuilt.snapshot().messages).toHaveLength(1);
+});
+
+it('preserves execution state across model selection and projects uncertainty after restart', () => {
+  const { state, store } = setup(); state.saveProfile(customProfile());
+  const task = conversation(state);
+  state.record({ type: 'execution', taskId: task.id, value: { model: 'idle', remote: 'running', stopping: true, canStop: true } });
+  state.setTaskModel(task.id, state.runtimeProfile());
+  expect(state.snapshot().execution?.[task.id]).toMatchObject({ remote: 'running', stopping: true });
+  state.record({ type: 'operation', value: { id: 'unfinished', taskId: task.id, hostId: 'host', kind: 'command', preview: 'sleep 10', status: 'running', createdAt: 1 } });
+  expect(setup(store).state.snapshot().execution?.[task.id]).toEqual({ model: 'idle', remote: 'unknown', stopping: false, canStop: false });
+  state.runtimeStopped();
+  expect(state.snapshot().execution?.[task.id]).toEqual({ model: 'idle', remote: 'unknown', stopping: false, canStop: false });
+});
+
+it('projects live reasoning without database writes, enriches existing native messages once, and restores completed content', () => {
+  const { state, store } = setup(); state.saveProfile(customProfile()); const task = conversation(state);
+  const reasoning = { text: '接口提供的摘要', kind: 'summary' as const, status: 'complete' as const };
+  state.record({ type: 'reasoning-progress', taskId: task.id, value: { id: 'stream', createdAt: 1,
+    model: { provider: task.provider!, modelId: task.modelId }, reasoning: { ...reasoning, status: 'streaming' } } });
+  expect(store.list('messages')).toHaveLength(0);
+  state.runtimeStopped();
+  expect(state.snapshot().reasoningProgress?.[task.id]?.reasoning.status).toBe('interrupted');
+  const original = { type: 'task-message' as const, taskId: task.id, entryId: 'entry', role: 'agent' as const, text: '答案', createdAt: 1 };
+  state.record(original); state.record({ ...original, reasoning }); state.record({ ...original, reasoning });
+  expect(state.snapshot().reasoningProgress).toEqual({});
+  expect(state.snapshot().messages).toHaveLength(1);
+  expect(setup(store).state.snapshot().messages[0]?.reasoning).toEqual(reasoning);
+  expect(setup(store).state.snapshot().reasoningProgress).toEqual({});
+});

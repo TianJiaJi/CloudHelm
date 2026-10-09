@@ -81,7 +81,7 @@ describe('Pi agent loop over a real loopback SSH session', () => {
         host.fingerprint = error.fingerprint;
         await server.dispatch({ method: 'connect', host });
       }
-      await server.dispatch({ method: 'start-task', task, hosts: [host], profile: profile('fixture-a', 'dummy-key-a') });
+      await server.dispatch({ method: 'start-task', task: { ...task, session: { version: 1, id: task.id } }, sessionDirectory: `${root}/sessions/${task.id}`, hosts: [host], profile: profile('fixture-a', 'dummy-key-a') });
       await vi.waitFor(() => {
         expect(fixture.errors).toEqual([]);
         expect(mainRequestCount).toBe(2);

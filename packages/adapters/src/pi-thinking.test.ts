@@ -1,0 +1,52 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, expect, it, vi } from 'vitest';
+import type { SessionEvent, SessionOptions } from '@cloudhelm/core';
+import { createConversationSession } from './pi-session.js';
+import { modelThinking } from './model-catalog.js';
+import { openAiFixture, type FixtureResponse } from './pi-session-fixture.js';
+
+const cleanup: Array<() => void | Promise<void>> = [];
+afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
+const thinking = (events: SessionEvent[]) => events.filter((e) => e.type === 'thinking').at(-1)?.value;
+it('uses SDK supported levels and hides non-reasoning models', () => {
+  expect(modelThinking({ provider: 'cloudhelm-custom', modelId: 'anything-reasoning-high', baseUrl: 'http://localhost/v1' }).levels).toEqual([]);
+  expect(modelThinking({ provider: 'deepseek', modelId: 'deepseek-v4-pro' }).levels).toContain('high');
+});
+it('defers a running selection, persists preference natively, and maps it across model changes', async () => {
+  let release!: (response: FixtureResponse) => void;
+  const barrier = new Promise<FixtureResponse>((resolve) => { release = resolve; });
+  const fixture = await openAiFixture(async () => fixture.requests.length === 1 ? barrier : { text: 'done' });
+  cleanup.push(fixture.close);
+  const root = await mkdtemp(join(tmpdir(), 'cloudhelm-thinking-')); cleanup.push(() => rm(root, { recursive: true, force: true }));
+  const events: SessionEvent[] = [];
+  const profile = { provider: 'deepseek', modelId: 'deepseek-v4-pro', apiKey: 'test', baseUrl: fixture.baseUrl };
+  const options: SessionOptions = { profile, thinkingLevel: 'high', storage: { directory: root, id: 'thinking', restore: false },
+    systemPrompt: '', tools: [], clarification: { ask: async () => [{ id: 'q', value: 'yes' }] }, assertActive() {}, beforeRequest() {}, event: (event) => events.push(event) };
+  const session = await createConversationSession(options); cleanup.push(() => session.dispose());
+  const run = session.prompt('hello');
+  await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+  const levels = thinking(events)!.levels;
+  const target = levels.find((level) => level !== 'high')!;
+  expect(target).toBeDefined();
+  session.setThinking(target);
+  expect(thinking(events)).toMatchObject({ selected: target, effective: 'high', pending: true });
+  release({ calls: [{ id: 'ask', name: 'ask_user', arguments: { questions: [{ id: 'q', prompt: 'continue?' }] } }] });
+  await run;
+  expect(thinking(events)).toMatchObject({ selected: target, effective: target, pending: false });
+  expect(fixture.requests).toHaveLength(2);
+  expect(fixture.requests[0]?.thinking).toEqual({ type: 'enabled' });
+  expect(fixture.requests[1]?.thinking).toEqual({ type: target === 'off' ? 'disabled' : 'enabled' });
+  if (target === 'off') expect(fixture.requests[1]?.reasoning_effort).toBeUndefined();
+  session.dispose();
+  const restored = await createConversationSession({ ...options, thinkingLevel: undefined, storage: { directory: root, id: 'thinking', restore: true } });
+  cleanup.push(() => restored.dispose());
+  expect(thinking(events)).toMatchObject({ selected: target, effective: target });
+  expect(fixture.requests).toHaveLength(2);
+  restored.select({ ...profile, provider: 'cloudhelm-custom', modelId: 'no-reasoning' });
+  expect(thinking(events)?.levels).toEqual([]);
+  expect(() => restored.setThinking('high')).toThrow('不支持');
+  restored.select(profile);
+  expect(thinking(events)?.selected).toBe(target);
+});

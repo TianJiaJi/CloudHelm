@@ -1,3 +1,4 @@
+import { CommandNotStartedError } from '@cloudhelm/core';
 import { randomUUID } from 'node:crypto';
 import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
 import { operationFingerprint, OutputRedactor } from '@cloudhelm/core';
@@ -25,9 +26,11 @@ interface TerminalRecord {
   owner: Owner;
   channel: RawTerminal;
   pending?: PendingCommand;
+  commandRunning?: boolean;
 }
 
 export interface TerminalEvents {
+  command?(terminalId: string, generation: number, event: { phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }): void;
   data(terminalId: string, data: string, operationId?: string): void;
   completed?(result: OperationResult): void;
   state(terminalId: string, owner: Owner): void;
@@ -45,6 +48,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       id: randomUUID(), hostId, taskId, home, generation: 1, owner: taskId ? 'agent' : 'human', channel
     };
     this.terminals.set(terminal.id, terminal);
+    channel.onCommand?.((event) => { terminal.commandRunning = event.phase === 'start'; this.events.command?.(terminal.id, terminal.generation, event); });
     channel.onData((data) => this.receive(terminal, data));
     channel.onDisplay?.((data) => this.events.data(terminal.id, data));
     channel.onClose(() => this.closeRecord(terminal));
@@ -102,6 +106,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     const terminal = this.require(id);
     if (!humanIntent) { if (this.isProtocolResponse(data)) terminal.channel.write(data); return; }
     if (terminal.owner !== 'human' || terminal.pending) throw new Error('终端暂不可输入，请先停止 AI 并等待命令退出');
+    if (!terminal.commandRunning && /[\r\n]/u.test(data)) this.events.command?.(terminal.id, terminal.generation, { phase: 'unavailable' });
     terminal.channel.write(data);
   }
 
@@ -149,7 +154,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     if (!terminal.pending || terminal.pending.stopRequested) return;
     terminal.pending.stopRequested = true;
     // Only invoked by an explicit user stop action, never to recover a shell.
-    try { terminal.channel.write('\u0003'); } finally { this.suspend(id); }
+    try { terminal.channel.write('\u0003'); } catch (error) { terminal.pending.stopRequested = false; throw error; } finally { this.suspend(id); }
   }
 
   stopTaskCommands(taskId: string): void {
@@ -179,6 +184,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       const pending: PendingCommand = { output: '', redactor: new OutputRedactor(), operationId: operation.id, settle: resolve,
         remoteCompletion, completeRemote, reported: false };
       terminal.pending = pending;
+      this.events.command?.(terminal.id, terminal.generation, { phase: 'start', command: operation.command });
       signal?.addEventListener('abort', () => {
         if (terminal.pending !== pending) return;
         terminal.generation++;
@@ -195,7 +201,10 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       if (!terminal.channel.onDisplay) this.events.data(terminal.id, `$ ${operation.command}\r\n`);
       void terminal.channel.execute!(operation.command, operation.scope.cwd, current).catch((error: unknown) => {
         this.receive(terminal, error instanceof Error ? error.message : 'Command transport failed');
-        this.complete(terminal, undefined);
+        if (error instanceof CommandNotStartedError && terminal.pending === pending) {
+          pending.failure = { failureKind: 'unsupported', effects: 'none' };
+          this.complete(terminal, 127);
+        } else this.complete(terminal, undefined);
       });
     });
   }
@@ -211,6 +220,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     const pending = terminal.pending;
     if (!pending) return;
     terminal.pending = undefined;
+    this.events.command?.(terminal.id, terminal.generation, { phase: 'end', exitCode });
     pending.output = (pending.output + pending.redactor.finish()).slice(-65_536);
     pending.completeRemote(exitCode === undefined ? 'unknown' : 'exited');
     const result: OperationResult = { operationId: pending.operationId,
@@ -225,14 +235,8 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
   private closeRecord(terminal: TerminalRecord): void {
     terminal.owner = 'closed';
     terminal.generation++;
-    if (terminal.pending) {
-      const pending = terminal.pending;
-      pending.completeRemote('unknown');
-      if (!pending.reported) pending.settle({ operationId: pending.operationId,
-        status: 'unknown', stdoutTail: pending.output.slice(-16_384),
-        logRef: terminal.id, remoteCompletion: pending.remoteCompletion });
-    }
-    terminal.pending = undefined;
+    // Publish loss of observability even if Stop already settled the tool call.
+    this.complete(terminal, undefined);
     this.events.state(terminal.id, 'closed');
     this.listeners.delete(terminal.id);
     this.terminals.delete(terminal.id);

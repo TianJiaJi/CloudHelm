@@ -31,12 +31,16 @@ class ControlTerminal implements RawTerminal {
   onClose(listener: () => void): void { this.closed = listener; }
 }
 
-async function setup(completeImmediately = true) {
-  const control: { openBarrier?: Promise<void>; responseBarrier?: Promise<void> } = {};
+async function setup(completeImmediately = true, command = 'df -h', repeat = false) {
+  const control: { openBarrier?: Promise<void>; responseBarrier?: Promise<void>; failResponse?: boolean; replayNext?: boolean } = {};
   let requests = 0;
   const fixture = await openAiFixture(async () => {
     requests++;
-    if (requests === 1) return { calls: [{ id: 'disk', name: 'run_remote', arguments: { hostId: 'host', command: 'df -h' } }] };
+    if (requests === 1 || (repeat && requests === 2) || control.replayNext) {
+      control.replayNext = false;
+      return { calls: [{ id: `disk-${requests}`, name: 'run_remote', arguments: { hostId: 'host', command } }] };
+    }
+    if (control.failResponse) return { error: 'model network failed after successful operation', status: 500 };
     await control.responseBarrier;
     return { text: '已经核验当前状态。' };
   });
@@ -62,6 +66,42 @@ async function setup(completeImmediately = true) {
 }
 
 describe('stop and explicit continuation', () => {
+  it('preserves successful changes when a subsequent model request fails and the user continues', async () => {
+    const f = await setup(true, 'mkdir -p /srv/service');
+    try {
+      f.control.failResponse = true;
+      await f.runner.start();
+      expect(f.requests()).toBe(2);
+      f.control.failResponse = false; f.control.replayNext = true;
+      f.runner.message('继续检查原结果');
+      await vi.waitFor(() => expect(f.requests()).toBe(4));
+      expect(f.sessions.flatMap((session) => session.channel.commands)).toEqual(['mkdir -p /srv/service']);
+      expect(JSON.stringify(f.fixture.requests[2]?.messages)).toContain('CloudHelm resume:');
+      expect(JSON.stringify(f.fixture.requests[3]?.messages)).toContain('already records this action');
+    } finally { f.runner.pause(); await f.fixture.close(); }
+  });
+
+  it('does not execute the same successful change twice when the model repeats it with a new call id', async () => {
+    const f = await setup(true, 'mkdir -p /srv/service', true);
+    try {
+      await f.runner.start();
+      expect(f.sessions.flatMap((session) => session.channel.commands)).toEqual(['mkdir -p /srv/service']);
+      expect(JSON.stringify(f.fixture.requests.at(-1)?.messages)).toContain('already records this action');
+    } finally { f.runner.pause(); await f.fixture.close(); }
+  });
+
+  it('keeps a disconnected command unknown after model abort and never claims it exited', async () => {
+    const f = await setup(false);
+    try {
+      const running = f.runner.start();
+      await vi.waitFor(() => expect(f.sessions[0]?.channel.commands).toHaveLength(1));
+      f.runner.stopOperation(); await running;
+      f.sessions[0]!.channel.close();
+      expect(f.events.filter((event) => event.type === 'execution').at(-1)).toMatchObject({ value: { model: 'idle', remote: 'unknown', stopping: false, canStop: false } });
+      expect(f.events.filter((event) => event.type === 'operation').at(-1)).toMatchObject({ value: { status: 'unknown' } });
+    } finally { f.runner.pause(); await f.fixture.close(); }
+  });
+
   it('permits idle terminal input without prompting and ignores stale stop actions after completion', async () => {
     const f = await setup();
     try {
@@ -89,12 +129,14 @@ describe('stop and explicit continuation', () => {
       f.runner.stopOperation(source); // Repeated clicks cannot inject duplicate controls or requests.
       await running;
       expect(f.clearCredentials).toHaveBeenCalled();
+      expect(f.events.filter((event) => event.type === 'execution').at(-1)).toMatchObject({ value: { model: 'idle', remote: 'running', stopping: true, canStop: true } });
       expect(f.requests()).toBe(1);
       expect(f.sessions[0]!.channel.writes).toEqual(source === 'terminal-close' ? [] : ['\u0003']);
       expect(() => f.runner.terminalInput(id, 'pwd\n')).toThrow('等待命令退出');
       expect(f.events.filter((event) => event.type === 'task-message' && event.interruption)).toHaveLength(1);
       expect(f.events.filter((event) => event.type === 'operation').at(-1)).toMatchObject({ value: { status: 'unknown', interruption: { source } } });
       f.sessions[0]!.channel.complete();
+      expect(f.events.filter((event) => event.type === 'execution').at(-1)).toMatchObject({ value: { model: 'idle', remote: 'idle', stopping: false, canStop: false } });
       expect(f.events.filter((event) => event.type === 'operation').at(-1)).toMatchObject({ value: { status: 'succeeded', exitCode: 0, interruption: { source } } });
       f.runner.terminalInput(id, 'pwd\n');
       expect(f.requests()).toBe(1);

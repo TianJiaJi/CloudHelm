@@ -12,8 +12,11 @@ const MARGIN = 8;
  * layer escapes sidebar scrolling and clipping; positioning stays in the
  * viewport so menus opened near an edge remain fully readable.
  */
-export function MenuSurface({ anchor, label, children, close, restoreFocus }: {
+export function MenuSurface({ anchor, positionAnchor, label, children, close, restoreFocus, className, placement, searchFocus, align }: {
   anchor: MenuAnchor; label: string; children: ReactNode; close(): void; restoreFocus?: HTMLElement | null;
+  /** Optional positioning bounds; anchor remains the trigger used for focus restoration. */
+  positionAnchor?: HTMLElement | null;
+  className?: string; placement?: 'above'; searchFocus?: boolean; align?: 'start';
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const pointer = anchor instanceof HTMLElement ? null : anchor;
@@ -33,10 +36,10 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus }: {
     }
     function position(): void {
       if (element) {
-        const bounds = element.getBoundingClientRect();
+        const bounds = (positionAnchor ?? element).getBoundingClientRect();
         const below = bounds.bottom + 5;
-        menu.style.left = `${clamp(Math.min(bounds.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - MARGIN), menu.offsetWidth)}px`;
-        menu.style.top = `${clampTop(below + menu.offsetHeight <= window.innerHeight - MARGIN ? below : bounds.top - menu.offsetHeight - 5, menu.offsetHeight)}px`;
+        menu.style.left = `${clamp(align === 'start' ? bounds.left : bounds.right - menu.offsetWidth, menu.offsetWidth)}px`;
+        menu.style.top = `${clampTop(placement !== 'above' && below + menu.offsetHeight <= window.innerHeight - MARGIN ? below : bounds.top - menu.offsetHeight - 5, menu.offsetHeight)}px`;
       } else if (pointer) {
         const left = pointer.x + menu.offsetWidth + MARGIN <= window.innerWidth ? pointer.x : pointer.x - menu.offsetWidth;
         const top = pointer.y + menu.offsetHeight + MARGIN <= window.innerHeight ? pointer.y : pointer.y - menu.offsetHeight;
@@ -57,9 +60,10 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus }: {
     }
     menu.showPopover();
     position();
-    menu.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+    menu.querySelector<HTMLElement>(searchFocus ? 'input[type="search"]' : '[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
     const observer = new ResizeObserver(position);
     observer.observe(menu);
+    if (element) observer.observe(positionAnchor ?? element);
     window.addEventListener('resize', position);
     window.addEventListener('scroll', dismissOnScroll, true);
     if (pointer) window.addEventListener('pointerdown', dismissOnPointerDown, true);
@@ -74,11 +78,11 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus }: {
       const active = document.activeElement;
       if (!active || active === document.body || menu.contains(active)) focusTarget?.focus({ preventScroll: true });
     };
-  }, [anchorKey, element, restoreFocus]);
+  }, [anchorKey, element, positionAnchor, restoreFocus, placement, searchFocus, align]);
 
   // macOS fires contextmenu before pointerup. Auto popovers would dismiss on
   // that same opening gesture; pointer menus dismiss on the next pointerdown.
-  return <div ref={ref} popover={pointer ? 'manual' : 'auto'} role="menu" aria-label={label} className={styles.menuSurface}
+  return <div ref={ref} popover={pointer ? 'manual' : 'auto'} role="menu" aria-label={label} className={`${styles.menuSurface} ${className ?? ''}`}
     onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
     onClick={(event) => { if ((event.target as Element).closest('[role="menuitem"]')) close(); }}
     onToggle={(event) => { if ((event.nativeEvent as ToggleEvent).newState === 'closed') close(); }}
@@ -88,12 +92,16 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus }: {
         ref.current?.hidePopover();
         return;
       }
+      const editingSearch = event.target instanceof HTMLInputElement;
+      if (editingSearch && !['ArrowDown', 'ArrowUp'].includes(event.key)) return;
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'));
+      if (!items.length) return;
       const current = items.indexOf(document.activeElement as HTMLElement);
       const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
-        : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        : current < 0 ? (event.key === 'ArrowUp' ? items.length - 1 : 0)
+          : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
       items[index]?.focus();
     }}>{children}</div>;
 }

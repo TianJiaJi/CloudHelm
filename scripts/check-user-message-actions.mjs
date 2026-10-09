@@ -7,7 +7,7 @@ export async function checkUserMessageActions(page, screenshot) {
   const edit = message.getByRole('button', { name: '编辑消息', exact: true });
   const composer = page.getByRole('textbox', { name: '给 AI 的消息', exact: true });
   const originalText = await message.locator(':scope > p').innerText();
-  const composerDraft = await composer.inputValue();
+  const composerDraft = await composer.textContent();
   await page.evaluate(() => {
     window.fixture.messageClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
@@ -63,7 +63,7 @@ export async function checkUserMessageActions(page, screenshot) {
   assert.equal(sends.at(-1).message, '重新检查磁盘占用\n请同时查看 inode');
   assert.equal(sends.at(-1).id, await page.evaluate(async () => (await window.cloudhelm.snapshot()).conversations[0].id));
   assert.equal(await message.locator(':scope > p').innerText(), originalText, 'Editing sends a new message without rewriting history');
-  assert.equal(await composer.inputValue(), composerDraft, 'Inline editing preserves the main composer draft');
+  assert.equal(await composer.textContent(), composerDraft, 'Inline editing preserves the main composer draft');
   await page.evaluate(() => {
     if (window.fixture.messageClipboard) Object.defineProperty(navigator, 'clipboard', window.fixture.messageClipboard);
     else delete navigator.clipboard;

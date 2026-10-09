@@ -169,3 +169,10 @@ it.each([false, true])('distinguishes launch failure after an earlier action (pr
   expect(failure).toHaveBeenCalledWith({ failureKind: 'unsupported', effects: prior ? 'possible' : 'none' });
   expect(f.exited).toHaveBeenCalledWith(127);
 });
+
+it('reports a preflight failure as confirmed no dispatch, never an unknown business outcome', async () => {
+  const f = fixture();
+  f.prepareCommandProgram.mockRejectedValueOnce(new Error('missing python'));
+  await expect(f.terminal.execute('touch /tmp/business-file', '/', () => true)).rejects.toMatchObject({ name: 'CommandNotStartedError' });
+  expect(f.openPipe).not.toHaveBeenCalled();
+});

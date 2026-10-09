@@ -4,9 +4,9 @@ CloudHelm 内置 `@cloudhelm/pi-ask-user`，模型工具名为 `ask_user`。实�
 
 ## 加载方式
 
-扩展位于 `packages/adapters/src/pi-extensions/ask-user/`，包含标准 Pi `package.json` 清单和默认 `ExtensionAPI` 工厂，通过 `pi.registerTool` 注册工具。桌面发行版把工厂编译进 utility process，通过 Pi 0.99.1 官方 `DefaultResourceLoader.extensionFactories` 加载，再由 `ExtensionRunner` 和 `wrapRegisteredTools` 接入现有 Agent。每次建立或恢复对话都会创建独立实例；更新应用并重启后自动使用新插件，无须手动安装。不是向用户的全局 Pi 目录安装，也不自动发现第三方插件。
+扩展位于 `packages/adapters/src/pi-extensions/ask-user/`，包含标准 Pi `package.json` 清单和默认 `ExtensionAPI` 工厂，通过 `pi.registerTool` 注册工具。桌面发行版把工厂编译进 utility process，通过 Pi 0.99.1 官方 `DefaultResourceLoader.extensionFactories` 加载，由同一个原生 `AgentSession` 管理注册、执行和持久化。每次建立或恢复对话都会创建独立实例；更新应用并重启后自动使用新插件，无须手动安装。不是向用户的全局 Pi 目录安装，也不自动发现第三方插件。
 
-加载器使用隔离的临时目录和内存设置；不读取用户或项目的 Pi 扩展、提示词、模型配置或凭据。只注册内置 `ask_user`，加载失败则本轮失败，不静默禁用。此移植版依赖 CloudHelm 的事件桥接与 React 卡片，不包含上游 Pi TUI 界面。
+加载器使用隔离的临时目录和内存设置；不读取用户或项目的 Pi 扩展、提示词、模型配置或凭据。只注册内置 `ask_user` 与生命周期控制扩展，加载失败则本轮失败，不静默禁用。此移植版依赖 CloudHelm 的事件桥接与 React 卡片，不包含上游 Pi TUI 界面。
 
 ## 提示词与工作流程
 
@@ -17,11 +17,11 @@ CloudHelm 内置 `@cloudhelm/pi-ask-user`，模型工具名为 `ask_user`。实�
 - 同一批次中若包含提问和其他工具，其他工具全部拦截；多个提问调用也拦截，要求模型重新发起单个批次。
 - 每个对话最多一个待回答请求，默认 24 小时过期。取消、停止、断线、关闭执行终端或超时会中止等待并停止模型，不自动猜测、不重放操作。
 - 切换对话保留回答草稿；提交失败保留草稿。重复或迟到的提交由后端拒绝。
-- 请求与回答存入现有 SQLite records 表的新 bucket，没有数据库结构变更。重启或 utility process 退出后，待回答请求失效，对话暂停。已经提交的问题和答案保留在历史中，上下文压缩保留完整问答；预算不足则停止并报告。
+- 澄清 UI 状态存入 SQLite records；完整工具调用与回答由 Pi JSONL 持久化，展示消息以 SDK entry ID 去重。重启或 utility process 退出后，待回答请求失效，对话暂停。已经提交的问题和答案保留在原生 transcript；SDK 自动压缩生成语义摘要，预算不足或压缩失败则暂停。迁移 0004 只清理改版前不兼容的旧澄清记录。
 - 不向用户索取密码、验证码、私钥等凭据，认证继续使用独立通道；界面提醒勿填秘密，后端拒绝凭据问题和可识别的密钥格式。
 
 ## 验证
 
-单元与本地 HTTP/SSE 模型集成测试覆盖真实 Pi 加载、提示词注入、问答继续、混合工具批次、取消、过期、重复提交及上下文保留。`pnpm test:ui` 覆盖草稿、选项、自定义回答、提交失败及重试。`pnpm test:desktop` 与 `pnpm test:desktop:packaged` 使用本地模拟模型，跨 IPC、utility process 和 SQLite 检查重启前后插件注册及旧请求失效。
+单元与本地 HTTP/SSE 模型集成测试覆盖真实 Pi 加载、提示词注入、问答继续、混合工具批次、取消、过期、重复提交及原生会话恢复。`pnpm test:ui` 覆盖草稿、选项、自定义回答、提交失败及重试。`pnpm test:desktop` 与 `pnpm test:desktop:packaged` 使用本地模拟模型，跨 IPC、utility process 和 SQLite 检查重启前后插件注册及旧请求失效。
 
 桌面测试在等待回答时强制结束隔离实例的进程树，等待所有进程退出、释放用户目录后再重启，保留崩溃恢复语义。Windows 的全新临时配置先正常关闭一次，并验证 safeStorage 能跨重启解密，以持久化 Chromium 的初始加密密钥；此准备步骤发生在创建对话之前。失败时保留原始错误和可用的截图，清理有超时和目录删除重试，CI 同时上传失败日志。

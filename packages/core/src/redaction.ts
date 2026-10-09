@@ -4,7 +4,7 @@ export function redactOutput(input: string): string {
   return input
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu, '[REDACTED PRIVATE KEY]')
     .replace(/(Authorization:\s*(?:Bearer|Basic)\s+)[^\s\r\n]+/giu, '$1[REDACTED]')
-    .replace(new RegExp(`(["']?${key}["']?\\s*[=:：]\\s*)("(?:\\\\.|[^"\\\\])*"|'[^']*'|[^\\s,;}\\r\\n]+)`, 'giu'), (match, prefix: string, value: string) => {
+    .replace(new RegExp(`(?<![\\w.-])(["']?${key}["']?\\s*[=:：]\\s*)("(?:\\\\.|[^"\\\\])*"|'[^']*'|[^\\s,;}\\r\\n]+)`, 'giu'), (match, prefix: string, value: string) => {
       if (/(?:max|input|output|digest|completion)[_-]tokens["']?\s*[=:：]/iu.test(prefix)
         && /^(?:\d+|"\d+"|'\d+')$/u.test(value)) return match;
       const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : '';
@@ -15,6 +15,7 @@ export function redactOutput(input: string): string {
 
 /** Redacts complete lines across arbitrary SSH data-chunk boundaries. */
 export class OutputRedactor {
+  constructor(private readonly maxPendingLength = 8192) {}
   private pending = '';
   private inPrivateKey = false;
   private quotedSecret?: string;
@@ -29,11 +30,16 @@ export class OutputRedactor {
       this.pending = this.pending.slice(newline + 1);
       safe += this.line(line);
     }
-    if (this.pending.length > 8192) {
+    if (this.pending.length > this.maxPendingLength) {
       this.pending = '';
       safe += '[REDACTED LONG UNTERMINATED OUTPUT]\n';
     }
     return safe;
+  }
+
+  snapshotTail(): string {
+    if (this.inPrivateKey || this.quotedSecret) return '[REDACTED]';
+    return redactOutput(this.pending);
   }
 
   finish(): string {
@@ -57,7 +63,7 @@ export class OutputRedactor {
       this.inPrivateKey = !/-----END [A-Z ]*PRIVATE KEY-----/u.test(line);
       return '[REDACTED PRIVATE KEY]\n';
     }
-    const start = line.match(/(?:[\w.-]*(?:password|passwd|api[_-]?key|token|secret|sendkey|otp)[\w.-]*|密码|验证码)["']?\s*[=:：]\s*(["'])/iu);
+    const start = line.match(/(?<![\w.-])(?:[\w.-]*(?:password|passwd|api[_-]?key|token|secret|sendkey|otp)[\w.-]*|密码|验证码)["']?\s*[=:：]\s*(["'])/iu);
     if (start) {
       const offset = start.index! + start[0].length;
       if (this.closingQuote(line.slice(offset), start[1]!) < 0) {

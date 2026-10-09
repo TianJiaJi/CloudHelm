@@ -47,6 +47,24 @@ export class SqliteStore {
     this.raw.exec(migration0001);
     this.raw.exec(migration0002);
     this.raw.exec(migration0003);
+    // Run destructive compatibility cleanup exactly once, atomically with its version marker.
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 4').get()) return;
+      this.raw.exec(`
+        DELETE FROM records WHERE bucket IN ('messages', 'model-requests', 'clarifications');
+        UPDATE records SET value = json_remove(json_set(value, '$.status',
+          CASE WHEN json_extract(value, '$.status') IN ('accepted', 'ready-for-review')
+          THEN json_extract(value, '$.status') ELSE 'paused' END), '$.session') WHERE bucket = 'tasks';
+        INSERT INTO schema_migrations(version, applied_at) VALUES (4, unixepoch());
+      `);
+    })();
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 5').get()) return;
+      this.raw.exec(`
+        CREATE TABLE IF NOT EXISTS content_references (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO schema_migrations(version, applied_at) VALUES (5, unixepoch());
+      `);
+    })();
     this.db = drizzle(this.raw);
   }
 
@@ -92,6 +110,21 @@ export class SqliteStore {
       const chunk = data.slice(offset, offset + 8192);
       insert.run(terminalId, Date.now(), Buffer.byteLength(chunk), chunk);
     }
+  }
+
+  putReference(id: string, value: unknown): void {
+    this.raw.prepare('INSERT OR REPLACE INTO content_references(id, value) VALUES (?, ?)').run(id, JSON.stringify(value));
+  }
+  readReference<T>(id: string): T | undefined {
+    const row = this.raw.prepare('SELECT value FROM content_references WHERE id = ?').get(id) as { value: string } | undefined;
+    return row ? JSON.parse(row.value) as T : undefined;
+  }
+  removeReference(id: string): void { this.raw.prepare('DELETE FROM content_references WHERE id = ?').run(id); }
+  readCompleteLog(id: string, expectedLength: number): string {
+    const rows = this.raw.prepare('SELECT data FROM terminal_logs WHERE terminal_id = ? ORDER BY id').all(id) as { data: string }[];
+    const value = rows.map((row) => row.data).join('');
+    if (value.length !== expectedLength) throw new Error('命令日志已不完整，请手动选择引用内容');
+    return value;
   }
 
   readLog(terminalId: string, maxBytes = 1_000_000): string {

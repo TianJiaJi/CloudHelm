@@ -1,0 +1,9 @@
+.card { min-width: 0; margin: 9px 0 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--text) 3%, transparent); overflow: hidden; }
+.toggle { display: flex; align-items: center; gap: 7px; width: 100%; padding: 9px 11px; border: 0; background: transparent; color: var(--muted); text-align: left; cursor: pointer; font-size: 11px; }
+.toggle:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.toggle strong { font-weight: 500; }
+.chevron { width: 10px; font-size: 15px; line-height: 1; }
+.status { margin-left: auto; font-size: 10px; white-space: nowrap; }
+.body { max-height: 240px; overflow: auto; padding: 0 12px 10px; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.body > * { font-size: inherit; }
+.empty { margin: 4px 0; color: var(--muted); font-size: 11px; }

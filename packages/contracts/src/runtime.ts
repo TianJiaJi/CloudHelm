@@ -1,4 +1,4 @@
-import type { AppEvent, ClarificationAnswer, ConversationMessage, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
+import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
 
 export interface RuntimeHost extends HostView { secret?: string }
 export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 'trust-required' }>
@@ -6,6 +6,10 @@ export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 
 export interface RuntimeProfile { provider: string; modelId: string; baseUrl?: string; apiKey: string; credentialRevision?: string; jevKey?: string }
 
 export type RuntimeCall =
+  | { method: 'prepare-message'; taskId?: string; requestId: string; document: import('./message-content.js').MessageDocument; bodies: import('./message-content.js').ReferenceBody[]; profile: RuntimeProfile; usedTokens: number }
+  | { method: 'cancel-message'; requestId: string }
+
+  | { method: 'set-conversation-thinking'; taskId: string; level: import('./index.js').ThinkingLevel }
   | { method: 'answer-clarification'; taskId: string; requestId: string; answers: ClarificationAnswer[] }
   | { method: 'cancel-clarification'; taskId: string; requestId: string }
   | { method: 'restore-operations'; operations: Array<{ id: string; hostId: string }> }
@@ -24,9 +28,9 @@ export type RuntimeCall =
   | { method: 'stop-terminal'; terminalId: string }
   | { method: 'resize'; terminalId: string; cols: number; rows: number }
   | { method: 'list-remote'; hostId: string; path: string }
-  | { method: 'start-task'; task: TaskView; hosts: RuntimeHost[]; profile: RuntimeProfile; priorOperations?: OperationView[]; history?: ConversationMessage[]; restored?: boolean }
+  | { method: 'start-task'; intent?: string; document?: import('./message-content.js').MessageDocument; initialMessage?: string; thinkingLevel?: import('./index.js').ThinkingLevel; task: TaskView; hosts: RuntimeHost[]; profile: RuntimeProfile; priorOperations?: OperationView[]; sessionDirectory: string; restored?: boolean }
   | { method: 'authorize-task'; taskId: string; hosts: RuntimeHost[]; localScopes: LocalScope[] }
-  | { method: 'task-message'; taskId: string; text: string }
+  | { method: 'task-message'; intent?: string; taskId: string; text: string; document?: import('./message-content.js').MessageDocument }
   | { method: 'decide-approval'; approvalId: string; approved: boolean }
   | { method: 'answer-input'; requestId: string; answer: string }
   | { method: 'cancel-input'; requestId: string }

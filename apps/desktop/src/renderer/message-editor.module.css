@@ -1,0 +1,19 @@
+.editor { min-height: 68px; max-height: 180px; overflow-y: auto; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; padding: 4px 2px; font: inherit; cursor: text; }
+.editor:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
+.editor[aria-disabled="true"] { opacity: .6; }
+.chip { display: inline-flex; align-items: center; gap: 5px; vertical-align: baseline; padding: 1px 6px; margin: 1px 2px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); font: inherit; font-size: 12px; color: var(--text); white-space: nowrap; user-select: all; cursor: pointer; }
+.chip:focus { outline: 2px solid var(--accent); }
+.chip button { font-size: 12px; padding: 0 2px; color: var(--muted); }
+.chip small { font-size: 10px; color: var(--muted); }
+.message { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.scrim { position: fixed; inset: 0; z-index: 1000; background: #0008; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.preview { display: flex; flex-direction: column; gap: 12px; width: min(800px, 90vw); max-height: 85vh; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); padding: 20px; box-shadow: 0 16px 64px #0005; }
+.preview header, .preview footer { display: flex; align-items: center; gap: 12px; }
+.preview header strong { flex: 1; }
+.preview small { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.preview pre, .preview textarea { min-height: 150px; max-height: 55vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); padding: 12px; border: 1px solid var(--border); border-radius: 6px; font: 12px/1.6 SFMono-Regular, Consolas, monospace; color: inherit; }
+.preview textarea { width: 100%; height: 45vh; resize: vertical; }
+.preview footer { justify-content: flex-end; }
+.preview button { padding: 5px 9px; }
+.previewTabs { display: flex; gap: 8px; }
+.previewTabs [aria-pressed="true"] { background: var(--border); }

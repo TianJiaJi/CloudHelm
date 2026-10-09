@@ -1,11 +1,13 @@
+import { ReferenceStore } from './reference-store.js';
 import { DiagnosticLogger, diagnosticSettings } from './diagnostic-logger.js';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell } from 'electron';
 import { SqliteStore, listModelProviders } from '@cloudhelm/adapters';
-import type { AppEvent, DesktopAPI, HostDraft, LocalScope, ReviewMode } from '@cloudhelm/contracts';
+import type { AppEvent, DesktopAPI, HostDraft, LocalScope } from '@cloudhelm/contracts';
 import { AppState } from './app-state.js';
+import { registerHostSafetyIpc } from './host-safety-ipc.js';
 import { registerConversationIpc } from './conversation-ipc.js';
 import { RuntimeBridge } from './runtime-bridge.js';
 import { HostConnectionTester } from './host-connection-test.js';
@@ -17,6 +19,7 @@ let window: BrowserWindow | null = null;
 let store: SqliteStore;
 let state: AppState;
 let runtime: RuntimeBridge;
+let references: ReferenceStore;
 const untrustedFingerprints = new Map<string, string>();
 const connecting = new Map<string, Promise<void>>();
 const selectedLocalPaths = new Map<string, LocalScope>();
@@ -73,7 +76,7 @@ async function connectOnce(hostId: string): Promise<void> {
 function registerIpc(): void {
   const hostTester = new HostConnectionTester(state, (host, jump) => runtime.call({ method: 'test-host', host, jump }));
   ipcMain.handle('cloudhelm:test-host', (_event, input: Parameters<DesktopAPI['testHostConnection']>[0]) => hostTester.test(input));
-  registerConversationIpc({ state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
+  registerConversationIpc({ store, references, sessionRoot: join(app.getPath('userData'), 'pi-sessions'), state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
   ipcMain.handle('cloudhelm:snapshot', () => state.snapshot());
   ipcMain.handle('cloudhelm:app-version', () => app.getVersion());
   ipcMain.handle('cloudhelm:add-host', (_event, host: HostDraft) => state.addHost(host));
@@ -82,15 +85,7 @@ function registerIpc(): void {
     state.getHost(hostId);
     state.saveSecret(`host:${hostId}`, secret);
   });
-  ipcMain.handle('cloudhelm:update-host-safety', async (_event, hostId: string, mode: ReviewMode, protectedPaths: string[]) => {
-    if (!['ask', 'ai-review', 'permissive'].includes(mode) || !Array.isArray(protectedPaths)
-      || protectedPaths.some((value) => typeof value !== 'string' || !value.startsWith('/') || value.includes('\u0000'))) {
-      throw new Error('Invalid safety settings');
-    }
-    const revision = state.getHost(hostId).policyRevision + 1;
-    await runtime.call({ method: 'update-host-safety', hostId, mode, protectedPaths, revision });
-    state.updateHost(hostId, { defaultMode: mode, protectedPaths, policyRevision: revision });
-  });
+  registerHostSafetyIpc(state, runtime);
   ipcMain.handle('cloudhelm:save-profile', (_event, profile: Parameters<DesktopAPI['saveModelProfile']>[0]) => state.saveProfile(profile));
   ipcMain.handle('cloudhelm:save-review-settings', async (_event, settings: Parameters<DesktopAPI['saveReviewSettings']>[0]) => {
     state.saveReviewSettings(settings);
@@ -199,9 +194,11 @@ void app.whenReady().then(async () => {
   else Menu.setApplicationMenu(null);
   store = new SqliteStore(join(app.getPath('userData'), 'cloudhelm.sqlite'));
   state = new AppState(store, publish);
+  references = new ReferenceStore(store, state);
   const diagnostics = new DiagnosticLogger(diagnosticSettings(!!process.env.ELECTRON_RENDERER_URL, process.env, app.getPath('userData')));
   diagnostics.write({ event: 'runtime.started', level: 'info' });
   runtime = new RuntimeBridge((event) => {
+    if (event.type === 'terminal-command' || event.type === 'terminal-data' || event.type === 'terminal-state') references.record(event);
     state.record(event);
     if (!window?.isFocused() && Notification.isSupported()
       && (event.type === 'approval-open' || event.type === 'input-open'
@@ -210,7 +207,7 @@ void app.whenReady().then(async () => {
     }
   }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event));
   await runtime.call({ method: 'restore-operations', operations: state.snapshot().operations
-    .filter((operation) => operation.status === 'unknown').map(({ id, hostId }) => ({ id, hostId })) });
+    .filter((operation) => operation.status === 'unknown' || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt)).map(({ id, hostId }) => ({ id, hostId })) });
   registerIpc();
   createWindow();
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

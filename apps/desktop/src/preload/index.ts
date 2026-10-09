@@ -4,12 +4,17 @@ import type { AppEvent, DesktopAPI } from '@cloudhelm/contracts';
 const invoke = <T>(method: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(`cloudhelm:${method}`, ...args) as Promise<T>;
 
 const api: DesktopAPI = {
+  quoteTerminal: (input) => invoke('quote-terminal', input),
+  readReference: (id) => invoke('read-reference', id),
+  sendStructured: (input) => invoke('send-structured', input),
+  cancelMessage: (id) => invoke('cancel-message', id),
   snapshot: () => invoke('snapshot'),
   appVersion: () => invoke('app-version'),
   addHost: (host) => invoke('add-host', host),
   editHost: (hostId, host, newSecret) => invoke('edit-host', hostId, host, newSecret),
   testHostConnection: (input) => invoke('test-host', input),
   setHostSecret: (hostId, secret) => invoke('set-host-secret', hostId, secret),
+  updateHostReviewMode: (hostId, mode) => invoke('update-host-review-mode', hostId, mode),
   updateHostSafety: (hostId, mode, protectedPaths) => invoke('update-host-safety', hostId, mode, protectedPaths),
   saveModelProfile: (profile) => invoke('save-profile', profile),
   testModelConnection: (profile) => invoke('test-model', profile),
@@ -35,6 +40,7 @@ const api: DesktopAPI = {
   resizeTerminal: (terminalId, cols, rows) => invoke('resize', terminalId, cols, rows),
   startConversation: (input) => invoke('start-conversation', input),
   sendMessage: (id, message, tokens) => invoke('send-message', id, message, tokens ?? []),
+  setConversationThinking: (id, level) => invoke('set-conversation-thinking', id, level),
   setConversationModel: (id, model) => invoke('set-conversation-model', id, model),
   answerClarification: (taskId, requestId, answers) => invoke('answer-clarification', taskId, requestId, answers),
   cancelClarification: (taskId, requestId) => invoke('cancel-clarification', taskId, requestId),

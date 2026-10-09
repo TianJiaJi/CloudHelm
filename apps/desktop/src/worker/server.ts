@@ -1,3 +1,7 @@
+import { prepareMessage } from '@cloudhelm/application';
+import { contentModel } from '@cloudhelm/adapters';
+import { ShellMarkerParser } from '@cloudhelm/adapters';
+import { StringDecoder } from 'node:string_decoder';
 import { PrivilegedRuntime } from './privileged-runtime.js';
 import { safeDiagnostic } from '@cloudhelm/core';
 import { eventDiagnostic } from './diagnostic-events.js';
@@ -9,11 +13,13 @@ import type { ApprovalView, InputRequestView } from '@cloudhelm/contracts';
 import type { LogPage, RuntimeCall, RuntimeHost, RuntimeMessage } from '@cloudhelm/contracts/runtime';
 import { TaskRunner } from './task-runner.js';
 import { OperationInputBridge } from './operation-input-bridge.js';
-import { testModelConnection } from './conversation-model.js';
+import { testModelConnection } from '@cloudhelm/adapters';
 import { FileOperationExecutor } from './file-operation-executor.js';
 import { testHostConnection } from './host-connection-test.js';
 
 export class WorkerServer {
+  private readonly deliveredMessages = new Set<string>();
+  private readonly preparations = new Map<string, AbortController>();
   private readonly logRequests = new Map<string, { resolve(value: LogPage): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   private readonly ssh = new SshTransport((hostId) => {
     for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(hostId)) runner.pause();
@@ -32,8 +38,13 @@ export class WorkerServer {
 
   constructor(private readonly send: (message: RuntimeMessage) => void) {
     this.terminal = new TerminalManager({
+      command: (terminalId, generation, event) => this.post({ event: { type: 'terminal-command', terminalId, generation, ...event } }),
       data: (terminalId, data, operationId) => this.post({ event: { type: 'terminal-data', terminalId, data, operationId } }),
-      completed: (result) => { for (const runner of this.tasks.values()) runner.recordRemoteResult(result); },
+      completed: (result) => {
+        const hostId = result.logRef ? this.terminal.hostOf(result.logRef) : undefined;
+        if (hostId) this.executor?.observe(hostId, result);
+        for (const runner of this.tasks.values()) runner.recordRemoteResult(result);
+      },
       state: (terminalId, state) => {
         if (state !== 'agent') { this.interactions?.cancelForTerminal(terminalId); this.commands?.clearTerminal(terminalId); }
         this.post({ event: { type: 'terminal-state', terminalId,
@@ -67,12 +78,35 @@ export class WorkerServer {
 
   async dispatch(call: RuntimeCall): Promise<unknown> {
     switch (call.method) {
+      case 'cancel-message': this.preparations.get(call.requestId)?.abort(); return;
+      case 'prepare-message': {
+        if (this.preparations.has(call.requestId)) throw new Error('消息正在准备');
+        const controller = new AbortController(); this.preparations.set(call.requestId, controller);
+        const timer = setTimeout(() => controller.abort(), 600_000);
+        const model = contentModel(call.profile);
+        const used = () => (call.taskId ? this.tasks.get(call.taskId)?.contextTokens() : undefined) ?? call.usedTokens;
+        try { const prepared = await prepareMessage(call.document, call.bodies, model, used(),
+          controller.signal, (id) => {
+            const part = call.document.parts.find((part) => part.type === 'reference' && part.reference.id === id);
+            this.post({ event: { type: 'message-preparation', requestId: call.requestId,
+              referenceId: part?.type === 'reference' ? part.instanceId ?? id : id, status: 'compressing' } });
+          });
+          if (model.estimate(prepared.text) + used() + model.reserveTokens > model.contextWindow) throw new Error('准备期间对话上下文已增长，请重新发送以核对容量');
+          return prepared;
+        }
+        finally { clearTimeout(timer); this.preparations.delete(call.requestId); }
+      }
       case 'restore-operations': return this.executor.restore(call.operations);
       case 'has-task': return this.tasks.has(call.taskId);
       case 'set-review-key':
         for (const runner of this.tasks.values()) runner.setReviewKey(call.jevKey);
         return;
       case 'test-model': return testModelConnection(call.profile);
+      case 'set-conversation-thinking': {
+        const runner = this.tasks.get(call.taskId);
+        if (!runner) throw new Error('对话尚未恢复');
+        runner.setThinking(call.level); return;
+      }
       case 'set-conversation-model': {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('对话尚未恢复');
@@ -117,6 +151,7 @@ export class WorkerServer {
       case 'resize': return this.terminal.resize(call.terminalId, call.cols, call.rows);
       case 'list-remote': return this.ssh.list(call.hostId, call.path);
       case 'start-task': {
+        if (!call.task.session || call.task.session.id !== call.task.id || !call.sessionDirectory) throw new Error('Native session binding required');
         if (!call.restored) this.send({ diagnostic: safeDiagnostic({ event: 'chat', level: 'info', taskId: call.task.id, role: 'user', text: call.task.goal }) });
         if (this.tasks.has(call.task.id)) throw new Error('Task is already active');
         const runner = new TaskRunner(call.task, call.hosts, call.profile, call.priorOperations ?? [], this.terminal, this.executor,
@@ -126,13 +161,17 @@ export class WorkerServer {
             event: (event) => this.post({ event } as RuntimeMessage),
             requestApproval: (view) => this.requestApproval(view),
             cancelApproval: (id) => this.cancelApproval(id)
-          }, call.history, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor), this.privileged.forTask(call.task.id));
+          }, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor), this.privileged.forTask(call.task.id),
+          { id: call.task.session.id, directory: call.sessionDirectory, restore: !!call.restored });
         this.tasks.set(call.task.id, runner);
-        const start = runner.start(call.restored);
-        if (call.restored) await start;
-        else void start.catch((error: unknown) => this.post({ event: {
-          type: 'task-status', taskId: call.task.id, status: 'failed', summary: error instanceof Error ? error.message : String(error)
-        } }));
+        const start = runner.start(call.restored, call.thinkingLevel, call.document, call.initialMessage, call.intent);
+        if (call.restored) {
+          try { await start; } catch (error) { this.tasks.delete(call.task.id); runner.dispose(); throw error; }
+        }
+        else void start.catch((error: unknown) => {
+          this.tasks.delete(call.task.id); runner.dispose();
+          this.post({ event: { type: 'task-status', taskId: call.task.id, status: 'failed', summary: error instanceof Error ? error.message : String(error) } });
+        });
         return;
       }
       case 'authorize-task': {
@@ -151,7 +190,10 @@ export class WorkerServer {
       case 'task-message': {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('请先恢复对话');
-        return runner.message(call.text);
+        if (call.document && this.deliveredMessages.has(call.document.requestId)) return;
+        runner.message(call.text, call.document, call.intent);
+        if (call.document) this.deliveredMessages.add(call.document.requestId);
+        return;
       }
       case 'decide-approval': {
         const pending = this.pendingApprovals.get(call.approvalId);
@@ -176,7 +218,7 @@ export class WorkerServer {
         const runner = this.tasks.get(call.taskId);
         if (!runner) return;
         if (!runner.canDelete) throw new Error('对话仍在运行，无法删除');
-        runner.dispose();
+        await runner.close();
         this.tasks.delete(call.taskId);
         return;
       }
@@ -269,13 +311,18 @@ export class WorkerServer {
     const probe = taskId ? await this.ssh.execFixed(hostId, 'pwd -P') : undefined;
     if (probe && (probe.exitCode !== 0 || !probe.output.trim().startsWith('/') || probe.output.trim().includes('\n'))) throw new Error('无法核验 Agent 登录目录');
     if (taskId) return this.terminal.open(hostId, new SshCommandTerminal(this.ssh, hostId), taskId, probe!.output.trim());
-    const channel = await this.ssh.shell(hostId);
+    const { channel, nonce } = await this.ssh.integratedShell(hostId);
+    let output = (_text: string) => {};
+    let command = (_event: Parameters<NonNullable<RawTerminal['onCommand']>>[0] extends (event: infer E) => void ? E : never) => {};
+    const decoder = new StringDecoder('utf8');
+    const parser = new ShellMarkerParser(nonce, (text) => output(text), (event) => command(event));
     const raw: RawTerminal = {
       write: (data) => channel.write(data),
       resize: (cols, rows) => channel.setWindow(rows, cols, 0, 0),
       close: () => channel.end(),
-      onData: (listener) => { channel.on('data', (data: Buffer) => listener(data.toString('utf8'))); },
-      onClose: (listener) => { channel.on('close', listener); }
+      onCommand: (listener) => { command = listener; },
+      onData: (listener) => { output = listener; channel.on('data', (data: Buffer) => parser.push(decoder.write(data))); },
+      onClose: (listener) => { channel.on('close', () => { parser.push(decoder.end()); parser.finish(); listener(); }); }
     };
     return this.terminal.open(hostId, raw, taskId, probe?.output.trim() || '/');
   }

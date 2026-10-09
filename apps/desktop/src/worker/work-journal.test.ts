@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentTool } from '@earendil-works/pi-agent-core';
+import type { BusinessTool } from '@cloudhelm/core';
 import type { AppEvent, OperationView, VerificationReport } from '@cloudhelm/contracts';
 import { WorkJournal } from './work-journal.js';
 
@@ -18,7 +18,7 @@ function setup(operations: OperationView[], canReconcile = false) {
   const reconciled = vi.fn((_operation: OperationView) => {});
   const journal = new WorkJournal('conversation-a', () => operations, (event) => events.push(event), readLog, reconcile, reconciled);
   const call = (name: string, args: unknown) => {
-    const tool = journal.tools().find((candidate) => candidate.name === name) as AgentTool;
+    const tool = journal.tools().find((candidate) => candidate.name === name) as BusinessTool<unknown>;
     return tool.execute(`call-${name}`, args);
   };
   return { journal, events, readLog, call, reconcile, reconciled };

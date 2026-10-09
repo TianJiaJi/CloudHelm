@@ -1,3 +1,4 @@
+import { modelThinking } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
 import { Value } from 'typebox/value';
@@ -32,6 +33,10 @@ export class AppState {
   private readonly approvals = new Map<string, AppSnapshot['approvals'][number]>();
   private readonly inputs = new Map<string, AppSnapshot['inputs'][number]>();
   private readonly clarifications = new Map<string, ClarificationRequest>();
+  private readonly reasoningProgress: NonNullable<AppSnapshot['reasoningProgress']> = {};
+  private readonly execution: NonNullable<AppSnapshot['execution']> = {};
+  private readonly contextUsage: NonNullable<AppSnapshot['contextUsage']> = {};
+  private readonly contextCompaction: NonNullable<AppSnapshot['contextCompaction']> = {};
   private readonly messages: AppSnapshot['messages'] = [];
   private readonly logBuffer = new Map<string, string>();
   private readonly redactors = new Map<string, OutputRedactor>();
@@ -53,6 +58,8 @@ export class AppState {
     }
     for (const operation of store.list<OperationView>('operations')) this.operations.set(operation.id,
       operation.status === 'approved' || operation.status === 'running' ? { ...operation, status: 'unknown', reason: 'Application exited before outcome was recorded' } : operation);
+    for (const task of this.tasks.values()) this.execution[task.id] = { model: 'idle', stopping: false, canStop: false,
+      remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown') ? 'unknown' : 'idle' };
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));
     this.profile = store.get<ProfileRecord>('settings', 'model-profile') ?? { provider: 'vercel-ai-gateway', modelId: 'anthropic/claude-sonnet-4.5' };
     store.cleanupLogs();
@@ -61,6 +68,7 @@ export class AppState {
 
   snapshot(): AppSnapshot {
     return {
+      reasoningProgress: { ...this.reasoningProgress }, execution: { ...this.execution }, contextUsage: { ...this.contextUsage }, contextCompaction: { ...this.contextCompaction },
       hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
@@ -130,6 +138,7 @@ export class AppState {
 
   acceptTask(id: string): void {
     const task = this.getTask(id);
+    if (!task.session) throw new Error('旧对话仅供查看，请开始新对话');
     if (task.status !== 'ready-for-review') throw new Error('Only a completed task awaiting review can be accepted');
     const accepted = { ...task, status: 'accepted' as const, updatedAt: Date.now() };
     this.tasks.set(id, accepted);
@@ -140,7 +149,9 @@ export class AppState {
   /** Conversations with live work stay until the user finishes them first. */
   assertDeletable(id: string): TaskView {
     const task = this.getTask(id);
-    if (isActiveTaskStatus(task.status)) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
+    if (isActiveTaskStatus(task.status) || this.execution[id]?.canStop || this.execution[id]?.stopping) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
+    if ([...this.operations.values()].some((op) => op.taskId === id && (op.status === 'unknown'
+      || (op.status === 'failed' && op.effects === 'possible' && !op.reconciledAt)))) throw new Error('远端结果尚未核验，请先保留操作记录并确认结果后再删除');
     return task;
   }
 
@@ -155,6 +166,10 @@ export class AppState {
     }
     for (const terminal of this.terminals.values()) if (terminal.taskId === id) logKeys.add(terminal.id);
     this.flushLogs();
+    for (const message of this.messages.filter((message) => message.taskId === id)) {
+      for (const part of message.document?.parts ?? []) if (part.type === 'reference') this.store.removeReference(part.reference.id);
+    }
+    this.store.removeWhere('message-receipts', 'conversationId', id);
     this.tasks.delete(id);
     for (const [key, operation] of [...this.operations]) if (operation.taskId === id) this.operations.delete(key);
     for (const [key, approval] of [...this.approvals]) if (approval.taskId === id) this.approvals.delete(key);
@@ -172,6 +187,10 @@ export class AppState {
     this.store.removeWhere('messages', 'taskId', id);
     this.store.removeWhere('clarifications', 'taskId', id);
     this.store.removePrefix('model-requests', `${id}:`);
+    delete this.reasoningProgress[id];
+    delete this.execution[id];
+    delete this.contextUsage[id];
+    delete this.contextCompaction[id];
     for (const key of logKeys) this.store.removeLogs(key);
     this.publish();
   }
@@ -292,18 +311,23 @@ export class AppState {
       baseUrl: draft.baseUrl ? validModelUrl(draft.baseUrl) : undefined };
   }
 
-  availableModels(): Array<ModelChoice & { name: string }> {
+  availableModels(): Array<ModelChoice & { name: string; thinkingLevels?: import('@cloudhelm/contracts').ThinkingLevel[] }> {
     return listModelProviders().flatMap((provider) => {
       const settings = this.modelProviderSettings(provider.id);
       if (!settings.hasKey) return [];
       const models = provider.id === 'cloudhelm-custom' && settings.modelId
         ? [{ id: settings.modelId, name: settings.modelId }] : provider.models;
-      return models.map((model) => ({ provider: provider.id, modelId: model.id, name: `${provider.name} · ${model.name}` }));
+      return models.map((model) => ({ provider: provider.id, modelId: model.id, name: model.name, thinkingLevels: modelThinking({ provider: provider.id, modelId: model.id, baseUrl: settings.baseUrl }).levels }));
     });
   }
 
-  setTaskModel(id: string, profile: RuntimeProfile): void {
+  setTaskModel(id: string, profile: RuntimeProfile, live = false): void {
     const task = this.getTask(id);
+    delete this.contextUsage[id];
+    if (!live) {
+      const choice = modelThinking(profile, task.thinking?.selected);
+      task.thinking = { ...choice, effective: task.thinking?.effective ?? choice.selected, pending: true };
+    }
     Object.assign(task, { provider: profile.provider, modelId: profile.modelId, baseUrl: profile.baseUrl, credentialRevision: profile.credentialRevision, updatedAt: Date.now() });
     this.store.put('tasks', id, task);
     this.publish();
@@ -357,6 +381,7 @@ export class AppState {
       id: randomUUID(), goal: goal.trim(), hostIds: authorized, localScopes, status: 'draft', modelId, provider: this.profile.provider, baseUrl: this.profile.baseUrl,
       requestCount: 0, requestLimit: 100, createdAt: now, updatedAt: now
     };
+    task.session = { version: 1, id: task.id };
     this.tasks.set(task.id, task);
     this.store.put('tasks', task.id, task);
     this.publish();
@@ -412,9 +437,12 @@ export class AppState {
         break;
       }
       case 'task-message': {
-        const message = { taskId: event.taskId, role: event.role, text: event.text, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
-        this.messages.push(message);
-        this.store.put('messages', `${event.createdAt}:${randomUUID()}`, message);
+        const existing = event.entryId ? this.messages.find((message) => message.taskId === event.taskId && message.entryId === event.entryId) : undefined;
+        if (existing && (!event.reasoning || JSON.stringify(existing.reasoning) === JSON.stringify(event.reasoning))) return;
+        const message = { document: event.document, entryId: event.entryId, taskId: event.taskId, role: event.role, text: event.text, reasoning: event.reasoning, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
+        if (existing) Object.assign(existing, message); else this.messages.push(message);
+        if (event.role === 'agent') delete this.reasoningProgress[event.taskId];
+        this.store.put('messages', event.entryId ? `${event.taskId}:${event.entryId}` : `${event.createdAt}:${randomUUID()}`, message);
         break;
       }
       case 'terminal-data': {
@@ -450,6 +478,26 @@ export class AppState {
         }
         break;
       }
+      case 'context-compaction':
+        if (this.tasks.has(event.taskId)) this.contextCompaction[event.taskId] = event.status;
+        break;
+      case 'reasoning-progress':
+        if (!this.tasks.has(event.taskId)) return;
+        if (event.value) this.reasoningProgress[event.taskId] = event.value;
+        else delete this.reasoningProgress[event.taskId];
+        break;
+      case 'thinking': {
+        const task = this.getTask(event.taskId);
+        task.thinking = event.value;
+        this.store.put('tasks', task.id, task);
+        break;
+      }
+      case 'execution':
+        if (this.tasks.has(event.taskId)) this.execution[event.taskId] = event.value;
+        break;
+      case 'context-usage':
+        if (this.tasks.has(event.taskId)) this.contextUsage[event.taskId] = event.value;
+        break;
       case 'model-request':
         this.store.put('model-requests', `${event.taskId}:${event.request}`, event);
         break;
@@ -464,12 +512,18 @@ export class AppState {
       case 'snapshot': break;
     }
     if (event.type !== 'terminal-data') this.publish();
-    if (event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'terminal-replaced' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
+    if (event.type === 'message-preparation' || event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'terminal-replaced' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
   }
 
   publish(): void { if (!this.closed) this.emit({ type: 'snapshot', value: this.snapshot() }); }
 
   runtimeStopped(): void {
+    for (const value of Object.values(this.reasoningProgress)) value.reasoning = { ...value.reasoning, status: 'interrupted' };
+    for (const [id, value] of Object.entries(this.execution)) this.execution[id] = {
+      model: 'idle', remote: value.remote === 'idle' ? 'idle' : 'unknown', stopping: false, canStop: false
+    };
+    for (const id of Object.keys(this.contextUsage)) delete this.contextUsage[id];
+    for (const id of Object.keys(this.contextCompaction)) delete this.contextCompaction[id];
     if (this.closed) return;
     for (const host of this.hosts.values()) if (host.status === 'connected' || host.status === 'connecting') {
       this.updateHost(host.id, { status: 'disconnected' });
@@ -479,7 +533,7 @@ export class AppState {
     for (const operation of this.operations.values()) if (['running', 'approved'].includes(operation.status)) {
       this.record({ type: 'operation', value: { ...operation, status: 'unknown', reason: '运行进程退出，远端结果待核验。' } });
     }
-    for (const task of this.tasks.values()) if (['running', 'waiting-review', 'human-control', 'paused'].includes(task.status)) {
+    for (const task of this.tasks.values()) if (task.session && ['running', 'waiting-review', 'human-control', 'paused'].includes(task.status)) {
       this.record({ type: 'task-status', taskId: task.id, status: 'recovering', summary: '运行进程已停止，请重新打开 CloudHelm 后核验远端状态。' });
     }
     for (const request of this.clarifications.values()) if (request.status === 'pending') {

@@ -37,7 +37,7 @@ export class RuntimeBridge {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('Runtime request timed out'));
-      }, call.method === 'connect' ? 180_000 : call.method === 'test-host' ? 60_000 : 30_000);
+      }, call.method === 'prepare-message' ? 620_000 : call.method === 'connect' ? 180_000 : call.method === 'test-host' ? 60_000 : 30_000);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timeout });
       try { this.child.postMessage({ id, call }); }
       catch {

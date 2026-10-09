@@ -17,7 +17,7 @@ export interface OperationScope {
 }
 
 export type ProposedOperation =
-  | { id: string; kind: 'command'; command: string; scope: OperationScope }
+  | { id: string; kind: 'command'; command: string; serviceUnit?: string; scope: OperationScope }
   | { id: string; kind: 'write-file'; path: string; content: string; scope: OperationScope }
   | { id: string; kind: 'upload'; localPath: string; remotePath: string; localRoot: string; contentSha256: string; size: number; scope: OperationScope }
   | { id: string; kind: 'delete-path'; path: string; scope: OperationScope };

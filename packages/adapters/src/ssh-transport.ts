@@ -1,3 +1,4 @@
+import { openIntegratedShell } from './shell-integration.js';
 import { redactOutput } from '@cloudhelm/core';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -157,6 +158,22 @@ export class SshTransport {
   }
 
   isConnected(hostId: string): boolean { return this.connections.has(hostId); }
+  private readonly commandPreflights = new Map<string, { generation: number; promise: Promise<void> }>();
+
+  private async checkCommandEnvironment(hostId: string): Promise<void> {
+    const generation = this.connectionGeneration(hostId);
+    const previous = this.commandPreflights.get(hostId);
+    if (previous?.generation === generation) return previous.promise;
+    const promise = this.execFixed(hostId, `python3 -I -c 'import pty, fcntl, termios, socket, subprocess, shutil'`).then((result) => {
+      if (result.exitCode !== 0) throw new Error('远端需要可用的 POSIX Python 3；请安装后继续');
+    }).catch((error: unknown) => {
+      if (this.commandPreflights.get(hostId)?.promise === promise) this.commandPreflights.delete(hostId);
+      throw error;
+    });
+    this.commandPreflights.set(hostId, { generation, promise });
+    return promise;
+  }
+
   connectionGeneration(hostId: string): number { return this.generations.get(hostId) ?? 0; }
 
   async execFixed(hostId: string, command: string): Promise<{ exitCode: number; output: string }> {
@@ -167,10 +184,12 @@ export class SshTransport {
         if (error) { reject(error); return; }
         let output = '';
         let exitCode = -1;
+        const timer = setTimeout(() => { channel.close(); reject(new Error('远端环境检查超时；业务命令未发送')); }, 15_000);
+        channel.on('error', (error: Error) => { clearTimeout(timer); reject(error); });
         channel.on('data', (data: Buffer) => { output = (output + data.toString('utf8')).slice(-4096); });
         channel.stderr.on('data', (data: Buffer) => { output = (output + data.toString('utf8')).slice(-4096); });
         channel.on('exit', (code: number) => { exitCode = code; });
-        channel.on('close', () => resolve({ exitCode, output }));
+        channel.on('close', () => { clearTimeout(timer); resolve({ exitCode, output }); });
       });
     });
   }
@@ -185,6 +204,8 @@ export class SshTransport {
 
   /** Installs only the fixed process transport, never model-authored scripts or secrets. */
   async prepareCommandProgram(hostId: string, source: string, assertAuthorized: () => void): Promise<string> {
+    assertAuthorized();
+    await this.checkCommandEnvironment(hostId);
     assertAuthorized();
     const result = await this.execFixed(hostId, 'command -v python3 && mktemp -d /tmp/cloudhelm-run.XXXXXXXX');
     const lines = result.output.trim().split(/\r?\n/u);
@@ -206,6 +227,12 @@ export class SshTransport {
   async removeCommandProgram(hostId: string, script: string): Promise<void> {
     if (!/^\/tmp\/cloudhelm-run\.[A-Za-z0-9]+\/process\.py$/u.test(script)) throw new Error('Invalid command transport path');
     await this.execFixed(hostId, `rm -f -- ${script}; rmdir -- ${path.posix.dirname(script)}`);
+  }
+
+  async integratedShell(hostId: string, cols = 100, rows = 30) {
+    const client = this.connections.get(hostId);
+    if (!client) throw new Error('Host is not connected');
+    return openIntegratedShell(client, cols, rows);
   }
 
   async shell(hostId: string, cols = 100, rows = 30): Promise<ClientChannel> {

@@ -1,3 +1,5 @@
+import { MessageContent } from './message-content.js';
+import { ReasoningContent } from './reasoning-content.js';
 import { useEffect, useState } from 'react';
 import type { OperationView, TaskView } from '@cloudhelm/contracts';
 import { capture, Icon, statusLabel } from './ui-helpers.js';
@@ -93,7 +95,7 @@ export function VerificationCard({ conversation, report }: { conversation: TaskV
     {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
       : conversation.report?.access.map((address) => <code className={styles.access} key={address}>{address}</code>)}
     <div className={styles.cardActions}><button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
-      {verified && <button className={styles.primary} onClick={() => void capture(() => window.cloudhelm.acceptConversation(conversation.id), report)}>验收完成</button>}
+      {verified && conversation.session && <button className={styles.primary} onClick={() => void capture(() => window.cloudhelm.acceptConversation(conversation.id), report)}>验收完成</button>}
     </div>
   </section>;
 }
@@ -112,7 +114,7 @@ export function ReportPage({ conversation, operations, report }: { conversation:
     </>}
     <h3>对话记录</h3>{messages.map((message, index) => <article className={styles.message} key={`${message.createdAt}:${index}`}
       onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
-      <strong>{message.role === 'user' ? '你' : message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}</article>)}
+      <strong>{message.role === 'user' ? '你' : message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <><ReasoningContent value={message.reasoning} />{message.text && <MarkdownMessage text={message.text} />}</> : message.document ? <MessageContent document={message.document} /> : <p>{message.text}</p>}</article>)}
     {!!operations.length && <details><summary>全部操作（{operations.length}）</summary>{operations.map((operation) => <OperationCard key={operation.id} operation={operation} report={report} />)}</details>}
   </section>;
 }
