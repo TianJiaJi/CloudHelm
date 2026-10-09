@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
-import { DesktopProcess, cleanupDesktopSmoke, withTimeout } from './desktop-process.mjs';
+import { DesktopProcess, cleanupDesktopSmoke, forceKill, withTimeout } from './desktop-process.mjs';
 
 async function fixture() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'cloudhelm-process-test-'));
@@ -75,6 +75,21 @@ describe('desktop smoke process lifecycle', () => {
   it('bounds a hung close without leaving its timeout running', async () => {
     await expect(withTimeout(() => new Promise(() => {}), 20, 'Close Electron')).rejects.toThrow('Close Electron timed out');
     await expect(withTimeout(() => Promise.resolve('closed'), 1000, 'Close Electron')).resolves.toBe('closed');
+  });
+
+  it('tolerates EPERM like ESRCH for an already-exited PID and keeps unexpected errors', async () => {
+    // Windows reports EPERM instead of ESRCH for a PID that already exited but is
+    // not yet reaped; waitForExit() still proves whether anything survived.
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    });
+    try {
+      await expect(forceKill(4242)).resolves.toBeUndefined();
+      kill.mockImplementation(() => { throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); });
+      await expect(forceKill(4242)).resolves.toBeUndefined();
+      kill.mockImplementation(() => { throw Object.assign(new Error('kill UNKNOWN'), { code: 'UNKNOWN' }); });
+      await expect(forceKill(4242)).rejects.toThrow('kill UNKNOWN');
+    } finally { kill.mockRestore(); }
   });
 
   it('cleans up when graceful close never resolves', async () => {

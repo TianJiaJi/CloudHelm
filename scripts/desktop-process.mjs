@@ -39,13 +39,17 @@ function descendants(table, root) {
   return pids;
 }
 
-async function forceKill(pid) {
+export async function forceKill(pid) {
+  // Best-effort termination; waitForExit() is the authoritative exit check below.
   // Kill only captured PIDs. Windows taskkill /T can reject an orphan after its
   // parent exits; Node's SIGKILL terminates that PID without walking ancestry.
+  // Windows reports EPERM for a PID that already exited but is not yet reaped
+  // (POSIX reports ESRCH), and a process can disappear between the snapshot and
+  // termination, so both codes mean "already gone or racy to observe" and are
+  // tolerated here; a process that really survives still fails waitForExit().
   try { process.kill(pid, 'SIGKILL'); }
   catch (error) {
-    // A process can disappear between the snapshot and termination.
-    if (error.code !== 'ESRCH' && (await processTable()).some((entry) => entry.pid === pid && !entry.zombie)) throw error;
+    if (error.code !== 'ESRCH' && error.code !== 'EPERM') throw error;
   }
 }
 
