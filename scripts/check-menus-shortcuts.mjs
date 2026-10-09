@@ -25,8 +25,8 @@ export async function checkMenusAndShortcuts(page, screenshot) {
   await page.getByRole('textbox', { name: '给 AI 的消息', exact: true }).click();
   await messageMenu.waitFor({ state: 'hidden' });
 
-  // Terminal menu: always opens, copy is disabled without a selection, unset
-  // actions advertise their missing shortcut.
+  // Terminal menu: always opens, copy is disabled without a selection, and every
+  // terminal action advertises its effective default shortcut.
   const terminal = page.locator('[data-shortcut-scope="terminal"]');
   // macOS xterm selects the word under a right click; use a blank row to test
   // the no-selection state consistently on every platform.
@@ -39,7 +39,14 @@ export async function checkMenusAndShortcuts(page, screenshot) {
   assert.equal(await terminalMenu.getByRole('menuitem', { name: '清屏（仅本地显示）' }).count(), 1);
   assert.equal(await terminalMenu.getByRole('menuitem', { name: '新终端' }).count(), 1);
   assert.equal(await terminalMenu.getByRole('menuitem', { name: '复制' }).isDisabled(), true, 'terminal copy is disabled without a selection');
-  assert.ok(await terminalMenu.locator('kbd', { hasText: '未设置' }).count(), 'unbound terminal actions show 未设置');
+  const terminalHint = (name) => terminalMenu.getByRole('menuitem', { name }).locator('kbd').first();
+  assert.equal(await terminalHint('复制').textContent(), isMac ? '⇧⌘C' : 'Ctrl+Shift+C', 'terminal copy shows its default shortcut');
+  assert.equal(await terminalHint('粘贴').textContent(), isMac ? '⇧⌘V' : 'Ctrl+Shift+V');
+  assert.equal(await terminalHint('全选').textContent(), isMac ? '⇧⌘A' : 'Ctrl+Shift+A');
+  assert.equal(await terminalHint('引用输出到 AI').textContent(), isMac ? '⇧⌘Q' : 'Ctrl+Shift+Q');
+  assert.equal(await terminalHint('清屏（仅本地显示）').textContent(), isMac ? '⇧⌘K' : 'Ctrl+Shift+K');
+  assert.equal(await terminalHint('新终端').textContent(), isMac ? '⇧⌘T' : 'Ctrl+Shift+T', 'global shortcuts are advertised inside the terminal');
+  assert.equal(await terminalMenu.locator('kbd', { hasText: '未设置' }).count(), 0, 'every terminal action has a default shortcut');
   await screenshot('context-menu-terminal.png');
   await page.keyboard.press('Escape');
   await terminalMenu.waitFor({ state: 'hidden' });

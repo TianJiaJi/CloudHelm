@@ -41,11 +41,11 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: 'conversation.new', label: '新对话', group: 'workspace', scope: 'global', defaultBinding: 'mod+n' },
   { id: 'settings.open', label: '打开设置', group: 'workspace', scope: 'global' },
   { id: 'agent.toggle', label: '切换 AI 助手面板', group: 'agent', scope: 'global' },
-  { id: 'terminal.copy', label: '复制选中内容', group: 'terminal', scope: 'terminal' },
-  { id: 'terminal.paste', label: '粘贴', group: 'terminal', scope: 'terminal' },
-  { id: 'terminal.selectAll', label: '全选终端内容', group: 'terminal', scope: 'terminal' },
-  { id: 'terminal.clear', label: '清屏（仅本地显示）', group: 'terminal', scope: 'terminal' },
-  { id: 'terminal.quote', label: '引用输出到 AI', group: 'terminal', scope: 'terminal' }
+  { id: 'terminal.copy', label: '复制选中内容', group: 'terminal', scope: 'terminal', defaultBinding: 'mod+shift+c' },
+  { id: 'terminal.paste', label: '粘贴', group: 'terminal', scope: 'terminal', defaultBinding: 'mod+shift+v' },
+  { id: 'terminal.selectAll', label: '全选终端内容', group: 'terminal', scope: 'terminal', defaultBinding: 'mod+shift+a' },
+  { id: 'terminal.clear', label: '清屏（仅本地显示）', group: 'terminal', scope: 'terminal', defaultBinding: 'mod+shift+k' },
+  { id: 'terminal.quote', label: '引用输出到 AI', group: 'terminal', scope: 'terminal', defaultBinding: 'mod+shift+q' }
 ];
 
 export const SHORTCUT_ACTION_MAP: Record<string, ShortcutAction> = Object.fromEntries(
@@ -173,7 +173,7 @@ export function shortcutContext(target: EventTarget | null): ShortcutContext {
 
 export function actionApplies(action: ShortcutAction, context: ShortcutContext): boolean {
   if (action.scope === 'fixed') return false;
-  return context === 'terminal' ? action.scope === 'terminal' : action.scope === 'global';
+  return action.scope === 'global' || context === 'terminal';
 }
 
 export function bindingLabel(actionId: ShortcutActionId, bindings: ShortcutBindings, isMac: boolean): string {
