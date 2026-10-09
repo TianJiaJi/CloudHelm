@@ -1,3 +1,5 @@
+import { checkReasoningContent } from './check-reasoning-content.mjs';
+import { checkExecutionThinking } from './check-execution-thinking.mjs';
 import { checkComposer } from './check-composer.mjs';
 /* global window, document, navigator, structuredClone */
 import { checkClarification } from './check-clarification.mjs';
@@ -318,6 +320,8 @@ try {
   await screenshot('main-minimum-width.png');
   await exerciseAsyncErrors();
   await checkErrorControl(page, screenshot);
+  await checkExecutionThinking(page, screenshot);
+  await checkReasoningContent(page, screenshot);
   await checkTerminalControl(page, screenshot);
   await checkMiddleClick(page, screenshot);
   await checkClarification(page, screenshot);

@@ -5,7 +5,7 @@ import { capture, Icon, reviewLabel } from './ui-helpers.js';
 import styles from './composer-controls.module.css';
 
 type ModelOption = ModelChoice & { name: string };
-function useMenuAnchor() {
+export function useMenuAnchor() {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const wasOpen = useRef(false);
   return { anchor, close: () => setAnchor(null), trigger: {
@@ -79,7 +79,7 @@ export function ComposerFooter({ host, legacy, usage, compaction, pendingModel, 
   }
   return <>
     <div className={styles.footer}>
-      <button type="button" className={styles.permissionTrigger} aria-label={host ? `权限选择，当前 ${reviewLabel[host.defaultMode]}` : '未授权远端操作'}
+      <button type="button" className={`${styles.permissionTrigger} ${host?.defaultMode === 'permissive' ? styles.permissive : ''}`} aria-label={host ? `权限选择，当前 ${reviewLabel[host.defaultMode]}` : '未授权远端操作'}
         aria-haspopup="menu" aria-expanded={!!permissions.anchor} disabled={!host || legacy || host.archived || saving}
         title={host ? '应用于此主机所有对话' : '自由对话未授权远端操作'} {...permissions.trigger}>
         <Icon name="shield" size={13} /><span>{saving ? '更新中…' : host ? reviewLabel[host.defaultMode] : '未授权远端操作'}</span>
@@ -98,6 +98,7 @@ export function ComposerFooter({ host, legacy, usage, compaction, pendingModel, 
     {permissions.anchor && host && <MenuSurface anchor={permissions.anchor} label="权限选择" placement="above" align="start" className={styles.picker} close={permissions.close}>
       <div className={styles.menuIntro}>应用于此主机所有对话</div>
       {(Object.keys(descriptions) as ReviewMode[]).map((mode) => <button type="button" key={mode} role="menuitem"
+        className={mode === 'permissive' ? styles.permissive : undefined}
         aria-current={host.defaultMode === mode ? 'true' : undefined} onClick={() => void choose(mode)}>
         <span className={styles.permissionText}><strong>{reviewLabel[mode]}</strong><small>{descriptions[mode]}</small></span>
         {host.defaultMode === mode && <Icon name="check" size={15} />}

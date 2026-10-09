@@ -1,3 +1,4 @@
+import { modelThinking } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
 import { Value } from 'typebox/value';
@@ -32,6 +33,8 @@ export class AppState {
   private readonly approvals = new Map<string, AppSnapshot['approvals'][number]>();
   private readonly inputs = new Map<string, AppSnapshot['inputs'][number]>();
   private readonly clarifications = new Map<string, ClarificationRequest>();
+  private readonly reasoningProgress: NonNullable<AppSnapshot['reasoningProgress']> = {};
+  private readonly execution: NonNullable<AppSnapshot['execution']> = {};
   private readonly contextUsage: NonNullable<AppSnapshot['contextUsage']> = {};
   private readonly contextCompaction: NonNullable<AppSnapshot['contextCompaction']> = {};
   private readonly messages: AppSnapshot['messages'] = [];
@@ -55,6 +58,8 @@ export class AppState {
     }
     for (const operation of store.list<OperationView>('operations')) this.operations.set(operation.id,
       operation.status === 'approved' || operation.status === 'running' ? { ...operation, status: 'unknown', reason: 'Application exited before outcome was recorded' } : operation);
+    for (const task of this.tasks.values()) this.execution[task.id] = { model: 'idle', stopping: false, canStop: false,
+      remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown') ? 'unknown' : 'idle' };
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));
     this.profile = store.get<ProfileRecord>('settings', 'model-profile') ?? { provider: 'vercel-ai-gateway', modelId: 'anthropic/claude-sonnet-4.5' };
     store.cleanupLogs();
@@ -63,7 +68,7 @@ export class AppState {
 
   snapshot(): AppSnapshot {
     return {
-      contextUsage: { ...this.contextUsage }, contextCompaction: { ...this.contextCompaction },
+      reasoningProgress: { ...this.reasoningProgress }, execution: { ...this.execution }, contextUsage: { ...this.contextUsage }, contextCompaction: { ...this.contextCompaction },
       hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
@@ -144,7 +149,9 @@ export class AppState {
   /** Conversations with live work stay until the user finishes them first. */
   assertDeletable(id: string): TaskView {
     const task = this.getTask(id);
-    if (isActiveTaskStatus(task.status)) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
+    if (isActiveTaskStatus(task.status) || this.execution[id]?.canStop || this.execution[id]?.stopping) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
+    if ([...this.operations.values()].some((op) => op.taskId === id && (op.status === 'unknown'
+      || (op.status === 'failed' && op.effects === 'possible' && !op.reconciledAt)))) throw new Error('远端结果尚未核验，请先保留操作记录并确认结果后再删除');
     return task;
   }
 
@@ -176,6 +183,8 @@ export class AppState {
     this.store.removeWhere('messages', 'taskId', id);
     this.store.removeWhere('clarifications', 'taskId', id);
     this.store.removePrefix('model-requests', `${id}:`);
+    delete this.reasoningProgress[id];
+    delete this.execution[id];
     delete this.contextUsage[id];
     delete this.contextCompaction[id];
     for (const key of logKeys) this.store.removeLogs(key);
@@ -298,19 +307,23 @@ export class AppState {
       baseUrl: draft.baseUrl ? validModelUrl(draft.baseUrl) : undefined };
   }
 
-  availableModels(): Array<ModelChoice & { name: string }> {
+  availableModels(): Array<ModelChoice & { name: string; thinkingLevels?: import('@cloudhelm/contracts').ThinkingLevel[] }> {
     return listModelProviders().flatMap((provider) => {
       const settings = this.modelProviderSettings(provider.id);
       if (!settings.hasKey) return [];
       const models = provider.id === 'cloudhelm-custom' && settings.modelId
         ? [{ id: settings.modelId, name: settings.modelId }] : provider.models;
-      return models.map((model) => ({ provider: provider.id, modelId: model.id, name: model.name }));
+      return models.map((model) => ({ provider: provider.id, modelId: model.id, name: model.name, thinkingLevels: modelThinking({ provider: provider.id, modelId: model.id, baseUrl: settings.baseUrl }).levels }));
     });
   }
 
-  setTaskModel(id: string, profile: RuntimeProfile): void {
+  setTaskModel(id: string, profile: RuntimeProfile, live = false): void {
     const task = this.getTask(id);
     delete this.contextUsage[id];
+    if (!live) {
+      const choice = modelThinking(profile, task.thinking?.selected);
+      task.thinking = { ...choice, effective: task.thinking?.effective ?? choice.selected, pending: true };
+    }
     Object.assign(task, { provider: profile.provider, modelId: profile.modelId, baseUrl: profile.baseUrl, credentialRevision: profile.credentialRevision, updatedAt: Date.now() });
     this.store.put('tasks', id, task);
     this.publish();
@@ -420,9 +433,11 @@ export class AppState {
         break;
       }
       case 'task-message': {
-        if (event.entryId && this.messages.some((message) => message.taskId === event.taskId && message.entryId === event.entryId)) return;
-        const message = { entryId: event.entryId, taskId: event.taskId, role: event.role, text: event.text, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
-        this.messages.push(message);
+        const existing = event.entryId ? this.messages.find((message) => message.taskId === event.taskId && message.entryId === event.entryId) : undefined;
+        if (existing && (!event.reasoning || JSON.stringify(existing.reasoning) === JSON.stringify(event.reasoning))) return;
+        const message = { entryId: event.entryId, taskId: event.taskId, role: event.role, text: event.text, reasoning: event.reasoning, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
+        if (existing) Object.assign(existing, message); else this.messages.push(message);
+        if (event.role === 'agent') delete this.reasoningProgress[event.taskId];
         this.store.put('messages', event.entryId ? `${event.taskId}:${event.entryId}` : `${event.createdAt}:${randomUUID()}`, message);
         break;
       }
@@ -462,6 +477,20 @@ export class AppState {
       case 'context-compaction':
         if (this.tasks.has(event.taskId)) this.contextCompaction[event.taskId] = event.status;
         break;
+      case 'reasoning-progress':
+        if (!this.tasks.has(event.taskId)) return;
+        if (event.value) this.reasoningProgress[event.taskId] = event.value;
+        else delete this.reasoningProgress[event.taskId];
+        break;
+      case 'thinking': {
+        const task = this.getTask(event.taskId);
+        task.thinking = event.value;
+        this.store.put('tasks', task.id, task);
+        break;
+      }
+      case 'execution':
+        if (this.tasks.has(event.taskId)) this.execution[event.taskId] = event.value;
+        break;
       case 'context-usage':
         if (this.tasks.has(event.taskId)) this.contextUsage[event.taskId] = event.value;
         break;
@@ -485,6 +514,10 @@ export class AppState {
   publish(): void { if (!this.closed) this.emit({ type: 'snapshot', value: this.snapshot() }); }
 
   runtimeStopped(): void {
+    for (const value of Object.values(this.reasoningProgress)) value.reasoning = { ...value.reasoning, status: 'interrupted' };
+    for (const [id, value] of Object.entries(this.execution)) this.execution[id] = {
+      model: 'idle', remote: value.remote === 'idle' ? 'idle' : 'unknown', stopping: false, canStop: false
+    };
     for (const id of Object.keys(this.contextUsage)) delete this.contextUsage[id];
     for (const id of Object.keys(this.contextCompaction)) delete this.contextCompaction[id];
     if (this.closed) return;

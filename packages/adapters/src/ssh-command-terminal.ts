@@ -1,5 +1,5 @@
 import { StringDecoder } from 'node:string_decoder';
-import { isSudo, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
+import { CommandNotStartedError, isSudo, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
@@ -60,7 +60,11 @@ export class SshCommandTerminal implements RawTerminal {
     const first = analysis.steps?.length === 1 ? analysis.steps[0]!.call : undefined;
     const fallback = first ? [first.name, ...first.args] : ['/bin/bash', '--noprofile', '--norc', '-c', command];
     current();
-    if (!this.program) this.program = await this.ssh.prepareCommandProgram(this.hostId, remoteCommandProgram, current);
+    try {
+      if (!this.program) this.program = await this.ssh.prepareCommandProgram(this.hostId, remoteCommandProgram, current);
+    } catch {
+      throw new CommandNotStartedError('命令未发送：请确认远端提供 Python 3（POSIX、pty 支持），且 /tmp 可写；修复后再继续。');
+    }
     current();
     this.busy = true;
     this.lineStart = true;
@@ -134,7 +138,7 @@ export class SshCommandTerminal implements RawTerminal {
           else if (event.type === 'prompt' && typeof event.data === 'string') this.prompt = event.data;
           else if (event.type === 'launch-error' && ['permission-denied', 'unsupported'].includes(String(event.kind))) {
             this.failure({ failureKind: event.kind as 'permission-denied' | 'unsupported', effects: this.precedingSteps ? 'possible' : 'none' });
-            this.data('Executable or working directory is unavailable or inaccessible; no process started.'); complete(127); return;
+            this.data(event.kind === 'unsupported' ? '命令未启动：所需工具或工作目录不存在。请确认工具已安装、路径正确后继续。' : '命令未启动：当前身份无权访问工具或工作目录。请核验权限后提交新的审核操作。'); complete(127); return;
           }
           else if (event.type === 'exit' && Number.isInteger(event.code)) { complete(event.code as number); return; }
           else if (event.type === 'auth' && typeof event.id === 'string' && /^[a-f0-9]{32}$/u.test(event.id)) {

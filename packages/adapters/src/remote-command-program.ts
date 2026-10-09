@@ -1,5 +1,6 @@
 /** Fixed transport component. Business commands and credentials are data, never generated shell scripts. */
 export const remoteCommandProgram = String.raw`#!/usr/bin/env python3
+import shutil
 import base64, codecs, fcntl, json, os, pty, pwd, select, signal, socket, struct, subprocess, sys, termios, threading, time, uuid
 
 def askpass():
@@ -132,6 +133,10 @@ try:
         environment.update(SUDO_ASKPASS=os.path.abspath(__file__), CLOUDHELM_AUTH_SOCKET=socket_path, CLOUDHELM_AUTH_TOKEN=token)
         # Standard sudo askpass mode; sudo still authorizes the exact target executable, not a root shell.
         argv = [argv[0], '-A'] + argv[1:]
+    # Check only the executable and directory used by this launch; never install dependencies.
+    if not os.path.isdir(cwd): raise FileNotFoundError()
+    if not os.access(cwd, os.X_OK): raise PermissionError()
+    if shutil.which(argv[0], path=environment['PATH']) is None: raise FileNotFoundError()
     master, slave = pty.openpty()
     rows, cols = int(launch.get('rows', 30)), int(launch.get('cols', 100))
     if 1 <= rows <= 1000 and 1 <= cols <= 1000:

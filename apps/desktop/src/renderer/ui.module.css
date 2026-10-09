@@ -31,9 +31,9 @@
 .selected .hostSelect > svg, .selected > svg { color: var(--accent); }
 .addHostEmpty { width: 100%; min-height: 60px; border: 1px dashed var(--border) !important; color: var(--muted) !important; font-size: 11px; }
 .menuDismiss { position: fixed; inset: 0; z-index: 19; border-radius: 0 !important; cursor: default; background: transparent !important; }
-.menuSurface, .attachMenu { z-index: 20; min-width: 150px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); box-shadow: 0 8px 24px #0005; }
+.menuSurface { z-index: 20; min-width: 150px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); box-shadow: 0 8px 24px #0005; }
 .menuSurface { position: fixed; inset: auto; margin: 0; min-width: 190px; max-height: calc(100vh - 16px); overflow-y: auto; color: var(--text); }
-.menuSurface button, .attachMenu button { display: flex; justify-content: flex-start; width: 100%; padding: 8px 10px; font-size: 12px; }
+.menuSurface button { display: flex; justify-content: flex-start; width: 100%; padding: 8px 10px; font-size: 12px; }
 .menuSurface button > span { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menuSurface button > svg { color: var(--muted); }
 .menuSurface button:disabled { opacity: .42; cursor: default; }
@@ -142,9 +142,8 @@
 .composer textarea { display: block; width: 100%; min-height: 66px; max-height: 180px; resize: none; padding: 3px 2px 6px; border: 0 !important; background: transparent !important; color: var(--text); font-size: 13px; line-height: 1.7; }
 .composer textarea::placeholder { color: var(--muted); }
 .composerTools { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
-.attachControl { position: relative; }
+.attachControl { flex: none; }
 .attachControl > button { padding: 4px; color: var(--muted); }
-.attachMenu { bottom: 36px; left: -6px; }
 .configureModel { color: var(--muted) !important; font-size: 10px; padding: 5px; }
 .sendButton { margin-left: auto; width: 30px; height: 30px; flex: none; border-radius: 50% !important; background: var(--text) !important; color: var(--canvas) !important; padding: 0; }
 .sendButton:disabled { background: #71787a !important; opacity: .7; }

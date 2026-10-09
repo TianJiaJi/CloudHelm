@@ -1,3 +1,4 @@
+import { CommandNotStartedError } from '@cloudhelm/core';
 import { randomUUID } from 'node:crypto';
 import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
 import { operationFingerprint, OutputRedactor } from '@cloudhelm/core';
@@ -149,7 +150,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     if (!terminal.pending || terminal.pending.stopRequested) return;
     terminal.pending.stopRequested = true;
     // Only invoked by an explicit user stop action, never to recover a shell.
-    try { terminal.channel.write('\u0003'); } finally { this.suspend(id); }
+    try { terminal.channel.write('\u0003'); } catch (error) { terminal.pending.stopRequested = false; throw error; } finally { this.suspend(id); }
   }
 
   stopTaskCommands(taskId: string): void {
@@ -195,7 +196,10 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       if (!terminal.channel.onDisplay) this.events.data(terminal.id, `$ ${operation.command}\r\n`);
       void terminal.channel.execute!(operation.command, operation.scope.cwd, current).catch((error: unknown) => {
         this.receive(terminal, error instanceof Error ? error.message : 'Command transport failed');
-        this.complete(terminal, undefined);
+        if (error instanceof CommandNotStartedError && terminal.pending === pending) {
+          pending.failure = { failureKind: 'unsupported', effects: 'none' };
+          this.complete(terminal, 127);
+        } else this.complete(terminal, undefined);
       });
     });
   }
@@ -225,14 +229,8 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
   private closeRecord(terminal: TerminalRecord): void {
     terminal.owner = 'closed';
     terminal.generation++;
-    if (terminal.pending) {
-      const pending = terminal.pending;
-      pending.completeRemote('unknown');
-      if (!pending.reported) pending.settle({ operationId: pending.operationId,
-        status: 'unknown', stdoutTail: pending.output.slice(-16_384),
-        logRef: terminal.id, remoteCompletion: pending.remoteCompletion });
-    }
-    terminal.pending = undefined;
+    // Publish loss of observability even if Stop already settled the tool call.
+    this.complete(terminal, undefined);
     this.events.state(terminal.id, 'closed');
     this.listeners.delete(terminal.id);
     this.terminals.delete(terminal.id);

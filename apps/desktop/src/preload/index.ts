@@ -36,6 +36,7 @@ const api: DesktopAPI = {
   resizeTerminal: (terminalId, cols, rows) => invoke('resize', terminalId, cols, rows),
   startConversation: (input) => invoke('start-conversation', input),
   sendMessage: (id, message, tokens) => invoke('send-message', id, message, tokens ?? []),
+  setConversationThinking: (id, level) => invoke('set-conversation-thinking', id, level),
   setConversationModel: (id, model) => invoke('set-conversation-model', id, model),
   answerClarification: (taskId, requestId, answers) => invoke('answer-clarification', taskId, requestId, answers),
   cancelClarification: (taskId, requestId) => invoke('cancel-clarification', taskId, requestId),

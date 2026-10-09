@@ -108,3 +108,16 @@ it('retains possible effects when staging already began before failure', async (
   const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
   await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({ effects: 'possible', permissionDenied: true });
 });
+
+it('caches only successful Python preflight per SSH connection generation', async () => {
+  const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+  sftpFixture(false, () => {});
+  const fixed = vi.spyOn(ssh, 'execFixed').mockImplementation(async (_host, command) => ({ exitCode: 0,
+    output: command.startsWith('python3') ? '' : '/usr/bin/python3\n/tmp/cloudhelm-run.fixture\n' }));
+  await ssh.prepareCommandProgram('host', 'fixed', () => {});
+  await ssh.prepareCommandProgram('host', 'fixed', () => {});
+  expect(fixed.mock.calls.filter(([, command]) => command.startsWith('python3'))).toHaveLength(1);
+  ssh.disconnect('host'); await ssh.connect(host, { password: 'synthetic-test' });
+  await ssh.prepareCommandProgram('host', 'fixed', () => {});
+  expect(fixed.mock.calls.filter(([, command]) => command.startsWith('python3'))).toHaveLength(2);
+});

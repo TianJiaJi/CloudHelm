@@ -40,6 +40,9 @@ export function isActiveTaskStatus(status: TaskStatus): boolean {
   return ACTIVE_TASK_STATUSES.includes(status);
 }
 
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export interface ThinkingView { levels: ThinkingLevel[]; selected: ThinkingLevel; effective: ThinkingLevel; pending: boolean }
+
 export interface ModelChoice { provider: string; modelId: string }
 export interface ContextUsageView {
   model: ModelChoice;
@@ -54,9 +57,16 @@ export interface PlanStep { id: string; title: string; status: 'pending' | 'runn
 export interface VerificationReport { summary: string; access: string[]; evidenceOperationIds: string[]; changes: string[]; recovery: string[] }
 export type InterruptionSource = 'stop-button' | 'ctrl-c' | 'terminal-close';
 export interface UserInterruption { source: InterruptionSource; requestedAt: number; operationIds: string[] }
-export interface ConversationMessage { entryId?: string; interruption?: UserInterruption; taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
+export interface ReasoningView {
+  text: string; status: 'streaming' | 'complete' | 'interrupted' | 'unavailable';
+  kind: 'thinking' | 'summary'; redacted?: boolean;
+}
+export interface ReasoningProgress { id: string; createdAt: number; model: { provider: string; modelId: string }; reasoning: ReasoningView }
+
+export interface ConversationMessage {
+  reasoning?: ReasoningView; entryId?: string; interruption?: UserInterruption; taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
 export interface TerminalViewState { id: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed'; replacementTerminalId?: string }
-export interface ConversationStart { hostId: string | null; message: string; model?: ModelChoice; localSelectionTokens: string[] }
+export interface ConversationStart { thinkingLevel?: ThinkingLevel; hostId: string | null; message: string; model?: ModelChoice; localSelectionTokens: string[] }
 export interface LocalScope { path: string; kind: 'file' | 'directory' }
 
 export interface HostView extends HostDraft {
@@ -71,6 +81,7 @@ export interface HostView extends HostDraft {
 }
 
 export interface TaskView {
+  thinking?: ThinkingView;
   session?: { version: 1; id: string };
   id: string;
   goal: string;
@@ -91,6 +102,9 @@ export interface TaskView {
 }
 
 export interface OperationView {
+  reconciledAt?: number;
+  intentKey?: string;
+  serviceUnit?: string;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
   failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unknown';
@@ -136,7 +150,16 @@ export interface InputRequestView {
   expiresAt: number;
 }
 
+export interface ExecutionView {
+  model: 'running' | 'idle';
+  remote: 'running' | 'unknown' | 'idle';
+  stopping: boolean;
+  canStop: boolean;
+}
+
 export interface AppSnapshot {
+  reasoningProgress?: Record<string, ReasoningProgress>;
+  execution?: Record<string, ExecutionView>;
   contextUsage?: Record<string, ContextUsageView>;
   contextCompaction?: Record<string, 'running' | 'complete' | 'failed'>;
   hosts: HostView[];
@@ -164,6 +187,9 @@ export interface ModelProviderSettings {
 }
 
 export type AppEvent =
+  | { type: 'reasoning-progress'; taskId: string; value: ReasoningProgress | null }
+  | { type: 'thinking'; taskId: string; value: ThinkingView }
+  | { type: 'execution'; taskId: string; value: ExecutionView }
   | { type: 'context-usage'; taskId: string; value: ContextUsageView }
   | { type: 'clarification'; value: ClarificationRequest }
   | { type: 'snapshot'; value: AppSnapshot }
@@ -192,7 +218,7 @@ export interface DesktopAPI {
   modelProviderSettings(providerId: string): Promise<ModelProviderSettings>;
   saveModelProfile(profile: ModelProfileDraft): Promise<void>;
   testModelConnection(profile: ModelProfileDraft): Promise<{ latencyMs: number }>;
-  availableModels(): Promise<Array<ModelChoice & { name: string }>>;
+  availableModels(): Promise<Array<ModelChoice & { name: string; thinkingLevels?: ThinkingLevel[] }>>;
   saveReviewSettings(settings: { jevKey?: string; disableJev?: boolean }): Promise<void>;
   shortcuts(): Promise<ShortcutSettings>;
   saveShortcuts(settings: ShortcutSettings): Promise<void>;
@@ -213,6 +239,7 @@ export interface DesktopAPI {
   resizeTerminal(terminalId: string, cols: number, rows: number): Promise<void>;
   startConversation(input: ConversationStart): Promise<TaskView>;
   sendMessage(conversationId: string, message: string, localSelectionTokens?: string[]): Promise<void>;
+  setConversationThinking(conversationId: string, level: ThinkingLevel): Promise<void>;
   setConversationModel(conversationId: string, model: ModelChoice): Promise<void>;
   answerClarification(taskId: string, requestId: string, answers: ClarificationAnswer[]): Promise<void>;
   cancelClarification(taskId: string, requestId: string): Promise<void>;

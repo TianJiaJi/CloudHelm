@@ -1,3 +1,4 @@
+import { ReasoningContent } from './reasoning-content.js';
 import { useEffect, useState } from 'react';
 import type { OperationView, TaskView } from '@cloudhelm/contracts';
 import { capture, Icon, statusLabel } from './ui-helpers.js';
@@ -112,7 +113,7 @@ export function ReportPage({ conversation, operations, report }: { conversation:
     </>}
     <h3>对话记录</h3>{messages.map((message, index) => <article className={styles.message} key={`${message.createdAt}:${index}`}
       onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
-      <strong>{message.role === 'user' ? '你' : message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}</article>)}
+      <strong>{message.role === 'user' ? '你' : message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <><ReasoningContent value={message.reasoning} />{message.text && <MarkdownMessage text={message.text} />}</> : <p>{message.text}</p>}</article>)}
     {!!operations.length && <details><summary>全部操作（{operations.length}）</summary>{operations.map((operation) => <OperationCard key={operation.id} operation={operation} report={report} />)}</details>}
   </section>;
 }

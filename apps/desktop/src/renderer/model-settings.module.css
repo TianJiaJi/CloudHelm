@@ -22,7 +22,8 @@
 .page input:focus { border-color: var(--accent); }
 .page input::placeholder { color: var(--muted); opacity: .8; }
 .sections { display: flex; flex: none; gap: 19px; border-bottom: 1px solid var(--border); }
-.page .sectionTab { display: flex; align-items: center; gap: 8px; padding: 0 7px 14px; border-radius: 0; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.page .sectionTab { display: flex; align-items: center; gap: 8px; padding: 12px 7px; border-radius: 0; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.page .sectionTab:hover { background: transparent; color: var(--text); }
 .page .sectionTab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
 .apiLayout { display: grid; grid-template-columns: minmax(160px, 25%) minmax(0, 1fr); gap: 16px; flex: 1; min-height: 0; }
 .providers, .detail, .reviewPanel, .infoPanel { background: var(--panel); border: 1px solid var(--border); border-radius: 11px; }

@@ -22,7 +22,7 @@ export async function checkErrorControl(page, screenshot) {
   });
   await page.getByRole('button', { name: /prod 控制权测试/ }).click();
   await composer.fill('保留这条未发送的消息');
-  await page.getByRole('button', { name: '发送消息' }).click();
+  await composer.press('Enter');
   // The error arrives after navigation: recovery must still target the original conversation.
   await page.getByRole('button', { name: /dev 控制权测试/ }).click();
   await page.evaluate(() => window.fixture.rejectControlMessage(new Error('AI 正在运行，请先停止再输入')));

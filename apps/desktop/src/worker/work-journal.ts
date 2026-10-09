@@ -47,7 +47,8 @@ export class WorkJournal {
           || [...value.changes, ...value.recovery, ...value.access].some((text) => !text.trim())) {
           return result('Provide access details, changes and recovery; explicitly state when a field is not applicable', true);
         }
-        if (operations.some((operation) => ['running', 'proposed', 'approved', 'unknown'].includes(operation.status))) {
+        if (operations.some((operation) => ['running', 'proposed', 'approved', 'unknown'].includes(operation.status)
+          || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt))) {
           return result('Reconcile outstanding or unknown operation outcomes before submitting verification', true);
         }
         this.report = value;
@@ -68,16 +69,17 @@ export class WorkJournal {
       outcome: Type.Union([Type.Literal('succeeded'), Type.Literal('failed')]), explanation: Type.String({ minLength: 10 }) });
     const reconciliation: BusinessTool<Static<typeof reconcileParameters>> = {
       name: 'record_reconciled_result', label: 'Record an observed outcome after recovery', replay: 'never', parameters: reconcileParameters,
-      description: 'After fresh inspection proves the outcome of an UNKNOWN operation, cite newer successful inspection IDs and explain the concrete evidence. Do not call merely to retry. Running foreground operations cannot be cleared.',
+      description: 'After fresh inspection proves the outcome of an UNKNOWN or failed-with-possible-effects operation, cite newer successful inspection IDs and explain the concrete evidence. Do not call merely to retry. Running foreground operations cannot be cleared.',
       execute: async (_id, value) => {
         const operations = this.operations().filter((operation) => operation.taskId === this.taskId);
-        const operation = operations.find((item) => item.id === value.operationId && item.status === 'unknown');
+        const operation = operations.find((item) => item.id === value.operationId && (item.status === 'unknown' || (item.status === 'failed' && item.effects === 'possible' && !item.reconciledAt)));
         if (!operation || !value.evidenceOperationIds.length || value.explanation.trim().length < 10 || !value.evidenceOperationIds.every((id) => operations.some((item) => item.id === id
           && item.hostId === operation.hostId && item.status === 'succeeded' && item.createdAt > operation.createdAt))) {
           return result('Reconciliation requires fresh successful evidence from the same host', true);
         }
         if (!this.reconcile(operation)) return result('The original remote operation may still be running; wait or stop it explicitly', true);
         operation.status = value.outcome;
+        operation.reconciledAt = Date.now();
         operation.reason = `已核验：${value.explanation}；证据：${value.evidenceOperationIds.join(', ')}`;
         this.reconciled(operation);
         return result('Reconciled outcome recorded; this did not replay any remote action');

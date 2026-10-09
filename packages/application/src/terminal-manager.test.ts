@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ProposedOperation, RawTerminal } from '@cloudhelm/core';
-import { operationFingerprint } from '@cloudhelm/core';
+import { CommandNotStartedError, operationFingerprint } from '@cloudhelm/core';
 import { TerminalManager } from './terminal-manager.js';
 
 class FakeTerminal implements RawTerminal {
@@ -101,4 +101,14 @@ describe('real PTY ownership', () => {
     expect(manager.currentGeneration(id)).toBe(-1);
     expect(states).toEqual(['agent', 'suspended', 'closed']);
   });
+});
+
+it('does not leave an unresolved operation when preflight confirms no dispatch', async () => {
+  const channel = new FakeTerminal();
+  channel.execute = async () => { throw new CommandNotStartedError('Python 3 unavailable'); };
+  const manager = new TerminalManager({ data() {}, state() {} });
+  const id = manager.open('host', channel, 'task');
+  const proposed = operation('preflight', manager.currentGeneration(id)); proposed.scope.terminalId = id;
+  expect(await manager.execute(proposed, operationFingerprint(proposed))).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'unsupported' });
+  expect(manager.pendingOperations('task')).toEqual([]);
 });

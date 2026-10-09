@@ -1,3 +1,4 @@
+import { isServiceQuery } from './service-observation.js';
 import path from 'node:path';
 import type { CommandAnalysis, CommandCall, ProposedOperation, SafetyDecision, SafetySettings } from './model.js';
 
@@ -134,6 +135,7 @@ function isQuery(call: CommandCall): boolean {
   if (call.dynamic || call.redirects) return false;
   const name = path.posix.basename(call.name);
   if (![name, `/bin/${name}`, `/usr/bin/${name}`].includes(call.name)) return false;
+  if (isServiceQuery(name, call.args)) return true;
   if (name === 'hostname') return call.args.every((arg) => ['-a', '-A', '-d', '-f', '-i', '-I', '-s', '--fqdn', '--short', '--domain', '--ip-address', '--all-ip-addresses'].includes(arg));
   if (name === 'date') return call.args.every((arg) => ['-u', '-R', '-I', '--utc', '--rfc-email', '--iso-8601'].includes(arg) || (arg.startsWith('+') && !/[\r\n]/u.test(arg)));
   if (name === 'ifconfig') {

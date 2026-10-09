@@ -1,3 +1,6 @@
+import { PiReasoningStream, reasoningView } from './pi-reasoning.js';
+import { modelThinking } from './model-catalog.js';
+import type { ThinkingLevel, ThinkingView } from '@cloudhelm/core';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -43,7 +46,7 @@ export async function createConversationSession(options: SessionOptions): Promis
     await loader.reload();
     if (loader.getExtensions().errors.length) throw new Error('CloudHelm Pi 扩展加载失败');
     const { session, modelFallbackMessage } = await createAgentSession({ cwd, agentDir: cwd, modelRuntime: runtime,
-      model: resolveSessionModel(options.profile).model, thinkingLevel: 'off', settingsManager: settings,
+      model: resolveSessionModel(options.profile).model, thinkingLevel: options.thinkingLevel, settingsManager: settings,
       sessionManager: manager, resourceLoader: loader, noTools: 'builtin',
       tools: [...options.tools.map((tool) => tool.name), 'ask_user'],
       customTools: options.tools as unknown as ToolDefinition[] });
@@ -53,12 +56,16 @@ export async function createConversationSession(options: SessionOptions): Promis
       configureWindow(model);
       await session.setModel(model);
     });
+    if (options.thinkingLevel !== undefined) adapter.setThinking(options.thinkingLevel);
     adapter.project();
+    adapter.publishThinking();
     return adapter;
   } catch (error) { await rm(cwd, { recursive: true, force: true }); throw error; }
 }
 
 class PiConversationSession implements ConversationSession {
+  private readonly reasoningStream: PiReasoningStream;
+  private preferred: ThinkingLevel;
   private selected: SessionProfile;
   private active: SessionProfile;
   private readonly projected = new Set<string>();
@@ -69,8 +76,13 @@ class PiConversationSession implements ConversationSession {
 
   constructor(private readonly session: AgentSession, private readonly options: SessionOptions,
     private readonly cwd: string, private readonly applyModel: (profile: SessionProfile) => Promise<void>) {
+    this.reasoningStream = new PiReasoningStream((value) => options.event({ type: 'reasoning-progress', value }));
     this.active = { ...options.profile };
     this.selected = this.active;
+    const saved = [...session.sessionManager.getBranch()].reverse().find((entry) => entry.type === 'custom' && entry.customType === 'cloudhelm-thinking');
+    const value = saved?.type === 'custom' ? saved.data : undefined;
+    this.preferred = options.thinkingLevel ?? (typeof value === 'string' && ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value) ? value as ThinkingLevel : session.thinkingLevel);
+    session.setThinkingLevel(this.preferred);
     const previous = [...session.messages].reverse().find((message) => message.role === 'assistant');
     this.switched = !!previous && (previous.provider !== this.active.provider || previous.model !== this.active.modelId);
     const agent = session.agent;
@@ -106,6 +118,9 @@ class PiConversationSession implements ConversationSession {
     };
     // This listener runs after Pi's persistence listener. Public message_end runs before persistence.
     agent.subscribe(async (event) => {
+      if ((event.type === 'message_start' || event.type === 'message_update') && event.message.role === 'assistant') {
+        this.reasoningStream.update(event.message, this.session.thinkingLevel !== 'off');
+      }
       if (event.type === 'tool_execution_start') options.event({ type: 'tool-start', id: event.toolCallId, name: event.toolName, args: event.args });
       if (event.type === 'tool_execution_end') options.event({ type: 'tool-end', id: event.toolCallId, name: event.toolName, isError: event.isError });
       if (event.type === 'message_end') {
@@ -117,6 +132,7 @@ class PiConversationSession implements ConversationSession {
           options.event({ type: 'response' });
         }
         this.project();
+        if (event.message.role === 'assistant') this.reasoningStream.clear();
       }
       if (event.type === 'agent_end' && !this.failure) await this.prepareModel();
       if (event.type === 'turn_end') { options.event({ type: 'turn-end' }); this.publishUsage(); }
@@ -148,6 +164,20 @@ class PiConversationSession implements ConversationSession {
     this.switched = true;
     this.usageReady = false;
     this.publishUsage();
+    this.publishThinking();
+  }
+  setThinking(level: ThinkingLevel): void {
+    if (!modelThinking(this.selected).levels.includes(level)) throw new Error('当前模型不支持此思考档位');
+    this.session.sessionManager.appendCustomEntry('cloudhelm-thinking', level);
+    this.preferred = level;
+    if (!this.isStreaming && this.selected === this.active) this.session.setThinkingLevel(level);
+    this.publishThinking();
+  }
+  publishThinking(): void {
+    const selection = modelThinking(this.selected, this.preferred);
+    const value: ThinkingView = { ...selection, effective: this.session.thinkingLevel,
+      pending: this.selected !== this.active || selection.selected !== this.session.thinkingLevel };
+    this.options.event({ type: 'thinking', value });
   }
   setReviewKey(jevKey?: string): void {
     const sameSelection = this.selected === this.active;
@@ -155,15 +185,23 @@ class PiConversationSession implements ConversationSession {
     this.selected = sameSelection ? this.active : { ...this.selected, jevKey };
   }
   private async prepareModel(): Promise<void> {
-    if (this.selected === this.active) return;
-    const selected = this.selected;
-    await this.applyModel(selected);
-    this.active = selected;
+    if (this.selected !== this.active) {
+      const selected = this.selected;
+      await this.applyModel(selected);
+      this.active = selected;
+    }
+    this.session.setThinkingLevel(this.preferred);
+    this.publishThinking();
   }
   prompt(text: string): Promise<void> {
     if (this.running) return Promise.reject(new Error('会话正在处理，请等待当前请求结束'));
-    const run = this.runPrompt(text).finally(() => { if (this.running === run) this.running = undefined; });
+    const run = this.runPrompt(text).finally(() => {
+      if (this.running === run) this.running = undefined;
+      this.reasoningStream.clear();
+      this.options.event({ type: 'activity' });
+    });
     this.running = run;
+    this.options.event({ type: 'activity' });
     return run;
   }
   private async runPrompt(text: string): Promise<void> {
@@ -187,6 +225,7 @@ class PiConversationSession implements ConversationSession {
   }
   clearQueue(): void { this.session.clearQueue(); }
   dispose(): void {
+    this.reasoningStream.clear();
     this.session.dispose();
     void rm(this.cwd, { recursive: true, force: true });
   }
@@ -204,7 +243,8 @@ class PiConversationSession implements ConversationSession {
       if (message.role !== 'user' && message.role !== 'assistant') continue;
       const text = typeof message.content === 'string' ? message.content
         : message.content.filter((part) => part.type === 'text').map((part) => part.text).join('').trim();
-      if (text) this.options.event({ type: 'text', value: { entryId: entry.id,
+      const reasoning = message.role === 'assistant' ? reasoningView(message) : undefined;
+      if (text || reasoning) this.options.event({ type: 'text', value: { entryId: entry.id, reasoning,
         role: message.role === 'assistant' ? 'agent' : 'user', text, createdAt: message.timestamp,
         model: message.role === 'assistant' ? { provider: message.provider, modelId: message.model } : undefined } });
     }

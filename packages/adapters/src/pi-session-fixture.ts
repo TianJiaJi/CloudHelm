@@ -3,6 +3,8 @@ import type { AddressInfo } from 'node:net';
 
 interface FixtureMessage { role: string; content?: string | Array<{ type: string; text?: string }>; tool_call_id?: string }
 export interface FixtureRequest {
+  thinking?: { type: string };
+  reasoning_effort?: string;
   model: string;
   authorization: string;
   review: boolean;
@@ -10,7 +12,7 @@ export interface FixtureRequest {
   stream: boolean;
   tools?: Array<{ function: { name: string } }>;
 }
-export type FixtureResponse = ({ text: string } | { calls: Array<{ id: string; name: string; arguments: unknown }> } | { error: string; status: number }) & { usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens: number } } };
+export type FixtureResponse = ({ text: string } | { calls: Array<{ id: string; name: string; arguments: unknown }> } | { error: string; status: number }) & { reasoning?: string[]; afterReasoning?: () => Promise<void>; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens: number } } };
 
 export function fixtureMessageText(message: FixtureMessage): string {
   return typeof message.content === 'string' ? message.content
@@ -48,6 +50,8 @@ export async function openAiFixture(reply: (request: FixtureRequest) => Promise<
     });
     const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
     send(chunk({ role: 'assistant', content: '' }));
+    for (const reasoning_content of result.reasoning ?? []) send(chunk({ reasoning_content }));
+    await result.afterReasoning?.();
     if ('text' in result) send(chunk({ content: result.text }));
     else for (const [index, call] of result.calls.entries()) {
       send(chunk({ tool_calls: [{ index, id: call.id, type: 'function', function: { name: call.name, arguments: '' } }] }));

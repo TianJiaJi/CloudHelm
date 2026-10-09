@@ -8,3 +8,5 @@ export * from './clarification.js';
 export * from './diagnostics.js';
 export * from './sudo-outcome.js';
 export * from './agent-session.js';
+export * from './command-preflight.js';
+export * from './service-observation.js';

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { ClarificationCoordinator, SafetyGate, type TerminalManager } from '@cloudhelm/application';
 import { AiRiskEvaluator, BashAnalyzer, createConversationSession } from '@cloudhelm/adapters';
-import { safeDiagnostic, type ConversationSession, type SessionStorage, type DiagnosticEvent, sudoTarget, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision } from '@cloudhelm/core';
+import { operationIntentKey, isReadOnlyQuery, safeDiagnostic, type ConversationSession, type SessionStorage, type DiagnosticEvent, sudoTarget, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision } from '@cloudhelm/core';
 import type { AppEvent, ApprovalView, OperationView, InterruptionSource, UserInterruption, ReviewMode, TaskStatus, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus } from '@cloudhelm/contracts';
 import type { LocalScope } from '@cloudhelm/contracts';
@@ -48,6 +48,8 @@ export class TaskRunner {
   private readonly operations = new Map<string, OperationView>();
   private readonly terminalByHost = new Map<string, string>();
   private readonly openingTerminals = new Map<string, Promise<string>>();
+  private readonly replayProtected = new Set<string>();
+  private stopping = false;
   private status: TaskStatus = 'draft';
 
   constructor(
@@ -64,6 +66,7 @@ export class TaskRunner {
     private readonly storage?: SessionStorage
   ) {
     this.currentGoal = task.goal;
+    for (const operation of priorOperations) this.replayProtected.add(operation.id);
     this.clarification = new ClarificationCoordinator(task.id, (request) => {
       this.signals.event({ type: 'clarification', value: request });
       if (request.status === 'pending') this.setStatus('waiting-user');
@@ -77,11 +80,15 @@ export class TaskRunner {
     this.journal = new WorkJournal(task.id, () => [...this.priorOperations, ...this.operations.values()], signals.event, this.readLog, (operation) => {
       if (this.executor.reconcile && !this.executor.reconcile(operation.hostId, operation.id)) return false;
       return true;
-    }, (operation) => this.signals.event({ type: 'operation', value: operation }));
+    }, (operation) => {
+      this.operations.set(operation.id, operation);
+      this.signals.event({ type: 'operation', value: operation });
+      this.publishExecution();
+    });
     this.localFiles = new LocalFileAccess(task.localScopes ?? []);
   }
 
-  async start(restored = false): Promise<void> {
+  async start(restored = false, thinkingLevel?: import('@cloudhelm/core').ThinkingLevel): Promise<void> {
     const version = this.controlVersion;
     if (!restored) this.setStatus('running');
     const gate = this.createGate();
@@ -102,7 +109,7 @@ export class TaskRunner {
       }, scope: (host, id, cwd) => this.scope(host, id, cwd),
       runOperation: (gate, operation, signal, label) => this.runOperation(gate, operation, signal, label) }, gate);
     this.agent = await createConversationSession({
-      profile: this.profile, storage: this.storage,
+      thinkingLevel, profile: this.profile, storage: this.storage,
       systemPrompt: agentPrompt(this.hosts, this.task.localScopes ?? [], ''),
       tools: [...remoteTools, ...this.journal.tools()],
       clarification: { ask: (id, questions, signal) => {
@@ -124,6 +131,9 @@ export class TaskRunner {
         this.signals.event({ type: 'task-status', taskId: this.task.id, status: this.status, requestCount: this.requestCount });
       },
       event: (event) => {
+        if (event.type === 'reasoning-progress') this.signals.event({ type: 'reasoning-progress', taskId: this.task.id, value: event.value });
+        if (event.type === 'thinking') this.signals.event({ type: 'thinking', taskId: this.task.id, value: event.value });
+        if (event.type === 'activity') this.publishExecution();
         if (event.type === 'text') {
           if (event.value.role === 'user') this.currentGoal = `${this.task.goal}\n用户最近补充：${event.value.text}`;
           this.signals.event({ type: 'task-message', taskId: this.task.id, ...event.value });
@@ -170,6 +180,10 @@ export class TaskRunner {
     if (!this.agent) throw new Error('Task has not started');
     if (this.agent.isStreaming && !['running', 'waiting-review'].includes(this.status)) throw new Error('AI 正在暂停，请稍后再发送消息。');
     this.controlVersion++;
+    // A fresh user message after a clean completion may intentionally request the same action again.
+    if (!this.needsRecovery && !this.remoteBlocked && !this.agent.isStreaming
+      && ['answered', 'ready-for-review', 'accepted'].includes(this.status)) this.replayProtected.clear();
+    if (['paused', 'failed', 'recovering', 'human-control'].includes(this.status)) this.needsRecovery = true;
     this.remoteBlocked = undefined;
     this.currentGoal = `${this.task.goal}\n用户最近补充：${text}`;
     this.journal.resetReport();
@@ -256,7 +270,7 @@ export class TaskRunner {
   ownsTerminal(terminalId: string): boolean { return [...this.terminalByHost.values()].includes(terminalId) || !!this.privileged?.owns(terminalId); }
 
   /** Finished conversations may leave the worker; live ones must stay. */
-  get canDelete(): boolean { return !isActiveTaskStatus(this.status); }
+  get canDelete(): boolean { return !isActiveTaskStatus(this.status) && !this.agent?.isStreaming && !this.terminal.pendingOperations(this.task.id).length; }
 
   async close(): Promise<void> {
     await this.agent?.abort();
@@ -339,6 +353,13 @@ export class TaskRunner {
         if (target) operation.scope.runAs = target.runAs;
       }
     }
+    const analysis = operation.kind === 'command' ? await this.analyzer.analyze(operation.command).catch(() => undefined) : undefined;
+    if (!analysis || !isReadOnlyQuery(analysis)) {
+      const key = operationIntentKey(operation);
+      const previous = [...this.priorOperations, ...this.operations.values()].find((item) => item.intentKey === key
+        && (['running', 'proposed', 'approved', 'unknown'].includes(item.status) || (item.status === 'succeeded' && this.replayProtected.has(item.id))));
+      if (previous) return { content: [{ type: 'text' as const, text: `Not executed: operation ${previous.id} already records this action (${previous.status}). Read its log and inspect the actual result; do not replay it. A new operation ID does not make a retry safe.` }], details: undefined, isError: true };
+    }
     const outcome = await gate.execute(operation, signal);
     if (!outcome.result) return { content: [{ type: 'text' as const, text: `Operation ID: ${operation.id}\nNot executed. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}` }],
       details: undefined, isError: true };
@@ -351,6 +372,8 @@ export class TaskRunner {
       this.blockRemote('远端操作结果未知，已暂停。请先核验，避免重复执行。');
     } else if (!this.terminal.isAgentOwner(operation.scope.terminalId)) {
       this.blockRemote('远端终端已暂停或被接管，请核验后手动继续。');
+    } else if (result.status === 'failed' && result.effects === 'possible' && (!analysis || !isReadOnlyQuery(analysis))) {
+      this.blockRemote('操作失败且可能已产生部分变更。已暂停，请先核验原结果，再决定后续操作。');
     } else if (result.status === 'failed') {
       const key = `${operation.scope.hostId}:${this.preview(operation)}:${result.exitCode ?? 'unknown'}`;
       this.sameFailureCount = key === this.lastFailureKey ? this.sameFailureCount + 1 : 1;
@@ -365,7 +388,7 @@ export class TaskRunner {
     }
     return {
       content: [{ type: 'text' as const, text: operationFeedback(result, hostLabel) }],
-      details: undefined, isError: result.status !== 'succeeded'
+      result, details: undefined, isError: result.status !== 'succeeded'
     };
   }
 
@@ -418,6 +441,7 @@ export class TaskRunner {
         operation.outputTail = redactOutput(result.stdoutTail);
         if (operation.kind !== 'command' && result.stdoutTail) operation.reason = redactOutput(result.stdoutTail).slice(-2000);
         this.signals.event({ type: 'operation', value: operation });
+        this.publishExecution();
       }
     };
     return new SafetyGate({
@@ -447,10 +471,12 @@ export class TaskRunner {
 
   private updateOperation(operation: ProposedOperation, status: OperationView['status']): void {
     const view: OperationView = {
-      id: operation.id, taskId: this.task.id, hostId: operation.scope.hostId, kind: operation.kind,
+      serviceUnit: operation.kind === 'command' ? operation.serviceUnit : undefined,
+      intentKey: operationIntentKey(operation), id: operation.id, taskId: this.task.id, hostId: operation.scope.hostId, kind: operation.kind,
       preview: this.preview(operation), status, runAs: operation.scope.runAs, loginAs: operation.scope.loginAs, logRef: operation.scope.terminalId,
       model: { provider: this.profile.provider, modelId: this.profile.modelId }, createdAt: Date.now()
     };
+    this.replayProtected.add(operation.id);
     this.operations.set(operation.id, view);
     this.signals.event({ type: 'operation', value: view });
   }
@@ -473,10 +499,16 @@ export class TaskRunner {
     operation.outputTail = redactOutput(result.stdoutTail);
     operation.logRef = result.logRef;
     this.signals.event({ type: 'operation', value: operation });
+    this.publishExecution();
     if (!this.isRunning() && operation.logRef) this.terminal.releaseIdle(operation.logRef);
   }
 
   setReviewKey(jevKey?: string): void { this.profile = { ...this.profile, jevKey }; this.agent?.setReviewKey(jevKey); }
+
+  setThinking(level: import('@cloudhelm/core').ThinkingLevel): void {
+    if (!this.agent) throw new Error('会话尚未就绪');
+    this.agent.setThinking(level);
+  }
 
   setModel(profile: RuntimeProfile): void {
     if (!this.agent) throw new Error('会话尚未就绪');
@@ -496,9 +528,12 @@ export class TaskRunner {
   }
 
   stopOperation(source: InterruptionSource = 'stop-button'): void {
+    if (this.stopping) return;
     const pending = this.terminal.pendingOperations(this.task.id);
     const operationIds = [...new Set([...pending, ...[...this.operations.values()].filter((op) => ['running', 'proposed', 'approved'].includes(op.status)).map((op) => op.id)])];
-    if (!this.isRunning() && !operationIds.some((id) => !this.operations.get(id)?.interruption)) return;
+    if (!this.isRunning() && !pending.length && !operationIds.some((id) => !this.operations.get(id)?.interruption)) return;
+    this.stopping = true;
+    this.publishExecution();
     const interruption: UserInterruption = { source, requestedAt: Date.now(), operationIds };
     this.pendingInterruption = interruption;
     const text = source === 'terminal-close'
@@ -514,6 +549,7 @@ export class TaskRunner {
     // Pausing the model invalidates queued writes; it does not prove remote termination.
     this.agent?.abort();
     try { if (source !== 'terminal-close') this.terminal.stopTaskCommands(this.task.id); }
+    catch (error) { this.stopping = false; throw error; }
     finally { this.pause(); this.setStatus('paused', text); }
   }
 
@@ -534,8 +570,20 @@ export class TaskRunner {
     else this.setStatus('paused', '已执行操作，但验证证据尚不完整。请继续核验后验收。');
   }
 
+  private publishExecution(): void {
+    const model = this.agent?.isStreaming || this.isRunning() ? 'running' : 'idle';
+    const pending = this.terminal.pendingOperations(this.task.id).length > 0;
+    const merged = new Map([...this.priorOperations, ...this.operations.values()].map((op) => [op.id, op]));
+    const remote = pending ? 'running' : [...merged.values()].some((op) => op.status === 'unknown') ? 'unknown' : 'idle';
+    if (model === 'idle' && !pending) this.stopping = false;
+    this.signals.event({ type: 'execution', taskId: this.task.id, value: {
+      model, remote, stopping: this.stopping, canStop: model === 'running' || pending
+    } });
+  }
+
   private setStatus(status: TaskStatus, summary?: string): void {
     this.status = status;
+    this.publishExecution();
     if (!this.isRunning()) { this.signals.clearCredentials?.(); this.privileged?.close(); }
     if (!this.isRunning()) for (const id of this.terminalByHost.values()) this.terminal.releaseIdle(id);
     this.signals.event({ type: 'task-status', taskId: this.task.id, status, summary, requestCount: this.requestCount });

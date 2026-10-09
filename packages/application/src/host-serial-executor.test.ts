@@ -79,3 +79,28 @@ describe('cross-task host write isolation', () => {
     expect((await serial.execute({ ...operation, id: 'later' }, 'fingerprint')).status).toBe('succeeded');
   });
 });
+
+it('blocks writes after partial failure while allowing verification, then releases only through reconciliation', async () => {
+  const downstream = { execute: vi.fn().mockResolvedValueOnce({ operationId: 'one', status: 'failed', effects: 'possible', stdoutTail: 'partial write' })
+    .mockResolvedValue({ operationId: 'check', status: 'succeeded', stdoutTail: '' }) };
+  const serial = new HostSerialExecutor(downstream);
+  await serial.execute(operation, 'fingerprint');
+  expect(await serial.execute({ ...operation, id: 'retry' }, 'fingerprint')).toMatchObject({ status: 'failed', effects: 'none' });
+  await serial.execute({ ...operation, id: 'check' }, 'fingerprint', undefined, { readOnly: true });
+  expect(downstream.execute).toHaveBeenCalledTimes(2);
+  expect(serial.reconcile('host', 'one')).toBe(true);
+  await serial.execute({ ...operation, id: 'new-action' }, 'fingerprint');
+  expect(downstream.execute).toHaveBeenCalledTimes(3);
+});
+
+it('retains a write lock when a stopped process later exits with partial effects', async () => {
+  let finish!: (value: 'exited' | 'unknown') => void;
+  const remoteCompletion = new Promise<'exited' | 'unknown'>((resolve) => { finish = resolve; });
+  const serial = new HostSerialExecutor({ execute: vi.fn().mockResolvedValue({ operationId: 'one', status: 'unknown', stdoutTail: '', remoteCompletion }) });
+  await serial.execute(operation, 'fingerprint');
+  finish('exited');
+  serial.observe('host', { operationId: 'one', status: 'failed', effects: 'possible', exitCode: 130, stdoutTail: '' });
+  await remoteCompletion;
+  expect(await serial.execute({ ...operation, id: 'retry' }, 'fingerprint')).toMatchObject({ status: 'failed', effects: 'none' });
+  expect(serial.reconcile('host', 'one')).toBe(true);
+});

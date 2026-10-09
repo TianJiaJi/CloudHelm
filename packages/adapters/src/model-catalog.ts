@@ -1,4 +1,6 @@
 import { createProvider, envApiKeyAuth, type Model, type MutableModels } from '@earendil-works/pi-ai';
+import { getSupportedThinkingLevels, clampThinkingLevel } from '@earendil-works/pi-ai/compat';
+import type { ThinkingLevel } from '@cloudhelm/core';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 
@@ -44,6 +46,12 @@ export function createModelCatalog(selection: ModelSelection): MutableModels {
   models.setProvider(createProvider({ id: 'cloudhelm-custom', name: 'Custom OpenAI compatible',
     baseUrl: model.baseUrl, auth: { apiKey: envApiKeyAuth('Custom API Key', []) }, models: [model], api: openAICompletionsApi() }));
   return models;
+}
+
+export function modelThinking(selection: ModelSelection, preferred: ThinkingLevel = 'off') {
+  const model = createModelCatalog(selection).getModel(selection.provider, selection.modelId);
+  if (!model) throw new Error('所选模型不可用');
+  return { levels: model.reasoning ? getSupportedThinkingLevels(model) : [], selected: clampThinkingLevel(model, preferred) };
 }
 
 export function validModelUrl(value: string): string {

@@ -3,10 +3,10 @@ import type { OperationView } from '@cloudhelm/contracts';
 /** Never inject large command previews or output into recovery instructions. */
 export function recoveryContextMessage(operations: OperationView[]): string {
   const needsVerification = (operation: OperationView) => ['unknown', 'running', 'proposed', 'approved'].includes(operation.status)
-    || (operation.status === 'failed' && operation.effects !== 'none');
+    || (operation.status === 'failed' && operation.effects !== 'none' && !operation.reconciledAt);
   const selected = new Map([...operations.filter(needsVerification),
     ...operations.slice(-12)].map((operation) => [operation.id, operation]));
-  const references = [...selected.values()].map(({ id, hostId, kind, status, exitCode, authentication, failureKind, effects }) => ({ id, hostId, kind, status, exitCode, authentication, failureKind, effects }));
+  const references = [...selected.values()].map(({ id, hostId, kind, status, exitCode, authentication, failureKind, effects, serviceUnit }) => ({ id, hostId, kind, status, exitCode, authentication, failureKind, effects, serviceUnit }));
   const unresolved = operations.some(needsVerification);
   const guidance = unresolved
     ? 'first verify actual remote state for unresolved operations. A previous operation may have continued after interruption; never replay unknown outcomes.'

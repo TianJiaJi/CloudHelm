@@ -26,7 +26,7 @@ const api: DesktopAPI = {
   snapshot: async () => structuredClone(view),
   onEvent: (listener) => { listeners.push(listener); return () => { listeners = listeners.filter((item) => item !== listener); }; },
   availableModels: async () => [
-    { provider: 'openai', modelId: 'gpt-5.4', name: 'GPT-5.4' },
+    { provider: 'openai', modelId: 'gpt-5.4', name: 'GPT-5.4', thinkingLevels: ['off', 'low', 'medium', 'high', 'xhigh'] },
     { provider: 'anthropic', modelId: 'claude-sonnet', name: 'Claude Sonnet' },
     { provider: 'cloudhelm-custom', modelId: 'long-model', name: 'Custom reasoning model with an exceptionally long display name' }
   ],
@@ -64,7 +64,7 @@ const api: DesktopAPI = {
     const conversation = { id: `chat${++sequence}`, goal: input.message, hostIds: input.hostId ? [input.hostId] : [], localScopes: [],
       status: 'running' as const, provider: input.model!.provider, modelId: input.model!.modelId,
       requestCount: 1, requestLimit: 100, createdAt: Date.now(), updatedAt: Date.now() };
-    Object.assign(conversation, { session: { version: 1, id: conversation.id } });
+    Object.assign(conversation, { thinking: { levels: ['off', 'low', 'medium', 'high', 'xhigh'], selected: input.thinkingLevel ?? 'off', effective: input.thinkingLevel ?? 'off', pending: false }, session: { version: 1, id: conversation.id } });
     view.conversations.push(conversation);
     view.messages.push({ taskId: conversation.id, role: 'user', text: input.message, createdAt: Date.now() });
     sync(); return conversation;
@@ -72,7 +72,12 @@ const api: DesktopAPI = {
   sendMessage: async (id, message, tokens) => {
     calls.push({ kind: 'send', id, message, tokens }); view.messages.push({ taskId: id, role: 'user', text: message, createdAt: Date.now() }); sync();
   },
-  setConversationModel: async (id, model) => { calls.push({ kind: 'model', id, model }); Object.assign(view.conversations.find((item) => item.id === id)!, model); if (view.contextUsage) delete view.contextUsage[id]; sync(); },
+  setConversationThinking: async (id, level) => {
+    const task = view.conversations.find((item) => item.id === id)!;
+    task.thinking = { levels: task.thinking!.levels, selected: level, effective: task.thinking!.effective, pending: true };
+    calls.push({ kind: 'thinking', id, level }); sync();
+  },
+  setConversationModel: async (id, model) => { calls.push({ kind: 'model', id, model }); Object.assign(view.conversations.find((item) => item.id === id)!, model, { thinking: { levels: model.provider === 'cloudhelm-custom' ? [] : ['off', 'low', 'medium', 'high'], selected: 'off', effective: 'off', pending: false } }); if (view.contextUsage) delete view.contextUsage[id]; sync(); },
   readTerminalLog: async () => 'ubuntu@prod:~$ docker ps\nCONTAINER ID   IMAGE\nabc123        service:latest',
   selectLocalPath: async (kind) => ({ token: `local-${kind}`, scope: { path: '/Users/demo/service', kind } }),
   selectPrivateKey: async () => { calls.push({ kind: 'select-private-key' }); return '/Users/demo/.ssh/server key'; },
@@ -120,6 +125,10 @@ window.cloudhelm = api;
 const fixture = {
   calls,
   inject(event: AppEvent): void {
+    if (event.type === 'execution') {
+      if (event.value.model === 'idle') view.conversations.find((task) => task.id === event.taskId)!.status = 'paused';
+      view.execution = { ...view.execution, [event.taskId]: event.value }; sync(); return; }
+    if (event.type === 'thinking') { view.conversations.find((task) => task.id === event.taskId)!.thinking = event.value; sync(); return; }
     if (event.type === 'terminal-state') view.terminals.push({ id: event.terminalId, hostId: event.hostId, taskId: event.taskId, state: event.state });
     if (event.type === 'context-compaction') { view.contextCompaction = { ...view.contextCompaction, [event.taskId]: event.status }; sync(); return; }
     if (event.type === 'context-usage') { view.contextUsage = { ...view.contextUsage, [event.taskId]: event.value }; sync(); return; }

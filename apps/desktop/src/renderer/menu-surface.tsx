@@ -12,8 +12,10 @@ const MARGIN = 8;
  * layer escapes sidebar scrolling and clipping; positioning stays in the
  * viewport so menus opened near an edge remain fully readable.
  */
-export function MenuSurface({ anchor, label, children, close, restoreFocus, className, placement, searchFocus, align }: {
+export function MenuSurface({ anchor, positionAnchor, label, children, close, restoreFocus, className, placement, searchFocus, align }: {
   anchor: MenuAnchor; label: string; children: ReactNode; close(): void; restoreFocus?: HTMLElement | null;
+  /** Optional positioning bounds; anchor remains the trigger used for focus restoration. */
+  positionAnchor?: HTMLElement | null;
   className?: string; placement?: 'above'; searchFocus?: boolean; align?: 'start';
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
@@ -34,7 +36,7 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus, clas
     }
     function position(): void {
       if (element) {
-        const bounds = element.getBoundingClientRect();
+        const bounds = (positionAnchor ?? element).getBoundingClientRect();
         const below = bounds.bottom + 5;
         menu.style.left = `${clamp(align === 'start' ? bounds.left : bounds.right - menu.offsetWidth, menu.offsetWidth)}px`;
         menu.style.top = `${clampTop(placement !== 'above' && below + menu.offsetHeight <= window.innerHeight - MARGIN ? below : bounds.top - menu.offsetHeight - 5, menu.offsetHeight)}px`;
@@ -61,6 +63,7 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus, clas
     menu.querySelector<HTMLElement>(searchFocus ? 'input[type="search"]' : '[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
     const observer = new ResizeObserver(position);
     observer.observe(menu);
+    if (element) observer.observe(positionAnchor ?? element);
     window.addEventListener('resize', position);
     window.addEventListener('scroll', dismissOnScroll, true);
     if (pointer) window.addEventListener('pointerdown', dismissOnPointerDown, true);
@@ -75,7 +78,7 @@ export function MenuSurface({ anchor, label, children, close, restoreFocus, clas
       const active = document.activeElement;
       if (!active || active === document.body || menu.contains(active)) focusTarget?.focus({ preventScroll: true });
     };
-  }, [anchorKey, element, restoreFocus, placement, searchFocus, align]);
+  }, [anchorKey, element, positionAnchor, restoreFocus, placement, searchFocus, align]);
 
   // macOS fires contextmenu before pointerup. Auto popovers would dismiss on
   // that same opening gesture; pointer menus dismiss on the next pointerdown.

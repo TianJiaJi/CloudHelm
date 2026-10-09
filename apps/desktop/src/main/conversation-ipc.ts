@@ -1,3 +1,4 @@
+import { modelThinking } from '@cloudhelm/adapters';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ipcMain } from 'electron';
@@ -48,6 +49,7 @@ export function registerConversationIpc({ sessionRoot, state, runtime, connectHo
     if (!input || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 100_000
       || (input.hostId !== null && (typeof input.hostId !== 'string' || !input.hostId.trim()))) throw new Error('请输入有效内容并选择主机');
     const profile = state.runtimeProfile(input.model);
+    if (input.thinkingLevel !== undefined && !modelThinking(profile).levels.includes(input.thinkingLevel)) throw new Error('当前模型不支持此思考档位');
     if (input.hostId && state.getHost(input.hostId).status !== 'connected') await connectHost(input.hostId);
     const scopes = takeSelections(input.localSelectionTokens);
     let persisted = false;
@@ -55,7 +57,7 @@ export function registerConversationIpc({ sessionRoot, state, runtime, connectHo
       const task = state.createTask(input.message, input.hostId ? [input.hostId] : [], profile.modelId, scopes);
       persisted = true;
       state.setTaskModel(task.id, profile);
-      await runtime.call({ method: 'start-task', task, sessionDirectory: sessionDirectory(task), hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
+      await runtime.call({ method: 'start-task', task, thinkingLevel: input.thinkingLevel, sessionDirectory: sessionDirectory(task), hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
       return task;
     } catch (error) {
       if (!persisted) restoreSelections(input.localSelectionTokens, scopes);
@@ -78,13 +80,19 @@ export function registerConversationIpc({ sessionRoot, state, runtime, connectHo
     } catch (error) { restoreSelections(tokens, scopes); throw error; }
   });
 
+  ipcMain.handle('cloudhelm:set-conversation-thinking', async (_event, id: string, level: import('@cloudhelm/contracts').ThinkingLevel) => {
+    await ensureRuntime(state.getTask(id));
+    await runtime.call({ method: 'set-conversation-thinking', taskId: id, level });
+  });
+
   ipcMain.handle('cloudhelm:set-conversation-model', async (_event, id: string, choice: ModelChoice) => {
     sessionDirectory(state.getTask(id));
     const profile = state.runtimeProfile(choice);
-    if (await runtime.call<boolean>({ method: 'has-task', taskId: id })) {
+    const live = await runtime.call<boolean>({ method: 'has-task', taskId: id });
+    if (live) {
       await runtime.call({ method: 'set-conversation-model', taskId: id, profile });
     }
-    state.setTaskModel(id, profile);
+    state.setTaskModel(id, profile, live);
   });
   ipcMain.handle('cloudhelm:resume-task', async (_event, id: string) => {
     await ensureRuntime(state.getTask(id));

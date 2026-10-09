@@ -2,6 +2,31 @@
 import assert from 'node:assert/strict';
 
 export async function checkComposer(page, screenshot) {
+  const attachment = page.getByRole('button', { name: '添加本地资料', exact: true });
+  const attachments = page.getByRole('menu', { name: '添加本地资料', exact: true });
+  const composerForm = page.locator('form').filter({ has: attachment });
+  const composerBounds = await composerForm.boundingBox();
+  const attachmentBounds = await attachment.boundingBox();
+  await attachment.click();
+  await attachments.waitFor();
+  assert.deepEqual(await composerForm.boundingBox(), composerBounds, 'attachment menu does not resize or move the composer');
+  assert.deepEqual(await attachment.boundingBox(), attachmentBounds, 'attachment trigger stays in place');
+  assert.equal(await attachments.evaluate((element) => element.matches(':popover-open')), true, 'attachment menu uses the top layer');
+  const attachmentPopup = await attachments.boundingBox();
+  assert.ok(attachmentPopup.y + attachmentPopup.height <= composerBounds.y - 4, 'attachment menu floats above the entire composer');
+  assert.ok(Math.abs(attachmentPopup.x - composerBounds.x) < 1, 'attachment menu aligns with the composer left edge');
+  await screenshot('composer-attachments.png');
+  await page.keyboard.press('Escape');
+  await attachments.waitFor({ state: 'hidden' });
+  assert.equal(await attachment.evaluate((element) => document.activeElement === element), true, 'Escape restores attachment trigger focus');
+  await attachment.click();
+  const message = page.getByRole('textbox', { name: '给 AI 的消息' });
+  await message.click({ position: { x: (await message.boundingBox()).width - 5, y: 5 } });
+  await attachments.waitFor({ state: 'hidden' });
+  await attachment.click();
+  await attachment.click();
+  await attachments.waitFor({ state: 'hidden' });
+
   const trigger = page.getByRole('button', { name: /^对话模型/u });
   const menu = page.getByRole('menu', { name: '对话模型', exact: true });
   await trigger.click();

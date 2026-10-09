@@ -340,3 +340,31 @@ it('rebuilds native message projections idempotently and clears compaction statu
   rebuilt.record(message);
   expect(rebuilt.snapshot().messages).toHaveLength(1);
 });
+
+it('preserves execution state across model selection and projects uncertainty after restart', () => {
+  const { state, store } = setup(); state.saveProfile(customProfile());
+  const task = conversation(state);
+  state.record({ type: 'execution', taskId: task.id, value: { model: 'idle', remote: 'running', stopping: true, canStop: true } });
+  state.setTaskModel(task.id, state.runtimeProfile());
+  expect(state.snapshot().execution?.[task.id]).toMatchObject({ remote: 'running', stopping: true });
+  state.record({ type: 'operation', value: { id: 'unfinished', taskId: task.id, hostId: 'host', kind: 'command', preview: 'sleep 10', status: 'running', createdAt: 1 } });
+  expect(setup(store).state.snapshot().execution?.[task.id]).toEqual({ model: 'idle', remote: 'unknown', stopping: false, canStop: false });
+  state.runtimeStopped();
+  expect(state.snapshot().execution?.[task.id]).toEqual({ model: 'idle', remote: 'unknown', stopping: false, canStop: false });
+});
+
+it('projects live reasoning without database writes, enriches existing native messages once, and restores completed content', () => {
+  const { state, store } = setup(); state.saveProfile(customProfile()); const task = conversation(state);
+  const reasoning = { text: '接口提供的摘要', kind: 'summary' as const, status: 'complete' as const };
+  state.record({ type: 'reasoning-progress', taskId: task.id, value: { id: 'stream', createdAt: 1,
+    model: { provider: task.provider!, modelId: task.modelId }, reasoning: { ...reasoning, status: 'streaming' } } });
+  expect(store.list('messages')).toHaveLength(0);
+  state.runtimeStopped();
+  expect(state.snapshot().reasoningProgress?.[task.id]?.reasoning.status).toBe('interrupted');
+  const original = { type: 'task-message' as const, taskId: task.id, entryId: 'entry', role: 'agent' as const, text: '答案', createdAt: 1 };
+  state.record(original); state.record({ ...original, reasoning }); state.record({ ...original, reasoning });
+  expect(state.snapshot().reasoningProgress).toEqual({});
+  expect(state.snapshot().messages).toHaveLength(1);
+  expect(setup(store).state.snapshot().messages[0]?.reasoning).toEqual(reasoning);
+  expect(setup(store).state.snapshot().reasoningProgress).toEqual({});
+});

@@ -33,7 +33,11 @@ export class WorkerServer {
   constructor(private readonly send: (message: RuntimeMessage) => void) {
     this.terminal = new TerminalManager({
       data: (terminalId, data, operationId) => this.post({ event: { type: 'terminal-data', terminalId, data, operationId } }),
-      completed: (result) => { for (const runner of this.tasks.values()) runner.recordRemoteResult(result); },
+      completed: (result) => {
+        const hostId = result.logRef ? this.terminal.hostOf(result.logRef) : undefined;
+        if (hostId) this.executor?.observe(hostId, result);
+        for (const runner of this.tasks.values()) runner.recordRemoteResult(result);
+      },
       state: (terminalId, state) => {
         if (state !== 'agent') { this.interactions?.cancelForTerminal(terminalId); this.commands?.clearTerminal(terminalId); }
         this.post({ event: { type: 'terminal-state', terminalId,
@@ -73,6 +77,11 @@ export class WorkerServer {
         for (const runner of this.tasks.values()) runner.setReviewKey(call.jevKey);
         return;
       case 'test-model': return testModelConnection(call.profile);
+      case 'set-conversation-thinking': {
+        const runner = this.tasks.get(call.taskId);
+        if (!runner) throw new Error('对话尚未恢复');
+        runner.setThinking(call.level); return;
+      }
       case 'set-conversation-model': {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('对话尚未恢复');
@@ -130,7 +139,7 @@ export class WorkerServer {
           }, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor), this.privileged.forTask(call.task.id),
           { id: call.task.session.id, directory: call.sessionDirectory, restore: !!call.restored });
         this.tasks.set(call.task.id, runner);
-        const start = runner.start(call.restored);
+        const start = runner.start(call.restored, call.thinkingLevel);
         if (call.restored) {
           try { await start; } catch (error) { this.tasks.delete(call.task.id); runner.dispose(); throw error; }
         }

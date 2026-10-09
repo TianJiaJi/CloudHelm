@@ -22,8 +22,17 @@
 .footer button { font-size: 11px; color: var(--muted); padding: 5px 3px; gap: 5px; min-width: 0; }
 .permissionTrigger > span, .contextTrigger > span { white-space: nowrap; }
 .footer button:disabled { opacity: .65; }
+.permissive { --permissionOrange: #f5a14b; }
+.picker button.permissive, .picker button.permissive > svg, .footer button.permissive { color: var(--permissionOrange) !important; }
+@media (prefers-color-scheme: light) {
+  .permissive { --permissionOrange: #b85c00; }
+}
 .ring { flex: none; }
 .contextDetails { padding: 10px; }
 .contextDetails p { font-size: 12px; line-height: 1.8; white-space: pre-line; margin: 10px 0; }
 .contextDetails small { display: block; margin-top: 8px; overflow-wrap: anywhere; }
 .pending { font-size: 10px; color: var(--muted); margin: 3px 3px 0; overflow-wrap: anywhere; }
+
+.thinkingTrigger { display: flex; align-items: center; gap: 3px; flex-shrink: 0; padding: 5px 4px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 11px; }
+.thinkingTrigger:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.thinkingTrigger > svg { transform: rotate(90deg); }

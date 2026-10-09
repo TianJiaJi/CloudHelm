@@ -1,3 +1,5 @@
+import { ReasoningContent } from './reasoning-content.js';
+import { ThinkingPicker } from './thinking-picker.js';
 import { useEffect, useRef, useState } from 'react';
 import type { AppSnapshot, HostView, LocalScope, ModelChoice, TaskView } from '@cloudhelm/contracts';
 import { useUi } from './store.js';
@@ -10,10 +12,11 @@ import { conversationTimeline } from './conversation-timeline.js';
 import { capture, Icon, reviewLabel, statusLabel } from './ui-helpers.js';
 import { copyEntries, copyText } from './clipboard.js';
 import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
-import { ComposerFooter, ModelPicker } from './composer-controls.js';
+import { ComposerFooter, ModelPicker, useMenuAnchor } from './composer-controls.js';
+import { MenuItem, MenuSurface } from './menu-surface.js';
 import styles from './ui.module.css';
 
-type ModelOption = ModelChoice & { name: string };
+type ModelOption = ModelChoice & { name: string; thinkingLevels?: import('@cloudhelm/contracts').ThinkingLevel[] };
 type LocalAttachment = { token: string; scope: LocalScope };
 const composerDrafts = new Map<string, { text: string; attachments: LocalAttachment[] }>();
 const consumedQuotes = new Set<number>();
@@ -24,6 +27,7 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
   report(error: string): void; openInput(id: string): void; hiddenInputs: string[];
 }): React.JSX.Element {
   const [models, setModels] = useState<ModelOption[]>([]);
+  const reasoning = conversation ? snapshot.reasoningProgress?.[conversation.id] : undefined;
   const scroll = useRef<HTMLDivElement>(null);
   const messages = snapshot.messages.filter((message) => message.taskId === conversation?.id);
   const operations = snapshot.operations.filter((operation) => operation.taskId === conversation?.id);
@@ -39,7 +43,7 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
   const hasRunningOperation = operations.some((operation) => operation.status === 'running'
     || (operation.status === 'unknown' && snapshot.terminals.some((terminal) => terminal.id === operation.logRef)));
   useEffect(() => { void window.cloudhelm.availableModels().then(setModels).catch((error: unknown) => report(String(error))); }, [snapshot.profile.provider, snapshot.profile.modelId, snapshot.profile.hasKey, report]);
-  useEffect(() => { scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' }); }, [conversation?.id, messages.length, operations.length, clarifications.length]);
+  useEffect(() => { scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' }); }, [conversation?.id, messages.length, operations.length, clarifications.length, reasoning?.id]);
   const hostName = (id: string): string => snapshot.hosts.find((item) => item.id === id)?.label ?? id;
   return <>
     <header className={styles.agentHead}><span><Icon name="chat" />AI 助手</span><div><button title="新对话" aria-label="新对话" onClick={() => useUi.getState().newConversation(host?.id ?? null)}><Icon name="plus" /></button>
@@ -49,8 +53,7 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
       <small>{host ? <><Icon name="shield" size={12} />{reviewLabel[host.defaultMode]}</> : '未授权远端操作'}</small></div>
     {conversation && <div className={styles.agentActions}>
       <span className={styles.status}>{statusLabel[conversation.status]}</span>
-      {(running || hasRunningOperation) && <button title="停止本轮 AI，并请求终止正在运行的命令" onClick={() => void capture(() => window.cloudhelm.stopOperation(conversation.id), report)}><Icon name="stop" size={13} />停止</button>}
-      {conversation.session && !running && ['paused', 'failed', 'human-control'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
+      {conversation.session && !running && ['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
     </div>}
     <div className={styles.agentScroll} ref={scroll}>
       {!conversation && <div className={styles.agentWelcome}><span className={styles.welcomeIcon}><Icon name="chat" size={25} /></span><h2>{host ? '这台服务器，需要做些什么？' : '有什么想聊的？'}</h2>
@@ -67,10 +70,11 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
         if (message.role === 'user') return <UserMessage key={`${message.taskId}:${entry.key}`} message={message} canEdit={!!conversation?.session && conversation.hostIds.length <= 1} report={report} />;
         return <article key={entry.key} className={styles.message}
           onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
-          <strong>{message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <MarkdownMessage text={message.text} /> : <p>{message.text}</p>}
+          <strong>{message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <><ReasoningContent value={message.reasoning} />{message.text && <MarkdownMessage text={message.text} />}</> : <p>{message.text}</p>}
           {message.model && <small>{message.model.provider} · {message.model.modelId}</small>}
         </article>;
       })}
+      {reasoning && <article className={styles.message} key={reasoning.id}><strong>CloudHelm</strong><ReasoningContent value={reasoning.reasoning} /></article>}
       {running && !hasRunningOperation && timeline.at(-1)?.kind === 'operation' && <p className={styles.note} role="status">AI 正在处理执行结果…</p>}
       {approvals.map((approval) => <ApprovalCard key={approval.id} approval={approval} host={hostName(approval.hostId)} report={report} />)}
       {inputs.filter((input) => input.kind !== 'secret' && input.kind !== 'otp').map((input) => <InputCard key={input.id} input={input} host={hostName(input.hostId)} report={report} />)}
@@ -78,20 +82,34 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
       {terminal && <button className={styles.agentTerminalLink} onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 专用终端<Icon name="chevron" size={12} /></button>}
       {conversation && ['ready-for-review', 'accepted', 'failed'].includes(conversation.status) && <VerificationCard conversation={conversation} report={report} />}
     </div>
-    <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} hostId={host?.id ?? null} conversation={conversation} host={host} compaction={conversation ? snapshot.contextCompaction?.[conversation.id] : undefined} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} quote={quote} report={report} />
+    <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} execution={conversation ? snapshot.execution?.[conversation.id] : undefined} hostId={host?.id ?? null} conversation={conversation} host={host} compaction={conversation ? snapshot.contextCompaction?.[conversation.id] : undefined} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} quote={quote} report={report} />
   </>;
 }
 
-function Composer({ hostId, host, usage, compaction, conversation, profile, models, quote, report }: {
-  hostId: string | null; host?: HostView; compaction?: 'running' | 'complete' | 'failed'; usage?: import('@cloudhelm/contracts').ContextUsageView; conversation?: TaskView; profile: AppSnapshot['profile']; models: ModelOption[]; quote: QuotedOutput | null; report(error: string): void;
+function Composer({ execution, hostId, host, usage, compaction, conversation, profile, models, quote, report }: {
+  execution?: import('@cloudhelm/contracts').ExecutionView; hostId: string | null; host?: HostView; compaction?: 'running' | 'complete' | 'failed'; usage?: import('@cloudhelm/contracts').ContextUsageView; conversation?: TaskView; profile: AppSnapshot['profile']; models: ModelOption[]; quote: QuotedOutput | null; report(error: string): void;
 }): React.JSX.Element {
   const draftKey = conversation?.id ?? `draft:${hostId ?? 'chat'}`;
   const [text, setText] = useState(() => composerDrafts.get(draftKey)?.text ?? '');
   const [attachments, setAttachments] = useState<LocalAttachment[]>(() => composerDrafts.get(draftKey)?.attachments ?? []);
-  const [attachmentMenu, setAttachmentMenu] = useState(false);
+  const attachmentMenu = useMenuAnchor();
+  const [stopPending, setStopPending] = useState(false);
+  const stopLock = useRef(false);
+  const canStop = execution?.canStop ?? (!!conversation && ['running', 'waiting-review', 'waiting-user'].includes(conversation.status));
+  const stopping = stopPending || execution?.stopping;
+  async function stop(): Promise<void> {
+    if (!conversation || stopLock.current || stopping) return;
+    stopLock.current = true; setStopPending(true);
+    try { await capture(() => window.cloudhelm.stopOperation(conversation.id), report); }
+    finally { stopLock.current = false; setStopPending(false); }
+  }
   const [busy, setBusy] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [model, setModel] = useState<ModelChoice>({ provider: conversation?.provider ?? profile.provider, modelId: conversation?.modelId ?? profile.modelId });
+  const [draftThinking, setDraftThinking] = useState<import('@cloudhelm/contracts').ThinkingLevel>();
+  const levels = models.find((item) => item.provider === model.provider && item.modelId === model.modelId)?.thinkingLevels ?? [];
+  const draftLevel = draftThinking && levels.includes(draftThinking) ? draftThinking : levels[0] ?? 'off';
+  const thinking = conversation?.thinking ?? (!conversation ? { levels, selected: draftLevel, effective: draftLevel, pending: false } : undefined);
   const currentRequest = useUi((state) => conversation ? state.currentRequests[conversation.id] : undefined);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const waiting = conversation?.status === 'waiting-user';
@@ -107,7 +125,7 @@ function Composer({ hostId, host, usage, compaction, conversation, profile, mode
   useEffect(() => { composerDrafts.set(draftKey, { text, attachments }); }, [draftKey, text, attachments]);
   useEffect(() => { if (!conversation) setModel({ provider: profile.provider, modelId: profile.modelId }); }, [conversation, profile.provider, profile.modelId]);
   async function attach(kind: LocalScope['kind']): Promise<void> {
-    setAttachmentMenu(false);
+    attachmentMenu.close();
     await capture(async () => { const selected = await window.cloudhelm.selectLocalPath(kind); if (selected) setAttachments((items) => [...items, selected]); }, report);
   }
   async function chooseModel(value: string): Promise<void> {
@@ -122,12 +140,12 @@ function Composer({ hostId, host, usage, compaction, conversation, profile, mode
   }
   async function send(): Promise<void> {
     const message = text.trim();
-    if (!message || busy || switching || legacy || waiting) return;
+    if (!message || busy || switching || legacy || waiting || stopping) return;
     setBusy(true);
     await capture(async () => {
       if (conversation) await window.cloudhelm.sendMessage(conversation.id, message, attachments.map((item) => item.token));
       else {
-        const started = await window.cloudhelm.startConversation({ hostId, message, model, localSelectionTokens: attachments.map((item) => item.token) });
+        const started = await window.cloudhelm.startConversation({ hostId, message, model, thinkingLevel: levels.length ? draftLevel : undefined, localSelectionTokens: attachments.map((item) => item.token) });
         const snapshot = await window.cloudhelm.snapshot();
         composerDrafts.delete(draftKey);
         useUi.getState().setSnapshot(snapshot); useUi.getState().selectConversation(started.id);
@@ -154,14 +172,24 @@ function Composer({ hostId, host, usage, compaction, conversation, profile, mode
         onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 180)}px`; }}
         onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
       <div className={styles.composerTools}><div className={styles.attachControl}>
-        <button type="button" aria-label="添加本地资料" title="添加本地资料" disabled={legacy || waiting} onClick={() => setAttachmentMenu(!attachmentMenu)}><Icon name="plus" size={18} /></button>
-        {attachmentMenu && <div className={styles.attachMenu}><button type="button" onClick={() => void attach('file')}><Icon name="file" />选择文件</button><button type="button" onClick={() => void attach('directory')}><Icon name="folder" />选择目录</button></div>}
+        <button type="button" aria-label="添加本地资料" title="添加本地资料" disabled={legacy || waiting}
+          aria-haspopup="menu" aria-expanded={!!attachmentMenu.anchor} {...attachmentMenu.trigger}><Icon name="plus" size={18} /></button>
+        {attachmentMenu.anchor && <MenuSurface anchor={attachmentMenu.anchor} positionAnchor={attachmentMenu.anchor.closest('form')}
+          label="添加本地资料" placement="above" align="start" close={attachmentMenu.close}>
+          <MenuItem label="选择文件" icon="file" onSelect={() => void attach('file')} />
+          <MenuItem label="选择目录" icon="folder" onSelect={() => void attach('directory')} />
+        </MenuSurface>}
       </div>
         {models.length ? <ModelPicker models={models} selected={model} disabled={switching || legacy} conversation={!!conversation} choose={chooseModel} />
           : <button type="button" className={styles.configureModel} onClick={() => useUi.getState().setSettingsOpen(true)}>配置模型</button>}
-        <button type="submit" className={styles.sendButton} aria-label="发送消息" title="Enter 发送 · Shift + Enter 换行" disabled={!text.trim() || busy || switching || !models.length || legacy || waiting}><Icon name="arrow" size={16} /></button>
+        <ThinkingPicker value={thinking} disabled={switching || legacy} report={report} choose={async (level) => {
+          if (conversation) await window.cloudhelm.setConversationThinking(conversation.id, level);
+          else setDraftThinking(level);
+        }} />
+        {canStop || stopping ? <button type="button" className={styles.sendButton} aria-label={stopping ? '正在停止' : '停止执行'} title="停止本轮 AI 和远端命令；Enter 仅发送补充消息" disabled={!!stopping} onClick={() => void stop()}><Icon name="stop" size={16} /></button> : <button type="submit" className={styles.sendButton} aria-label="发送消息" title="Enter 发送 · Shift + Enter 换行" disabled={!text.trim() || busy || switching || !models.length || legacy || waiting}><Icon name="arrow" size={16} /></button>}
       </div>
     </form>
+    {execution && <p className={styles.note} role="status">{stopping ? `正在停止…${execution.model === 'idle' ? '模型已停；' : ''}${execution.remote === 'running' ? '等待远端命令退出' : ''}` : execution.remote === 'unknown' ? `${execution.model === 'idle' ? '模型已停；' : ''}远端结果待核验，请勿重复执行` : canStop ? 'Enter 发送补充消息 · 点击 ■ 停止执行' : ''}</p>}
     <ComposerFooter compaction={compaction} host={host} legacy={legacy} usage={usage} pendingModel={pendingModel ? model.modelId : undefined} report={report} />
   </div>;
 }

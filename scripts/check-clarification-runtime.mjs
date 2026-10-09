@@ -18,6 +18,7 @@ export async function checkClarificationRuntime(initialPage, restart) {
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     const send = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: `reply-${index}`, object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     send({ role: 'assistant', content: '' });
+    send({ reasoning_content: '先确认部署环境，再执行后续检查。' });
     if (ask) send({ tool_calls: [{ index: 0, id: `ask-${index}`, type: 'function', function: { name: 'ask_user', arguments: JSON.stringify({ questions: [{ id: 'environment', prompt: '部署到哪个环境？', options: [{ value: 'test', label: '测试环境', recommended: true }, { value: 'prod', label: '生产环境' }] }] }) } }] });
     else send({ content: '已收到，使用测试环境。' });
     send({}, ask ? 'tool_calls' : 'stop');
@@ -71,6 +72,8 @@ export async function checkClarificationRuntime(initialPage, restart) {
     assert.equal(requests.length, 5);
     assert.ok(requests[3].messages.some((message) => message.role === 'tool' && message.tool_call_id === 'ask-1' && message.content.includes('"value":"test"')),
       'Native restoration keeps the original completed tool call and answer');
+    assert.ok(restored.messages.some((message) => message.taskId === taskId && message.reasoning?.text === '先确认部署环境，再执行后续检查。'),
+      'Desktop restart retains provider-returned thinking content');
     const projected = await page.evaluate(async (id) => (await window.cloudhelm.snapshot()).messages.filter((message) => message.taskId === id), taskId);
     const entryIds = projected.flatMap((message) => message.entryId ? [message.entryId] : []);
     assert.ok(entryIds.length >= 5);

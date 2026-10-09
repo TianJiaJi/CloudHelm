@@ -22,3 +22,11 @@ export function operationFingerprint(operation: ProposedOperation): string {
   };
   return createHash('sha256').update(JSON.stringify(bound)).digest('hex');
 }
+
+/** Replay identity excludes transient approval leases; it never authorizes execution. */
+export function operationIntentKey(operation: ProposedOperation): string {
+  return operationFingerprint({ ...operation, scope: { ...operation.scope,
+    taskId: '', terminalId: '', terminalGeneration: 0, policyRevision: 0,
+    connectionGeneration: undefined, sessionId: undefined, allowedWorkingRoots: [], protectedPaths: [], goal: ''
+  } });
+}

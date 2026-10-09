@@ -1,24 +1,17 @@
+import { createServiceTool } from './service-tool.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { BusinessTool } from '@cloudhelm/core';
 import { Type, type Static } from 'typebox';
 import { createSelectedReadTool } from '@cloudhelm/adapters';
 import type { SafetyGate } from '@cloudhelm/application';
-import type { OperationScope, ProposedOperation } from '@cloudhelm/core';
-import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
-import type { LocalFileAccess } from './local-file-access.js';
+import type { ProposedOperation } from '@cloudhelm/core';
+import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
 
-interface Dependencies {
-  hosts: RuntimeHost[];
-  localFiles: LocalFileAccess;
-  ensureTerminal(hostId: string, sessionId?: string): Promise<string>;
-  requestRoot?(host: RuntimeHost, command: string, cwd: string, reason: string, signal?: AbortSignal): Promise<unknown>;
-  scope(host: RuntimeHost, terminalId: string, cwd?: string): OperationScope;
-  runOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string): Promise<{ content: Array<{ type: 'text'; text: string }>; details: undefined; isError: boolean }>;
-}
+
 function outOfScope() {
   return { content: [{ type: 'text' as const, text: 'Host is outside the conversation authorization scope' }], details: undefined, isError: true };
 }
-export function createRemoteTools(deps: Dependencies, gate: SafetyGate) {
+export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate) {
     const parameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) });
     const tool: BusinessTool<Static<typeof parameters>> = {
       name: 'run_remote', label: 'Execute an audited remote SSH command',
@@ -102,5 +95,5 @@ export function createRemoteTools(deps: Dependencies, gate: SafetyGate) {
       return { content: [{ type: 'text', text: JSON.stringify(session) }], details: undefined };
     }
   };
-  return [rootTool, tool, writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+  return [createServiceTool(deps, gate), rootTool, tool, writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
 }
