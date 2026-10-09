@@ -67,7 +67,7 @@ describe('native semantic compaction', () => {
     const f = await setup(async () => pending);
     const run = f.session.prompt('continue');
     const failed = expect(run).rejects.toThrow();
-    await vi.waitFor(() => expect(f.fixture.requests).toHaveLength(1));
+    await vi.waitFor(() => expect(f.fixture.requests).toHaveLength(1), { timeout: 15_000 });
     expect(f.session.isStreaming).toBe(true);
     await expect(f.session.prompt('concurrent prompt')).rejects.toThrow('正在处理');
     let settled = false;

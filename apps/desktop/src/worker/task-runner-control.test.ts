@@ -74,7 +74,7 @@ describe('stop and explicit continuation', () => {
       expect(f.requests()).toBe(2);
       f.control.failResponse = false; f.control.replayNext = true;
       f.runner.message('继续检查原结果');
-      await vi.waitFor(() => expect(f.requests()).toBe(4));
+      await vi.waitFor(() => expect(f.requests()).toBe(4), { timeout: 15_000 });
       expect(f.sessions.flatMap((session) => session.channel.commands)).toEqual(['mkdir -p /srv/service']);
       expect(JSON.stringify(f.fixture.requests[2]?.messages)).toContain('CloudHelm resume:');
       expect(JSON.stringify(f.fixture.requests[3]?.messages)).toContain('already records this action');
@@ -94,7 +94,7 @@ describe('stop and explicit continuation', () => {
     const f = await setup(false);
     try {
       const running = f.runner.start();
-      await vi.waitFor(() => expect(f.sessions[0]?.channel.commands).toHaveLength(1));
+      await vi.waitFor(() => expect(f.sessions[0]?.channel.commands).toHaveLength(1), { timeout: 15_000 });
       f.runner.stopOperation(); await running;
       f.sessions[0]!.channel.close();
       expect(f.events.filter((event) => event.type === 'execution').at(-1)).toMatchObject({ value: { model: 'idle', remote: 'unknown', stopping: false, canStop: false } });

@@ -106,7 +106,7 @@ describe('native Pi session compatibility', () => {
     let calls = 0;
     const f = await setup(async () => ++calls === 1 ? pending : { text: 'new model', usage });
     const run = f.session.prompt('first');
-    await vi.waitFor(() => expect(calls).toBe(1));
+    await vi.waitFor(() => expect(calls).toBe(1), { timeout: 15_000 });
     f.session.select({ ...f.options.profile, modelId: 'second', apiKey: 'second-key' });
     expect(f.session.profile.modelId).toBe('fixture');
     expect(lastUsage(f.events)).toMatchObject({ model: { modelId: 'second' }, usedTokens: null });

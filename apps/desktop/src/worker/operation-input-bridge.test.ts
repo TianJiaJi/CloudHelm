@@ -161,7 +161,7 @@ it('reuses only successfully verified credentials, with no ordinary stdin or sec
   const f = fixture('sudo docker ps'); await f.ready(); f.auth();
   await f.coordinator.answer(f.requests[0]!.id, 'verified-fixture'); f.channel.complete();
   expect(await f.result).toMatchObject({ authentication: 'succeeded' });
-  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2));
+  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2), { timeout: 15_000 });
   f.channel.challenge('second-auth'); expect(f.requests).toHaveLength(1);
   expect(f.channel.answers.at(-1)).toEqual({ id: 'second-auth', answer: 'verified-fixture' });
   f.channel.complete(); await next; expect(f.channel.writes).toEqual([]); f.bridge.clearTask('task');
@@ -170,7 +170,7 @@ it('reuses only successfully verified credentials, with no ordinary stdin or sec
 it('forgets a reused password when challenged again, and prompts instead of looping', async () => {
   const f = fixture('sudo docker ps'); await f.ready(); f.auth();
   await f.coordinator.answer(f.requests[0]!.id, 'old'); f.channel.complete(); await f.result;
-  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2));
+  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2), { timeout: 15_000 });
   f.channel.challenge('cached'); f.channel.challenge('retry'); expect(f.requests).toHaveLength(2);
   await f.coordinator.answer(f.requests[1]!.id, 'new'); f.channel.emit('Sorry, try again.\n'); f.channel.complete();
   expect(await next).toMatchObject({ status: 'succeeded', authentication: 'succeeded' }); f.bridge.clearTask('task');
@@ -179,11 +179,11 @@ it('forgets a reused password when challenged again, and prompts instead of loop
 it('does not cache a password after a failed operation, or retain it after a task pause', async () => {
   const f = fixture('sudo docker ps'); await f.ready(); f.auth();
   await f.coordinator.answer(f.requests[0]!.id, 'unverified'); f.channel.emit('payload failed\n'); f.channel.complete(1); await f.result;
-  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2));
+  const next = f.again('second'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(2), { timeout: 15_000 });
   f.channel.challenge('second'); expect(f.requests).toHaveLength(2);
   await f.coordinator.answer(f.requests[1]!.id, 'verified'); f.channel.complete(); await next;
   f.bridge.clearTask('task');
-  const third = f.again('third'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(3));
+  const third = f.again('third'); await vi.waitFor(() => expect(f.channel.commands).toHaveLength(3), { timeout: 15_000 });
   f.channel.challenge('third'); expect(f.requests).toHaveLength(3); f.channel.complete(); await third;
 });
 

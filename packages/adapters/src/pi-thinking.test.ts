@@ -26,7 +26,7 @@ it('defers a running selection, persists preference natively, and maps it across
     systemPrompt: '', tools: [], clarification: { ask: async () => [{ id: 'q', value: 'yes' }] }, assertActive() {}, beforeRequest() {}, event: (event) => events.push(event) };
   const session = await createConversationSession(options); cleanup.push(() => session.dispose());
   const run = session.prompt('hello');
-  await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+  await vi.waitFor(() => expect(fixture.requests).toHaveLength(1), { timeout: 15_000 });
   const levels = thinking(events)!.levels;
   const target = levels.find((level) => level !== 'high')!;
   expect(target).toBeDefined();

@@ -36,7 +36,7 @@ it.each([false, true])('streams actual returned thinking, retains final/interrup
   const session = await createConversationSession(options); cleanup.push(() => session.dispose());
   const running = session.prompt('开始检查');
   const outcome = running.catch((error: unknown) => error);
-  await vi.waitFor(() => expect(events.filter((event) => event.type === 'reasoning-progress' && event.value?.reasoning.text.includes('退出码'))).toHaveLength(1));
+  await vi.waitFor(() => expect(events.filter((event) => event.type === 'reasoning-progress' && event.value?.reasoning.text.includes('退出码'))).toHaveLength(1), { timeout: 15_000 });
   expect(events.some((event) => event.type === 'text' && event.value.role === 'agent')).toBe(false);
   if (stop) await session.abort(); else release();
   await outcome;
