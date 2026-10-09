@@ -1,3 +1,4 @@
+import { checkComposer } from './check-composer.mjs';
 /* global window, document, navigator, structuredClone */
 import { checkClarification } from './check-clarification.mjs';
 import { checkMiddleClick } from './check-middle-click.mjs';
@@ -299,6 +300,7 @@ try {
   await exerciseHostControls();
   await exerciseErrors();
   await exerciseConversation();
+  await checkComposer(page, screenshot);
   await checkConversationTimeline(page, screenshot);
   await checkViewportLayout(page, screenshot);
   await checkUserMessageActions(page, screenshot);

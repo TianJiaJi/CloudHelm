@@ -4,8 +4,9 @@ import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell } from 'electron';
 import { SqliteStore, listModelProviders } from '@cloudhelm/adapters';
-import type { AppEvent, DesktopAPI, HostDraft, LocalScope, ReviewMode } from '@cloudhelm/contracts';
+import type { AppEvent, DesktopAPI, HostDraft, LocalScope } from '@cloudhelm/contracts';
 import { AppState } from './app-state.js';
+import { registerHostSafetyIpc } from './host-safety-ipc.js';
 import { registerConversationIpc } from './conversation-ipc.js';
 import { RuntimeBridge } from './runtime-bridge.js';
 import { HostConnectionTester } from './host-connection-test.js';
@@ -82,15 +83,7 @@ function registerIpc(): void {
     state.getHost(hostId);
     state.saveSecret(`host:${hostId}`, secret);
   });
-  ipcMain.handle('cloudhelm:update-host-safety', async (_event, hostId: string, mode: ReviewMode, protectedPaths: string[]) => {
-    if (!['ask', 'ai-review', 'permissive'].includes(mode) || !Array.isArray(protectedPaths)
-      || protectedPaths.some((value) => typeof value !== 'string' || !value.startsWith('/') || value.includes('\u0000'))) {
-      throw new Error('Invalid safety settings');
-    }
-    const revision = state.getHost(hostId).policyRevision + 1;
-    await runtime.call({ method: 'update-host-safety', hostId, mode, protectedPaths, revision });
-    state.updateHost(hostId, { defaultMode: mode, protectedPaths, policyRevision: revision });
-  });
+  registerHostSafetyIpc(state, runtime);
   ipcMain.handle('cloudhelm:save-profile', (_event, profile: Parameters<DesktopAPI['saveModelProfile']>[0]) => state.saveProfile(profile));
   ipcMain.handle('cloudhelm:save-review-settings', async (_event, settings: Parameters<DesktopAPI['saveReviewSettings']>[0]) => {
     state.saveReviewSettings(settings);

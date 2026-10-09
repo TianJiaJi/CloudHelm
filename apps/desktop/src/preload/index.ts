@@ -10,6 +10,7 @@ const api: DesktopAPI = {
   editHost: (hostId, host, newSecret) => invoke('edit-host', hostId, host, newSecret),
   testHostConnection: (input) => invoke('test-host', input),
   setHostSecret: (hostId, secret) => invoke('set-host-secret', hostId, secret),
+  updateHostReviewMode: (hostId, mode) => invoke('update-host-review-mode', hostId, mode),
   updateHostSafety: (hostId, mode, protectedPaths) => invoke('update-host-safety', hostId, mode, protectedPaths),
   saveModelProfile: (profile) => invoke('save-profile', profile),
   testModelConnection: (profile) => invoke('test-model', profile),

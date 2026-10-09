@@ -6,3 +6,4 @@ export * from './sqlite-store.js';
 export * from './model-catalog.js';
 export * from './pi-clarification-extension.js';
 export * from './su-session.js';
+export * from './pi-context-usage.js';

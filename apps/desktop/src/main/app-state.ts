@@ -32,6 +32,7 @@ export class AppState {
   private readonly approvals = new Map<string, AppSnapshot['approvals'][number]>();
   private readonly inputs = new Map<string, AppSnapshot['inputs'][number]>();
   private readonly clarifications = new Map<string, ClarificationRequest>();
+  private readonly contextUsage: NonNullable<AppSnapshot['contextUsage']> = {};
   private readonly messages: AppSnapshot['messages'] = [];
   private readonly logBuffer = new Map<string, string>();
   private readonly redactors = new Map<string, OutputRedactor>();
@@ -61,6 +62,7 @@ export class AppState {
 
   snapshot(): AppSnapshot {
     return {
+      contextUsage: { ...this.contextUsage },
       hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
@@ -172,6 +174,7 @@ export class AppState {
     this.store.removeWhere('messages', 'taskId', id);
     this.store.removeWhere('clarifications', 'taskId', id);
     this.store.removePrefix('model-requests', `${id}:`);
+    delete this.contextUsage[id];
     for (const key of logKeys) this.store.removeLogs(key);
     this.publish();
   }
@@ -298,12 +301,13 @@ export class AppState {
       if (!settings.hasKey) return [];
       const models = provider.id === 'cloudhelm-custom' && settings.modelId
         ? [{ id: settings.modelId, name: settings.modelId }] : provider.models;
-      return models.map((model) => ({ provider: provider.id, modelId: model.id, name: `${provider.name} · ${model.name}` }));
+      return models.map((model) => ({ provider: provider.id, modelId: model.id, name: model.name }));
     });
   }
 
   setTaskModel(id: string, profile: RuntimeProfile): void {
     const task = this.getTask(id);
+    delete this.contextUsage[id];
     Object.assign(task, { provider: profile.provider, modelId: profile.modelId, baseUrl: profile.baseUrl, credentialRevision: profile.credentialRevision, updatedAt: Date.now() });
     this.store.put('tasks', id, task);
     this.publish();
@@ -450,6 +454,9 @@ export class AppState {
         }
         break;
       }
+      case 'context-usage':
+        if (this.tasks.has(event.taskId)) this.contextUsage[event.taskId] = event.value;
+        break;
       case 'model-request':
         this.store.put('model-requests', `${event.taskId}:${event.request}`, event);
         break;
@@ -470,6 +477,7 @@ export class AppState {
   publish(): void { if (!this.closed) this.emit({ type: 'snapshot', value: this.snapshot() }); }
 
   runtimeStopped(): void {
+    for (const id of Object.keys(this.contextUsage)) delete this.contextUsage[id];
     if (this.closed) return;
     for (const host of this.hosts.values()) if (host.status === 'connected' || host.status === 'connecting') {
       this.updateHost(host.id, { status: 'disconnected' });

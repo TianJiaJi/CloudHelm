@@ -41,6 +41,14 @@ export function isActiveTaskStatus(status: TaskStatus): boolean {
 }
 
 export interface ModelChoice { provider: string; modelId: string }
+export interface ContextUsageView {
+  model: ModelChoice;
+  request: number;
+  usedTokens: number | null;
+  contextWindow: number | null;
+  source: 'provider' | 'estimate' | 'unknown';
+  updatedAt: number;
+}
 export interface ModelProfileDraft extends ModelChoice { baseUrl?: string; apiKey?: string }
 export interface PlanStep { id: string; title: string; status: 'pending' | 'running' | 'done' | 'blocked' }
 export interface VerificationReport { summary: string; access: string[]; evidenceOperationIds: string[]; changes: string[]; recovery: string[] }
@@ -128,6 +136,7 @@ export interface InputRequestView {
 }
 
 export interface AppSnapshot {
+  contextUsage?: Record<string, ContextUsageView>;
   hosts: HostView[];
   conversations: TaskView[];
   terminals: TerminalViewState[];
@@ -153,6 +162,7 @@ export interface ModelProviderSettings {
 }
 
 export type AppEvent =
+  | { type: 'context-usage'; taskId: string; value: ContextUsageView }
   | { type: 'clarification'; value: ClarificationRequest }
   | { type: 'snapshot'; value: AppSnapshot }
   | { type: 'terminal-data'; terminalId: string; data: string; operationId?: string }
@@ -173,6 +183,7 @@ export interface DesktopAPI {
   editHost(hostId: string, host: HostDraft, newSecret?: string): Promise<HostView>;
   testHostConnection(input: HostConnectionTestInput): Promise<HostConnectionTestResult>;
   setHostSecret(hostId: string, secret: string): Promise<void>;
+  updateHostReviewMode(hostId: string, mode: ReviewMode): Promise<void>;
   updateHostSafety(hostId: string, mode: ReviewMode, protectedPaths: string[]): Promise<void>;
   listModelProviders(): Promise<ModelProviderView[]>;
   modelProviderSettings(providerId: string): Promise<ModelProviderSettings>;

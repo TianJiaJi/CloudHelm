@@ -295,3 +295,23 @@ describe('shortcut settings persistence', () => {
     expect(() => setup().state.saveShortcuts(settings as never)).toThrow();
   });
 });
+
+describe('runtime context usage snapshots', () => {
+  it('publishes usage without persisting it and clears it on model change, restart and runtime exit', () => {
+    const { state, store, events } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    const value = { model: { provider: task.provider!, modelId: task.modelId }, request: 1,
+      usedTokens: 100, contextWindow: 32000, source: 'provider' as const, updatedAt: 10 };
+    state.record({ type: 'context-usage', taskId: task.id, value });
+    expect(state.snapshot().contextUsage?.[task.id]).toEqual(value);
+    expect(events.at(-1)).toMatchObject({ type: 'snapshot', value: { contextUsage: { [task.id]: value } } });
+    expect(store.get<TaskView>('tasks', task.id)).not.toHaveProperty('contextUsage');
+    expect(setup(store).state.snapshot().contextUsage).toEqual({});
+    state.setTaskModel(task.id, state.runtimeProfile());
+    expect(state.snapshot().contextUsage).toEqual({});
+    state.record({ type: 'context-usage', taskId: task.id, value });
+    state.runtimeStopped();
+    expect(state.snapshot().contextUsage).toEqual({});
+  });
+});

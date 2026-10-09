@@ -1,3 +1,4 @@
+import { ContextUsageTracker } from './context-usage.js';
 import { operationFeedback } from './operation-feedback.js';
 import { createHash } from 'node:crypto';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
@@ -27,6 +28,8 @@ export interface TaskSignals {
 }
 
 export class TaskRunner {
+  private readonly contextUsage: ContextUsageTracker;
+  private contextCompacted = false;
   private readonly clarification: ClarificationCoordinator;
   private readonly model: ConversationModel;
   private readonly journal: WorkJournal;
@@ -64,6 +67,7 @@ export class TaskRunner {
     private readonly readLog: (operationId: string, cursor: number) => Promise<{ text: string; nextCursor: number; more: boolean }> = async () => ({ text: '', nextCursor: 0, more: false }),
     private readonly privileged?: PrivilegedTaskAccess
   ) {
+    this.contextUsage = new ContextUsageTracker((value) => this.signals.event({ type: 'context-usage', taskId: task.id, value }));
     const latest = history.filter((message) => message.role === 'user').at(-1)?.text;
     this.currentGoal = latest && latest !== task.goal ? `${task.goal}\n用户最近补充：${latest}` : task.goal;
     this.clarification = new ClarificationCoordinator(task.id, (request) => {
@@ -134,11 +138,17 @@ export class TaskRunner {
       },
       streamFn: (_selected, context, options) => {
         const current = this.model.current();
+        this.contextUsage.begin(context, { provider: current.profile.provider, modelId: current.profile.modelId },
+          current.model.contextWindow, this.requestCount, this.contextCompacted);
         return current.catalog.streamSimple(current.model, context, { ...options, apiKey: current.profile.apiKey,
           maxTokens: generationTokenBudget(current.model) });
       },
-      transformContext: async (messages) => compactAgentContext(messages, this.model.current().model.contextWindow,
-        [...this.priorOperations, ...this.operations.values()], { generationTokens: generationTokenBudget(this.model.current().model) }),
+      transformContext: async (messages) => {
+        const compacted = compactAgentContext(messages, this.model.current().model.contextWindow,
+          [...this.priorOperations, ...this.operations.values()], { generationTokens: generationTokenBudget(this.model.current().model) });
+        this.contextCompacted = compacted !== messages;
+        return compacted;
+      },
       beforeToolCall: async ({ assistantMessage, toolCall }) => {
         const asks = assistantMessage.content.filter((part) => part.type === 'toolCall' && ['ask_user', 'request_root_session'].includes(part.name));
         if (asks.length > 1 || (asks.length && (asks[0]?.type !== 'toolCall' || toolCall.name !== asks[0].name))) return {
@@ -161,6 +171,7 @@ export class TaskRunner {
       if (event.type === 'tool_execution_end') this.diagnostic({ event: 'tool.end', requestId: event.toolCallId,
         tool: event.toolName, status: event.isError ? 'failed' : 'succeeded' });
       if (event.type === 'message_end' && event.message.role === 'assistant') {
+        this.contextUsage.complete(event.message);
         this.diagnostic({ event: 'model.response', request: this.requestCount, durationMs: Date.now() - this.requestStarted });
       }
       if (event.type === 'turn_end') {
@@ -480,7 +491,10 @@ export class TaskRunner {
 
   setReviewKey(jevKey?: string): void { this.model.setReviewKey(jevKey); }
 
-  setModel(profile: RuntimeProfile): void { this.model.select(profile); }
+  setModel(profile: RuntimeProfile): void {
+    this.model.select(profile);
+    this.contextUsage.invalidate({ provider: profile.provider, modelId: profile.modelId });
+  }
 
   isRunning(): boolean { return ['running', 'waiting-review', 'waiting-user', 'recovering'].includes(this.status); }
 

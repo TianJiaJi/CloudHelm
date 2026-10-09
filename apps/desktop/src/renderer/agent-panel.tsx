@@ -9,8 +9,8 @@ import { UserMessage } from './user-message.js';
 import { conversationTimeline } from './conversation-timeline.js';
 import { capture, Icon, reviewLabel, statusLabel } from './ui-helpers.js';
 import { copyEntries, copyText } from './clipboard.js';
-import { MenuEntryList, openContextMenu, type ContextMenuEntry } from './context-menu.js';
-import { AnchoredMenu } from './anchored-menu.js';
+import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
+import { ComposerFooter, ModelPicker } from './composer-controls.js';
 import styles from './ui.module.css';
 
 type ModelOption = ModelChoice & { name: string };
@@ -78,22 +78,17 @@ export function AgentPanel({ snapshot, host, conversation, quote, report, openIn
       {terminal && <button className={styles.agentTerminalLink} onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 专用终端<Icon name="chevron" size={12} /></button>}
       {conversation && ['ready-for-review', 'accepted', 'failed'].includes(conversation.status) && <VerificationCard conversation={conversation} report={report} />}
     </div>
-    <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} hostId={host?.id ?? null} conversation={conversation} profile={snapshot.profile} models={models} quote={quote} report={report} />
+    <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} hostId={host?.id ?? null} conversation={conversation} host={host} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} quote={quote} report={report} />
   </>;
 }
 
-function Composer({ hostId, conversation, profile, models, quote, report }: {
-  hostId: string | null; conversation?: TaskView; profile: AppSnapshot['profile']; models: ModelOption[]; quote: QuotedOutput | null; report(error: string): void;
+function Composer({ hostId, host, usage, conversation, profile, models, quote, report }: {
+  hostId: string | null; host?: HostView; usage?: import('@cloudhelm/contracts').ContextUsageView; conversation?: TaskView; profile: AppSnapshot['profile']; models: ModelOption[]; quote: QuotedOutput | null; report(error: string): void;
 }): React.JSX.Element {
   const draftKey = conversation?.id ?? `draft:${hostId ?? 'chat'}`;
   const [text, setText] = useState(() => composerDrafts.get(draftKey)?.text ?? '');
   const [attachments, setAttachments] = useState<LocalAttachment[]>(() => composerDrafts.get(draftKey)?.attachments ?? []);
   const [attachmentMenu, setAttachmentMenu] = useState(false);
-  const [modelMenu, setModelMenu] = useState<HTMLElement | null>(null);
-  // An anchored popover light-dismisses on the trigger's own pointerdown, so a
-  // plain toggle would close and immediately reopen. Remember the open state at
-  // pointerdown to decide whether the click should open or stay closed.
-  const modelMenuWasOpen = useRef(false);
   const [busy, setBusy] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [model, setModel] = useState<ModelChoice>({ provider: conversation?.provider ?? profile.provider, modelId: conversation?.modelId ?? profile.modelId });
@@ -141,18 +136,6 @@ function Composer({ hostId, conversation, profile, models, quote, report }: {
     }, report);
     setBusy(false);
   }
-  const selectedValue = `${model.provider}/${model.modelId}`;
-  const selectedOption = models.find((item) => `${item.provider}/${item.modelId}` === selectedValue);
-  const modelLabel = selectedOption ? `${selectedOption.name} · ${selectedOption.provider}` : model.modelId;
-  function modelMenuEntries(): ContextMenuEntry[] {
-    const entries: ContextMenuEntry[] = [];
-    if (conversation) entries.push({ id: 'reapply', label: '重新应用当前模型的 Key 和地址', run: () => void chooseModel('__reapply__') });
-    if (!selectedOption) entries.push({ id: 'current', label: model.modelId, title: '当前模型不在可用列表中', disabled: true, run: () => undefined });
-    entries.push(...models.map((item): ContextMenuEntry => ({ id: `${item.provider}/${item.modelId}`, label: `${item.name} · ${item.provider}`,
-      icon: `${item.provider}/${item.modelId}` === selectedValue ? 'check' : undefined,
-      run: () => void chooseModel(`${item.provider}/${item.modelId}`) })));
-    return entries;
-  }
   function attachmentMenuEntries(item: LocalAttachment): ContextMenuEntry[] {
     return [
       { id: 'copy-path', label: '复制完整路径', icon: 'copy', run: () => void copyText(item.scope.path) },
@@ -174,20 +157,11 @@ function Composer({ hostId, conversation, profile, models, quote, report }: {
         <button type="button" aria-label="添加本地资料" title="添加本地资料" onClick={() => setAttachmentMenu(!attachmentMenu)}><Icon name="plus" size={18} /></button>
         {attachmentMenu && <div className={styles.attachMenu}><button type="button" onClick={() => void attach('file')}><Icon name="file" />选择文件</button><button type="button" onClick={() => void attach('directory')}><Icon name="folder" />选择目录</button></div>}
       </div>
-        {models.length ? <>
-          <button type="button" className={styles.modelTrigger} aria-haspopup="menu" aria-expanded={modelMenu !== null}
-            aria-label={`对话模型，当前 ${modelLabel}`} title={modelLabel} disabled={switching || legacy}
-            onPointerDown={() => { modelMenuWasOpen.current = modelMenu !== null; }}
-            onClick={(event) => { const wasOpen = modelMenuWasOpen.current; modelMenuWasOpen.current = false; setModelMenu(wasOpen ? null : event.currentTarget); }}>
-            <span>{modelLabel}</span><Icon name="chevron" size={12} />
-          </button>
-          {modelMenu && <AnchoredMenu anchor={modelMenu} label="对话模型" close={() => setModelMenu(null)}>
-            <MenuEntryList entries={modelMenuEntries()} />
-          </AnchoredMenu>}
-        </> : <button type="button" className={styles.configureModel} onClick={() => useUi.getState().setSettingsOpen(true)}>配置模型</button>}
-        <button type="submit" className={styles.sendButton} aria-label="发送消息" disabled={!text.trim() || busy || switching || !models.length || legacy || waiting}><Icon name="arrow" size={16} /></button>
+        {models.length ? <ModelPicker models={models} selected={model} disabled={switching || legacy} conversation={!!conversation} choose={chooseModel} />
+          : <button type="button" className={styles.configureModel} onClick={() => useUi.getState().setSettingsOpen(true)}>配置模型</button>}
+        <button type="submit" className={styles.sendButton} aria-label="发送消息" title="Enter 发送 · Shift + Enter 换行" disabled={!text.trim() || busy || switching || !models.length || legacy || waiting}><Icon name="arrow" size={16} /></button>
       </div>
     </form>
-    <small className={styles.composerHint}>{pendingModel ? `下一次请求使用 ${model.modelId}` : 'Enter 发送 · Shift + Enter 换行'}</small>
+    <ComposerFooter host={host} legacy={legacy} usage={usage} pendingModel={pendingModel ? model.modelId : undefined} report={report} />
   </div>;
 }

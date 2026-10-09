@@ -27,8 +27,14 @@ const api: DesktopAPI = {
   onEvent: (listener) => { listeners.push(listener); return () => { listeners = listeners.filter((item) => item !== listener); }; },
   availableModels: async () => [
     { provider: 'openai', modelId: 'gpt-5.4', name: 'GPT-5.4' },
-    { provider: 'anthropic', modelId: 'claude-sonnet', name: 'Claude Sonnet' }
+    { provider: 'anthropic', modelId: 'claude-sonnet', name: 'Claude Sonnet' },
+    { provider: 'cloudhelm-custom', modelId: 'long-model', name: 'Custom reasoning model with an exceptionally long display name' }
   ],
+  updateHostReviewMode: async (id, mode) => {
+    calls.push({ kind: 'review-mode', id, mode });
+    const host = view.hosts.find((item) => item.id === id)!;
+    host.defaultMode = mode; host.policyRevision++; sync();
+  },
   connectHost: async (id) => { calls.push({ kind: 'connect', id }); view.hosts.find((host) => host.id === id)!.status = 'connected'; sync(); },
   openTerminal: async (hostId) => {
     const terminal: TerminalViewState = { id: `term${++sequence}`, hostId, state: 'human' };
@@ -65,7 +71,7 @@ const api: DesktopAPI = {
   sendMessage: async (id, message, tokens) => {
     calls.push({ kind: 'send', id, message, tokens }); view.messages.push({ taskId: id, role: 'user', text: message, createdAt: Date.now() }); sync();
   },
-  setConversationModel: async (id, model) => { calls.push({ kind: 'model', id, model }); Object.assign(view.conversations.find((item) => item.id === id)!, model); sync(); },
+  setConversationModel: async (id, model) => { calls.push({ kind: 'model', id, model }); Object.assign(view.conversations.find((item) => item.id === id)!, model); if (view.contextUsage) delete view.contextUsage[id]; sync(); },
   readTerminalLog: async () => 'ubuntu@prod:~$ docker ps\nCONTAINER ID   IMAGE\nabc123        service:latest',
   selectLocalPath: async (kind) => ({ token: `local-${kind}`, scope: { path: '/Users/demo/service', kind } }),
   selectPrivateKey: async () => { calls.push({ kind: 'select-private-key' }); return '/Users/demo/.ssh/server key'; },
@@ -114,6 +120,7 @@ const fixture = {
   calls,
   inject(event: AppEvent): void {
     if (event.type === 'terminal-state') view.terminals.push({ id: event.terminalId, hostId: event.hostId, taskId: event.taskId, state: event.state });
+    if (event.type === 'context-usage') { view.contextUsage = { ...view.contextUsage, [event.taskId]: event.value }; sync(); return; }
     emit(event);
   },
   addInput(): void {

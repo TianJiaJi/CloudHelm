@@ -9,6 +9,7 @@ const operation: ProposedOperation = { id: 'op', kind: 'command', command: 'dock
 
 function setup() {
   let generation = 1;
+  let revision = 1;
   let approve!: (allowed: boolean) => void;
   const requestApproval = vi.fn(() => new Promise<boolean>((resolve) => { approve = resolve; }));
   const execute = vi.fn().mockResolvedValue({ operationId: 'op', status: 'succeeded', exitCode: 0, stdoutTail: '' });
@@ -18,9 +19,9 @@ function setup() {
     evaluator: { evaluate: async () => 'error' }, approvals: { requestApproval }, executor: { execute },
     audit: { proposed: async () => {}, decided: async () => {}, completed: async () => {} },
     lease: { currentGeneration: () => generation, isAgentOwner: () => true },
-    settings: () => ({ mode: 'ai-review', revision: 1 })
+    settings: () => ({ mode: 'ai-review', revision })
   });
-  return { gate, requestApproval, execute, approve: (allowed: boolean) => approve(allowed), changeGeneration: () => { generation++; } };
+  return { gate, requestApproval, execute, approve: (allowed: boolean) => approve(allowed), changeGeneration: () => { generation++; }, changePolicy: () => { revision++; } };
 }
 
 describe('SafetyGate pre-commit authorization', () => {
@@ -31,6 +32,16 @@ describe('SafetyGate pre-commit authorization', () => {
     fixture.approve(true);
     expect((await pending).result?.status).toBe('succeeded');
     expect(fixture.execute).toHaveBeenCalledOnce();
+  });
+
+  it('invalidates pending approval after the host review policy changes', async () => {
+    const fixture = setup();
+    const pending = fixture.gate.execute(operation);
+    await vi.waitFor(() => expect(fixture.requestApproval).toHaveBeenCalledOnce());
+    fixture.changePolicy();
+    fixture.approve(true);
+    expect((await pending).decision.ruleId).toBe('authorization-expired');
+    expect(fixture.execute).not.toHaveBeenCalled();
   });
 
   it('invalidates approval after terminal control changes', async () => {
