@@ -145,8 +145,10 @@
 .attachControl { position: relative; }
 .attachControl > button { padding: 4px; color: var(--muted); }
 .attachMenu { bottom: 36px; left: -6px; }
-.composerTools select { border: 0; padding: 5px 3px; background: transparent; font-size: 10px; color: var(--muted); max-width: calc(100% - 68px); text-overflow: ellipsis; }
-.composerTools select option { background: var(--panel); color: var(--text); }
+.modelTrigger { justify-content: flex-start; min-width: 0; max-width: calc(100% - 68px); padding: 5px 3px; font-size: 10px; color: var(--muted); }
+.modelTrigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modelTrigger > svg { transform: rotate(90deg); }
+.modelTrigger:disabled { opacity: .5; cursor: default; }
 .configureModel { color: var(--muted) !important; font-size: 10px; padding: 5px; }
 .sendButton { margin-left: auto; width: 30px; height: 30px; flex: none; border-radius: 50% !important; background: var(--text) !important; color: var(--canvas) !important; padding: 0; }
 .sendButton:disabled { background: #71787a !important; opacity: .7; }

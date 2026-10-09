@@ -103,9 +103,19 @@ async function exerciseConversation() {
   await screenshot('main-dark.png');
   await page.getByRole('button', { name: '批准这次操作' }).click();
   assert.equal((await calls()).find((call) => call.kind === 'approval').approved, true);
-  await page.getByRole('combobox', { name: '对话模型' }).selectOption('anthropic/claude-sonnet');
+  const modelMenuButton = page.getByRole('button', { name: '对话模型' });
+  await modelMenuButton.click();
+  const modelMenu = page.getByRole('menu', { name: '对话模型' });
+  await modelMenu.waitFor();
+  await screenshot('model-menu.png');
+  // Clicking the trigger again toggles the menu closed instead of reopening it.
+  await modelMenuButton.click();
+  await modelMenu.waitFor({ state: 'hidden' });
+  await modelMenuButton.click();
+  await modelMenu.getByRole('menuitem', { name: /Claude Sonnet/ }).click();
   assert.equal((await calls()).find((call) => call.kind === 'model').model.provider, 'anthropic');
-  await page.getByRole('combobox', { name: '对话模型' }).selectOption('__reapply__');
+  await modelMenuButton.click();
+  await page.getByRole('menuitem', { name: '重新应用当前模型的 Key 和地址' }).click();
   assert.equal((await calls()).filter((call) => call.kind === 'model').at(-1).model.provider, 'anthropic');
   await page.getByRole('textbox', { name: '给 AI 的消息' }).fill('草稿不会丢');
   await page.getByRole('button', { name: /开发服务器 deployer@/ }).click();
