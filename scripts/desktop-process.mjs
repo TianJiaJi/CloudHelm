@@ -18,15 +18,23 @@ export async function withTimeout(action, timeoutMs, label) {
 
 async function processTable() {
   // Query ancestry, never select processes by executable name: other Electron apps may be open.
-  const { stdout } = process.platform === 'win32'
-    ? await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      'Get-CimInstance Win32_Process | ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.ParentProcessId }'],
-    { timeout: 10_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 })
-    : await execute('ps', ['-axo', 'pid=,ppid=,stat='], { timeout: 10_000 });
-  return stdout.trim().split(/\r?\n/u).filter(Boolean).map((line) => {
-    const [pid, parentPid, state = ''] = line.trim().split(/\s+/u);
-    return { pid: Number(pid), parentPid: Number(parentPid), zombie: state.startsWith('Z') };
-  });
+  // Loaded CI runners can exceed the query budget or fail it transiently; retry before giving up.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const { stdout } = process.platform === 'win32'
+        ? await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          'Get-CimInstance Win32_Process | ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.ParentProcessId }'],
+        { timeout: 30_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 })
+        : await execute('ps', ['-axo', 'pid=,ppid=,stat='], { timeout: 30_000 });
+      return stdout.trim().split(/\r?\n/u).filter(Boolean).map((line) => {
+        const [pid, parentPid, state = ''] = line.trim().split(/\s+/u);
+        return { pid: Number(pid), parentPid: Number(parentPid), zombie: state.startsWith('Z') };
+      });
+    } catch (error) {
+      if (attempt >= 3) throw error;
+      await delay(250 * attempt);
+    }
+  }
 }
 
 function descendants(table, root) {
