@@ -140,6 +140,12 @@ describe('native Pi session compatibility', () => {
     expect(f.requests).toEqual(['conversation']);
   });
 
+  it('reports a reasoning-only response that hit the output limit instead of silently finishing', async () => {
+    const f = await setup(async () => ({ text: '', reasoning: ['I should keep thinking'], finishReason: 'length' }));
+    await expect(f.session.prompt('check Docker')).rejects.toThrow('模型输出达到长度上限');
+    expect(f.fixture.requests).toHaveLength(1);
+  });
+
   it.each([429, 500])('never retries provider HTTP %s', async (status) => {
     const f = await setup(async () => ({ error: 'fixture failure', status }));
     await expect(f.session.prompt('hello')).rejects.toThrow();

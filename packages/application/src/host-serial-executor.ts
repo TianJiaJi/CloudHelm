@@ -2,7 +2,6 @@ import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOper
 
 /** Serializes Agent writes across tasks sharing one target host. */
 export class HostSerialExecutor implements OperationExecutor {
-  private readonly reads = new Set<string>();
   private readonly tails = new Map<string, Promise<void>>();
   private readonly unsettled = new Map<string, Map<string, Promise<'exited' | 'unknown'> | null>>();
 
@@ -19,10 +18,9 @@ export class HostSerialExecutor implements OperationExecutor {
     const pending = this.unsettled.get(hostId);
     if (!pending?.has(result.operationId)) return;
     const unresolved = result.status === 'unknown' || result.status === 'handed-over'
-      || (result.status === 'failed' && result.effects === 'possible' && !this.reads.has(result.operationId));
+      || (result.status === 'failed' && result.effects === 'possible');
     if (unresolved) pending.set(result.operationId, null);
     else pending.delete(result.operationId);
-    this.reads.delete(result.operationId);
     if (!pending.size) this.unsettled.delete(hostId);
   }
 
@@ -30,7 +28,6 @@ export class HostSerialExecutor implements OperationExecutor {
     const operations = this.unsettled.get(hostId);
     if (operations?.get(operationId)) return false;
     operations?.delete(operationId);
-    this.reads.delete(operationId);
     if (!operations?.size) this.unsettled.delete(hostId);
     return true;
   }
@@ -60,22 +57,19 @@ export class HostSerialExecutor implements OperationExecutor {
         return { operationId: operation.id, status: 'failed', effects: 'none', stdoutTail: 'Authorization expired while waiting for the host write lock; no operation was sent' };
       }
       if (this.unsettled.has(hostId) && !options?.readOnly) {
-        return { operationId: operation.id, status: 'failed', effects: 'none',
-          stdoutTail: 'Another command on this host has an unresolved remote outcome; verify it before further Agent writes' };
+        const blockedBy = [...this.unsettled.get(hostId)!.keys()].slice(0, 3).join(', ');
+        return { operationId: operation.id, status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation',
+          stdoutTail: `Another command on this host has an unresolved remote outcome (${blockedBy}); verify it before further Agent writes` };
       }
       let result: OperationResult;
       try { result = await this.downstream.execute(operation, fingerprint, signal, options); }
       catch (error) {
-        this.track(hostId, operation.id, null);
+        if (!options?.readOnly) this.track(hostId, operation.id, null);
         throw error;
       }
-      if (result.remoteCompletion) {
-        if (options?.readOnly) this.reads.add(operation.id);
-        this.track(hostId, operation.id, result.remoteCompletion);
-        void result.remoteCompletion.finally(() => this.reads.delete(operation.id)).catch(() => {});
-      }
-      else if (result.status === 'unknown' || result.status === 'handed-over'
-        || (result.status === 'failed' && result.effects === 'possible' && !options?.readOnly)) this.track(hostId, operation.id, null);
+      const unresolved = result.status === 'unknown' || result.status === 'handed-over'
+        || (result.status === 'failed' && result.effects === 'possible');
+      if (!options?.readOnly && unresolved) this.track(hostId, operation.id, result.remoteCompletion ?? null);
       return result;
     } finally {
       release();

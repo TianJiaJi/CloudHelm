@@ -47,8 +47,8 @@ export class WorkJournal {
           || [...value.changes, ...value.recovery, ...value.access].some((text) => !text.trim())) {
           return result('Provide access details, changes and recovery; explicitly state when a field is not applicable', true);
         }
-        if (operations.some((operation) => ['running', 'proposed', 'approved', 'unknown'].includes(operation.status)
-          || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt))) {
+        if (operations.some((operation) => !operation.readOnly && (['running', 'proposed', 'approved', 'unknown'].includes(operation.status)
+          || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt)))) {
           return result('Reconcile outstanding or unknown operation outcomes before submitting verification', true);
         }
         this.report = value;

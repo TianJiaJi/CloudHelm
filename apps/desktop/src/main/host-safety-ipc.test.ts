@@ -18,11 +18,11 @@ function setup() {
 describe('host review mode IPC', () => {
   it('serializes full and mode-only edits, preserving latest protected paths and distinct revisions', async () => {
     const { host, call } = setup();
-    await Promise.all([invoke('update-host-safety', 'host', 'ai-review', ['/new']), invoke('update-host-review-mode', 'host', 'permissive')]);
-    expect(host).toMatchObject({ defaultMode: 'permissive', protectedPaths: ['/new'], policyRevision: 3 });
+    await Promise.all([invoke('update-host-safety', 'host', 'ai-review', ['/read'], ['/write']), invoke('update-host-review-mode', 'host', 'permissive')]);
+    expect(host).toMatchObject({ defaultMode: 'permissive', protectedReadPaths: ['/read'], protectedWritePaths: ['/write'], policyRevision: 3 });
     expect(call.mock.calls).toEqual([
-      [{ method: 'update-host-safety', hostId: 'host', mode: 'ai-review', protectedPaths: ['/new'], revision: 2 }],
-      [{ method: 'update-host-safety', hostId: 'host', mode: 'permissive', protectedPaths: ['/new'], revision: 3 }]
+      [{ method: 'update-host-safety', hostId: 'host', mode: 'ai-review', protectedReadPaths: ['/read'], protectedWritePaths: ['/write'], revision: 2 }],
+      [{ method: 'update-host-safety', hostId: 'host', mode: 'permissive', protectedReadPaths: ['/read'], protectedWritePaths: ['/write'], revision: 3 }]
     ]);
   });
   it('retains authoritative mode on runtime failure and allows subsequent retry', async () => {

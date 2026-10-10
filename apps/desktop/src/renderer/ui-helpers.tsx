@@ -7,7 +7,7 @@ export const statusLabel: Record<TaskStatus, string> = {
   draft: '准备就绪', running: '正在处理', 'waiting-review': '等待确认', 'waiting-user': '等待你的回答', 'human-control': '你已接管', recovering: '核验远端状态',
   paused: '已暂停', answered: '已回答', 'ready-for-review': '待验收', accepted: '已验收', failed: '需要处理'
 };
-export const reviewLabel = { ask: '人工批准', 'ai-review': 'AI 审核', permissive: '自动执行' };
+export const reviewLabel = { ask: '重要操作询问', 'ai-review': 'AI 审核', permissive: '完全访问' };
 export type IconName = 'terminal' | 'server' | 'chat' | 'plus' | 'close' | 'more' | 'settings' | 'shield' | 'folder' | 'file' | 'arrow' | 'attach' | 'pause' | 'play' | 'stop' | 'expand' | 'disconnect' | 'check' | 'chevron' | 'copy' | 'edit';
 const paths: Record<IconName, string> = {
   terminal: 'm4 6 5 6-5 6m8 0h8', server: 'M4 4h16v6H4zM4 14h16v6H4zM7 7h.01M7 17h.01',

@@ -89,7 +89,20 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:save-profile', (_event, profile: Parameters<DesktopAPI['saveModelProfile']>[0]) => state.saveProfile(profile));
   ipcMain.handle('cloudhelm:save-review-settings', async (_event, settings: Parameters<DesktopAPI['saveReviewSettings']>[0]) => {
     state.saveReviewSettings(settings);
-    await runtime.call({ method: 'set-review-key', jevKey: state.reviewKey() });
+    const tasks = state.snapshot().conversations;
+    try {
+      await runtime.call({ method: 'set-review-key', jevKey: state.reviewKey() });
+      for (const task of tasks) {
+        if (!await runtime.call<boolean>({ method: 'has-task', taskId: task.id })) continue;
+        await runtime.call({ method: 'set-review-profile', taskId: task.id,
+          reviewer: state.runtimeReviewerForLiveTask(task) });
+      }
+    } catch (error) {
+      // Persistence succeeded but a live worker may still have the old reviewer.
+      // Stop active turns; the next user turn resynchronizes before tool use.
+      await Promise.allSettled(tasks.map((task) => runtime.call({ method: 'pause-task', taskId: task.id })));
+      throw error;
+    }
   });
   ipcMain.handle('cloudhelm:shortcuts', () => state.shortcuts());
   ipcMain.handle('cloudhelm:save-shortcuts', (_event, settings: Parameters<DesktopAPI['saveShortcuts']>[0]) => state.saveShortcuts(settings));
@@ -141,6 +154,11 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:stop-terminal', (_event, terminalId: string) => runtime.call({ method: 'stop-terminal', terminalId }));
   ipcMain.handle('cloudhelm:resize', (_event, terminalId: string, cols: number, rows: number) => runtime.call({ method: 'resize', terminalId, cols, rows }));
   ipcMain.handle('cloudhelm:decide-approval', (_event, approvalId: string, approved: boolean) => runtime.call({ method: 'decide-approval', approvalId, approved }));
+  ipcMain.handle('cloudhelm:request-ai-denial-review', (_event, taskId: string, operationId: string) => {
+    const operation = state.snapshot().operations.find((item) => item.id === operationId && item.taskId === taskId);
+    if (!operation?.manualReviewAvailable || operation.ruleId !== 'ai-review-deny') throw new Error('该操作不可人工复核');
+    return runtime.call({ method: 'request-ai-denial-review', taskId, operationId });
+  });
   ipcMain.handle('cloudhelm:answer-input', (_event, requestId: string, answer: string) => runtime.call({ method: 'answer-input', requestId, answer }));
   ipcMain.handle('cloudhelm:cancel-input', (_event, requestId: string) => runtime.call({ method: 'cancel-input', requestId }));
   ipcMain.handle('cloudhelm:pause-task', (_event, taskId: string) => runtime.call({ method: 'pause-task', taskId }));
@@ -207,7 +225,8 @@ void app.whenReady().then(async () => {
     }
   }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event));
   await runtime.call({ method: 'restore-operations', operations: state.snapshot().operations
-    .filter((operation) => operation.status === 'unknown' || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt)).map(({ id, hostId }) => ({ id, hostId })) });
+    .filter((operation) => !operation.readOnly && (operation.status === 'unknown'
+      || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt))).map(({ id, hostId }) => ({ id, hostId })) });
   registerIpc();
   createWindow();
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

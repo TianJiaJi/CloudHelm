@@ -45,6 +45,18 @@ export async function checkTerminalLayout(page, screenshot) {
       assert.equal(dimensions.resize.rows, dimensions.rows, 'SSH PTY receives the rendered row count');
     }
     await screenshot(agent ? 'terminal-agent-last-line.png' : 'terminal-human-last-line.png');
+    await page.locator('.xterm-viewport').evaluate((viewport) => { viewport.scrollTop = 0; });
+    await page.evaluate(() => {
+      const resize = window.fixture.calls.filter((call) => call.kind === 'resize').at(-1);
+      window.fixture.inject({ type: 'terminal-data', terminalId: resize.id,
+        data: `${Array.from({ length: 40 }, (_, index) => `continued line ${index}\r\n`).join('')}CLOUDHELM_FOLLOW_PROMPT> ` });
+    });
+    await page.waitForFunction(() => {
+      const holder = document.querySelector('[aria-label="SSH terminal"]');
+      const viewport = holder?.querySelector('.xterm-viewport');
+      return !!viewport && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 2
+        && holder?.querySelector('.xterm-rows')?.textContent.includes('CLOUDHELM_FOLLOW_PROMPT>');
+    });
   }
   await page.setViewportSize(originalViewport);
   await page.getByRole('button', { name: '生产服务器', exact: true }).click();

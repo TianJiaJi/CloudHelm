@@ -99,6 +99,19 @@ describe('conversation credential binding', () => {
     expect(state.runtimeProfile().credentialRevision).toBe(task.credentialRevision);
   });
 
+  it('can update a live task reviewer without loading newly saved model credentials', () => {
+    const { state } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    state.saveProfile(customProfile({ apiKey: 'another-account-key' }));
+    expect(() => state.conversationProfile(task)).toThrow('重新选择模型');
+    state.saveReviewSettings({ reviewer: { kind: 'current' } });
+    const reviewer = state.runtimeReviewerForLiveTask(task);
+    expect(reviewer).toMatchObject({ selection: { kind: 'current' },
+      provider: 'cloudhelm-custom', modelId: 'model-one' });
+    expect(reviewer.apiKey).toBeUndefined();
+  });
+
   it('does not redirect an existing conversation when another provider becomes the global default', () => {
     const { state } = setup();
     state.saveProfile(customProfile());
@@ -271,6 +284,18 @@ describe('conversation deletion', () => {
     });
   it('rejects unknown conversations', () => {
     expect(() => setup().state.deleteTask('missing')).toThrow();
+  });
+  it('allows deletion after a read-only query loses its output, while retaining unknown writes', () => {
+    const { state } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    state.record({ type: 'operation', value: { id: 'query', taskId: task.id, hostId: 'host', kind: 'command',
+      preview: 'df -h', status: 'unknown', readOnly: true, createdAt: 1 } });
+    expect(() => state.deleteTask(task.id)).not.toThrow();
+    const writeTask = conversation(state);
+    state.record({ type: 'operation', value: { id: 'write', taskId: writeTask.id, hostId: 'host', kind: 'command',
+      preview: 'touch /tmp/file', status: 'unknown', readOnly: false, createdAt: 2 } });
+    expect(() => state.deleteTask(writeTask.id)).toThrow(/远端结果尚未核验/u);
   });
 });
 

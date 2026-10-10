@@ -27,6 +27,9 @@ describe('friendly error presentation', () => {
     ['模型连接测试失败，请检查 Key、地址和模型权限', 'model-test'],
     ['status code: 401', 'model-auth'],
     ['OS credential encryption is unavailable', 'credential-storage'],
+    ['模型输出达到长度上限，尚未给出完整操作或结论', 'model-length'],
+    ['主机上有尚未核验的远端操作', 'remote-unresolved'],
+    ['操作未执行，审核未放行', 'review-not-allowed'],
     ['旧的多主机对话仅供查看', 'read-only-history']
   ])('maps %s to actionable business copy', (message, code) => {
     expect(presentError(message).code).toBe(code);

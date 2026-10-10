@@ -252,6 +252,20 @@ export class SshTransport {
     });
   }
 
+  /** Read a small regular script for policy analysis; never follow symlinks or expose it to the model. */
+  async inspectScript(hostId: string, absolutePath: string): Promise<{ source: string; sha256: string }> {
+    return this.withSftp(hostId, async (sftp) => {
+      await this.checkSafeParent(sftp, absolutePath);
+      const stat = await this.lstatOptional(sftp, absolutePath);
+      if (!stat || !stat.isFile() || stat.isSymbolicLink() || stat.size > 65_536) throw new Error('Script is not a small regular file');
+      const bytes = await this.readSftpFile(sftp, absolutePath);
+      if (bytes.length > 65_536 || bytes.includes(0)) throw new Error('Script content is not inspectable text');
+      const source = bytes.toString('utf8');
+      if (!Buffer.from(source, 'utf8').equals(bytes)) throw new Error('Script encoding is not valid UTF-8');
+      return { source, sha256: createHash('sha256').update(bytes).digest('hex') };
+    });
+  }
+
   /** Writes through a private temporary file and retains a private backup of an overwritten file. */
   async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAuthorized: () => void = () => {}): Promise<string | undefined> {
     if (content.length > 1_048_576) throw new Error('Structured writes are limited to 1 MiB');

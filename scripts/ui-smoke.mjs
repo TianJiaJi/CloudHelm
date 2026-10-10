@@ -103,6 +103,8 @@ async function exerciseConversation() {
   assert.equal(await page.getByText('生产服务器 · SSH 终端').count(), 1);
   await page.evaluate(() => window.fixture.decorate());
   await page.getByText('需要你确认安装系统依赖').waitFor();
+  await page.getByText('待批准的完整操作').waitFor();
+  await page.getByText('sudo apt-get install -y docker.io', { exact: true }).waitFor();
   assert.equal(await page.getByRole('dialog').count(), 0);
   await screenshot('main-dark.png');
   await page.getByRole('button', { name: '批准这次操作' }).click();

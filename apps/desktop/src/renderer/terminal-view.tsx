@@ -71,10 +71,16 @@ export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
 
   useEffect(() => {
     if (!tab || !terminal.current) return;
+    const xterm = terminal.current;
     if (shown.current < tab.offset || shown.current > tab.offset + tab.buffer.length) {
-      terminal.current.reset(); shown.current = tab.offset;
+      xterm.reset(); shown.current = tab.offset;
     }
-    terminal.current.write(tab.buffer.slice(shown.current - tab.offset));
+    const incoming = tab.buffer.slice(shown.current - tab.offset);
+    if (incoming) xterm.write(incoming, () => {
+      // xterm writes asynchronously. Following before the callback can leave
+      // the viewport above output that has not been parsed yet.
+      if (terminal.current === xterm) xterm.scrollToBottom();
+    });
     shown.current = tab.offset + tab.buffer.length;
   }, [terminalId, tab?.buffer, tab?.offset]);
 

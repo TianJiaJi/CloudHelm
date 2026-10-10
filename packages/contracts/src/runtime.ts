@@ -1,9 +1,10 @@
-import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, TaskStatus, TaskView } from './index.js';
+import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, ReviewSelection, TaskStatus, TaskView } from './index.js';
 
 export interface RuntimeHost extends HostView { secret?: string }
 export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 'trust-required' }>
   | { status: 'trust-required'; stage: 'host' | 'jump'; fingerprint: string; expectedFingerprint?: string };
-export interface RuntimeProfile { provider: string; modelId: string; baseUrl?: string; apiKey: string; credentialRevision?: string; jevKey?: string }
+export interface RuntimeReviewProfile { selection: ReviewSelection; provider: string; modelId: string; baseUrl?: string; apiKey?: string; revision: number }
+export interface RuntimeProfile { provider: string; modelId: string; baseUrl?: string; apiKey: string; credentialRevision?: string; jevKey?: string; reviewer?: RuntimeReviewProfile }
 
 export type RuntimeCall =
   | { method: 'prepare-message'; taskId?: string; requestId: string; document: import('./message-content.js').MessageDocument; bodies: import('./message-content.js').ReferenceBody[]; profile: RuntimeProfile; usedTokens: number }
@@ -17,11 +18,14 @@ export type RuntimeCall =
   | { method: 'test-host'; host: RuntimeHost; jump?: RuntimeHost }
   | { method: 'disconnect'; hostId: string }
   | { method: 'set-review-key'; jevKey?: string }
+  | { method: 'set-review-profile'; taskId: string; reviewer: RuntimeReviewProfile }
+  | { method: 'update-conversation-review-mode'; taskId: string; hostId: string; mode: ReviewMode; revision: number }
+  | { method: 'request-ai-denial-review'; taskId: string; operationId: string }
   | { method: 'test-model'; profile: RuntimeProfile }
   | { method: 'set-conversation-model'; taskId: string; profile: RuntimeProfile }
   | { method: 'stop-operation'; taskId: string }
   | { method: 'has-task'; taskId: string }
-  | { method: 'update-host-safety'; hostId: string; mode: ReviewMode; protectedPaths: string[]; revision: number }
+  | { method: 'update-host-safety'; hostId: string; mode: ReviewMode; protectedReadPaths: string[]; protectedWritePaths: string[]; revision: number }
   | { method: 'open-terminal'; hostId: string }
   | { method: 'close-terminal'; terminalId: string }
   | { method: 'terminal-input'; terminalId: string; data: string; humanIntent: boolean }
@@ -54,4 +58,4 @@ export type RuntimeMessage =
   | { event: { type: 'task-status'; taskId: string; status: TaskStatus; summary?: string; requestCount?: number } }
   | { event: { type: 'host-status'; hostId: string; status: HostView['status'] } };
 
-export interface HostSafetyConfig { mode: ReviewMode; protectedPaths: string[] }
+export interface HostSafetyConfig { mode: ReviewMode; protectedReadPaths: string[]; protectedWritePaths: string[] }

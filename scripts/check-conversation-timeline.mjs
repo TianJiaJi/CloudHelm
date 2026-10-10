@@ -20,7 +20,7 @@ export async function checkConversationTimeline(page, screenshot) {
     window.fixture.timelineSnapshot = next;
     window.fixture.inject({ type: 'snapshot', value: next });
   });
-  await page.getByRole('status').filter({ hasText: 'AI 正在处理执行结果' }).waitFor();
+  await page.getByRole('status').filter({ hasText: 'AI 正在准备下一步' }).waitFor();
   await page.evaluate(() => {
     const next = structuredClone(window.fixture.timelineSnapshot);
     next.conversations[0].status = 'paused';
@@ -32,7 +32,7 @@ export async function checkConversationTimeline(page, screenshot) {
   });
   const summary = page.locator('article').filter({ hasText: '根分区使用率' });
   await summary.waitFor();
-  assert.equal(await page.getByText('AI 正在处理执行结果…', { exact: true }).count(), 0);
+  assert.equal(await page.getByText('AI 正在准备下一步…', { exact: true }).count(), 0);
   const order = () => page.evaluate(() => {
     const main = document.querySelector('[class*="agentScroll"]');
     return main.innerText;

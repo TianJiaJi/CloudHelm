@@ -65,6 +65,36 @@ export class SqliteStore {
         INSERT INTO schema_migrations(version, applied_at) VALUES (5, unixepoch());
       `);
     })();
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 6').get()) return;
+      this.raw.exec(`
+        UPDATE records SET value = json_set(value,
+          '$.protectedReadPaths', json(coalesce(json_extract(value, '$.protectedReadPaths'), json_extract(value, '$.protectedPaths'), '[]')),
+          '$.protectedWritePaths', json(coalesce(json_extract(value, '$.protectedWritePaths'), json_extract(value, '$.protectedPaths'), '[]')))
+        WHERE bucket = 'hosts';
+        UPDATE records SET value = json_set(value,
+          '$.reviewModesByHost', json(coalesce(json_extract(value, '$.reviewModesByHost'),
+            (SELECT json_group_object(ids.value, coalesce(json_extract(host.value, '$.defaultMode'), 'ask'))
+             FROM json_each(records.value, '$.hostIds') AS ids
+             LEFT JOIN records AS host ON host.bucket = 'hosts' AND host.id = ids.value), '{}')),
+          '$.reviewRevision', coalesce(json_extract(value, '$.reviewRevision'), 1))
+        WHERE bucket = 'tasks';
+        INSERT INTO schema_migrations(version, applied_at) VALUES (6, unixepoch());
+      `);
+    })();
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 7').get()) return;
+      // Legacy records did not persist the read-only capability. Only exact,
+      // trivially safe historical previews can be recovered without the source command.
+      this.raw.exec(`
+        UPDATE records SET value = json_set(value, '$.readOnly', json('true'))
+        WHERE bucket = 'operations' AND json_extract(value, '$.kind') = 'command'
+          AND json_extract(value, '$.status') = 'unknown'
+          AND json_extract(value, '$.readOnly') IS NULL
+          AND json_extract(value, '$.preview') IN ('df -h', 'df -hT', 'docker ps', 'docker ps -a');
+        INSERT INTO schema_migrations(version, applied_at) VALUES (7, unixepoch());
+      `);
+    })();
     this.db = drizzle(this.raw);
   }
 

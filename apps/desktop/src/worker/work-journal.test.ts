@@ -53,6 +53,11 @@ describe('verification evidence', () => {
       expect(test.journal.hasReport()).toBe(false);
     });
 
+  it('does not require reconciliation for a previously classified read-only query', async () => {
+    const test = setup([operation('verification'), { ...operation('old-df', 'unknown'), readOnly: true, preview: 'df -h' }]);
+    expect((await test.call('submit_verification', report())).isError).not.toBe(true);
+  });
+
   it('requires meaningful access, change and recovery notes before emitting an acceptance report', async () => {
     const test = setup([operation('verification')]);
     for (const field of ['access', 'changes', 'recovery'] as const) {

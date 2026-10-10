@@ -60,6 +60,14 @@ const api: DesktopAPI = {
     const host = view.hosts.find((item) => item.id === id)!;
     host.defaultMode = mode; host.policyRevision++; sync();
   },
+  updateConversationReviewMode: async (taskId, hostId, mode) => {
+    calls.push({ kind: 'review-mode', taskId, hostId, mode });
+    const task = view.conversations.find((item) => item.id === taskId)!;
+    task.reviewModesByHost = { ...task.reviewModesByHost, [hostId]: mode };
+    task.reviewRevision = (task.reviewRevision ?? 1) + 1;
+    sync();
+  },
+  requestAiDenialReview: unsupported,
   connectHost: async (id) => { calls.push({ kind: 'connect', id }); view.hosts.find((host) => host.id === id)!.status = 'connected'; sync(); },
   openTerminal: async (hostId) => {
     const terminal: TerminalViewState = { id: `term${++sequence}`, hostId, state: 'human' };
@@ -88,7 +96,8 @@ const api: DesktopAPI = {
     calls.push({ kind: 'start', input });
     const conversation = { id: `chat${++sequence}`, goal: input.message, hostIds: input.hostId ? [input.hostId] : [], localScopes: [],
       status: 'running' as const, provider: input.model!.provider, modelId: input.model!.modelId,
-      requestCount: 1, requestLimit: 100, createdAt: Date.now(), updatedAt: Date.now() };
+      reviewModesByHost: input.hostId ? { [input.hostId]: view.hosts.find((host) => host.id === input.hostId)!.defaultMode } : {},
+      reviewRevision: 1, requestCount: 1, requestLimit: 100, createdAt: Date.now(), updatedAt: Date.now() };
     Object.assign(conversation, { thinking: { levels: ['off', 'low', 'medium', 'high', 'xhigh'], selected: input.thinkingLevel ?? 'off', effective: input.thinkingLevel ?? 'off', pending: false }, session: { version: 1, id: conversation.id } });
     view.conversations.push(conversation);
     view.messages.push({ taskId: conversation.id, role: 'user', text: input.message, createdAt: Date.now() });

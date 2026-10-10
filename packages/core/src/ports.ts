@@ -4,8 +4,19 @@ export interface CommandAnalyzer {
   analyze(command: string): Promise<CommandAnalysis>;
 }
 
+export interface ScriptInspector {
+  inspect(operation: ProposedOperation & { kind: 'command' }, scriptPath: string): Promise<{ source: string; sha256: string }>;
+  verify(operation: ProposedOperation & { kind: 'command' }, scriptPath: string, sha256: string): Promise<boolean>;
+}
+
 export interface RiskEvaluator {
-  evaluate(operation: ProposedOperation, analysis: CommandAnalysis | undefined): Promise<'allow' | 'review' | 'deny' | 'error'>;
+  evaluate(operation: ProposedOperation, analysis: CommandAnalysis | undefined): Promise<RiskAssessment | RiskAssessment['verdict']>;
+}
+
+export interface RiskAssessment {
+  verdict: 'allow' | 'review' | 'deny' | 'error';
+  reason?: string;
+  reviewer?: string;
 }
 
 export interface ApprovalRequester {
@@ -27,6 +38,7 @@ export interface OperationExecutor {
 
 export interface OperationAudit {
   proposed(operation: ProposedOperation, fingerprint: string): Promise<void>;
+  classified?(operationId: string, readOnly: boolean): Promise<void>;
   decided(operationId: string, decision: SafetyDecision, fingerprint: string): Promise<void>;
   completed(result: OperationResult): Promise<void>;
 }

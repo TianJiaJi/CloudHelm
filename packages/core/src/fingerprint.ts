@@ -12,8 +12,12 @@ export function operationFingerprint(operation: ProposedOperation): string {
     terminalId: scope.terminalId,
     terminalGeneration: scope.terminalGeneration,
     policyRevision: scope.policyRevision,
+    conversationRevision: scope.conversationRevision,
+    reviewerRevision: scope.reviewerRevision,
     allowedWorkingRoots: scope.allowedWorkingRoots,
     protectedPaths: scope.protectedPaths,
+    protectedReadPaths: scope.protectedReadPaths,
+    protectedWritePaths: scope.protectedWritePaths,
     kind: operation.kind,
     payload: operation.kind === 'command' ? operation.command
       : operation.kind === 'write-file' ? [operation.path, operation.content]
@@ -26,7 +30,8 @@ export function operationFingerprint(operation: ProposedOperation): string {
 /** Replay identity excludes transient approval leases; it never authorizes execution. */
 export function operationIntentKey(operation: ProposedOperation): string {
   return operationFingerprint({ ...operation, scope: { ...operation.scope,
-    taskId: '', terminalId: '', terminalGeneration: 0, policyRevision: 0,
-    connectionGeneration: undefined, sessionId: undefined, allowedWorkingRoots: [], protectedPaths: [], goal: ''
+    taskId: '', terminalId: '', terminalGeneration: 0, policyRevision: 0, conversationRevision: 0, reviewerRevision: 0,
+    connectionGeneration: undefined, sessionId: undefined, allowedWorkingRoots: [], protectedPaths: [],
+    protectedReadPaths: [], protectedWritePaths: [], goal: ''
   } });
 }

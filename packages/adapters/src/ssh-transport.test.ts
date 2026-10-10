@@ -34,6 +34,20 @@ function sftpFixture(existing: boolean, afterWrite: () => void) {
 }
 
 describe('SFTP commit authorization', () => {
+  it('rejects a symbolic-link parent before reading a script or staging a structured write', async () => {
+    const calls = sftpFixture(false, () => {});
+    const read = vi.fn();
+    state.sftp.readFile = read;
+    state.sftp.lstat = (target: string, callback: (error: null, result: unknown) => void) => callback(null,
+      target === '/srv/app' ? { isDirectory: () => true, isSymbolicLink: () => true }
+        : { isDirectory: () => true, isSymbolicLink: () => false });
+    const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+    await expect(ssh.inspectScript('host', '/srv/app/setup.sh')).rejects.toThrow('Unsafe or missing parent');
+    await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({ effects: 'none' });
+    expect(read).not.toHaveBeenCalled();
+    expect(calls.write).not.toHaveBeenCalled();
+  });
+
   it('does not rename or clean up a staged write after authorization is revoked', async () => {
     let authorized = true;
     const calls = sftpFixture(false, () => { authorized = false; });

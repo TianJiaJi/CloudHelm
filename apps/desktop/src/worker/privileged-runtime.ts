@@ -101,7 +101,9 @@ export class PrivilegedRuntime implements OperationExecutor {
         const outcome = await gate.execute({ id: probeId, kind: 'command', command: 'id -u', scope: {
           taskId, hostId: host.id, terminalId, terminalGeneration: this.deps.terminal.currentGeneration(terminalId),
           cwd, runAs: 'root', loginAs: entry.mode === 'ssh' ? 'root' : host.username, sessionId: entry.id, connectionGeneration: 1,
-          policyRevision: host.policyRevision, allowedWorkingRoots: ['/'], protectedPaths: [...host.protectedPaths], goal
+          policyRevision: host.policyRevision, allowedWorkingRoots: ['/'], protectedPaths: [...host.protectedPaths],
+          protectedReadPaths: [...(host.protectedReadPaths ?? host.protectedPaths)],
+          protectedWritePaths: [...(host.protectedWritePaths ?? host.protectedPaths)], goal
         } }, controller.signal);
         if (outcome.result?.status !== 'succeeded' || outcome.result.stdoutTail.trim() !== '0') throw new Error('Root identity could not be verified; session closed');
         this.grants.activate(entry.id, taskId, host.id);

@@ -1,13 +1,66 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SqliteStore } from './sqlite-store.js';
 
 const stores: SqliteStore[] = [];
+const tempDirs: string[] = [];
 function open(): SqliteStore {
   const store = new SqliteStore(':memory:');
   stores.push(store);
   return store;
 }
-afterEach(() => { for (const store of stores.splice(0)) store.close(); });
+afterEach(() => {
+  for (const store of stores.splice(0)) store.close();
+  for (const directory of tempDirs.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+it('migrates old host protection and captures each existing conversation effective review mode', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-policy-'));
+  tempDirs.push(directory);
+  const file = join(directory, 'records.sqlite');
+  const legacy = new Database(file);
+  legacy.exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+    CREATE TABLE records(bucket TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY(bucket, id));
+    INSERT INTO schema_migrations VALUES(4, 1), (5, 1);`);
+  const put = legacy.prepare('INSERT INTO records(bucket,id,value,updated_at) VALUES(?,?,?,1)');
+  put.run('hosts', 'old', JSON.stringify({ id: 'old', defaultMode: 'permissive', protectedPaths: ['/srv/secret'] }));
+  put.run('tasks', 'task', JSON.stringify({ id: 'task', hostIds: ['old'] }));
+  legacy.close();
+  const migrated = new SqliteStore(file);
+  stores.push(migrated);
+  expect(migrated.get('hosts', 'old')).toMatchObject({ protectedReadPaths: ['/srv/secret'],
+    protectedWritePaths: ['/srv/secret'] });
+  expect(migrated.get('tasks', 'task')).toMatchObject({ reviewModesByHost: { old: 'permissive' }, reviewRevision: 1 });
+  migrated.close(); stores.pop();
+  const reopened = new SqliteStore(file);
+  stores.push(reopened);
+  expect(reopened.get('tasks', 'task')).toMatchObject({ reviewModesByHost: { old: 'permissive' } });
+});
+
+it('recovers only exact legacy read-only unknown previews', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-read-only-'));
+  tempDirs.push(directory);
+  const file = join(directory, 'records.sqlite');
+  const legacy = new Database(file);
+  legacy.exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+    CREATE TABLE records(bucket TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY(bucket, id));
+    INSERT INTO schema_migrations VALUES(4, 1), (5, 1), (6, 1);`);
+  const put = legacy.prepare('INSERT INTO records(bucket,id,value,updated_at) VALUES(?,?,?,1)');
+  put.run('operations', 'query', JSON.stringify({ kind: 'command', status: 'unknown', preview: 'df -h' }));
+  put.run('operations', 'unsafe', JSON.stringify({ kind: 'command', status: 'unknown', preview: 'df -h && rm /tmp/data' }));
+  put.run('operations', 'other', JSON.stringify({ kind: 'command', status: 'unknown', preview: 'docker ps --format "{{.Names}}"' }));
+  legacy.close();
+  const migrated = new SqliteStore(file);
+  stores.push(migrated);
+  expect(migrated.get<{ readOnly?: boolean }>('operations', 'query')?.readOnly).toBe(true);
+  expect(migrated.get<{ readOnly?: boolean }>('operations', 'unsafe')?.readOnly).toBeUndefined();
+  expect(migrated.get<{ readOnly?: boolean }>('operations', 'other')?.readOnly).toBeUndefined();
+});
 
 describe('record cleanup for deleted conversations', () => {
   it('removes records by JSON field and keeps other conversations', () => {

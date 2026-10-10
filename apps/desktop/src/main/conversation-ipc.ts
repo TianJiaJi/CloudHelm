@@ -41,7 +41,13 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
     const exists = await runtime.call<boolean>({ method: 'has-task', taskId: task.id });
     const profile = exists ? undefined : state.conversationProfile(task);
     for (const id of task.hostIds) if (state.getHost(id).status !== 'connected') await connectHost(id);
-    if (exists) return;
+    if (exists) {
+      // Repair a reviewer update that was saved while its worker response failed.
+      // This uses the live task identity without rebinding its model credentials.
+      await runtime.call({ method: 'set-review-profile', taskId: task.id,
+        reviewer: state.runtimeReviewerForLiveTask(task) });
+      return;
+    }
     const snapshot = state.snapshot();
     await runtime.call({ method: 'start-task', task, restored: true,
       hosts: task.hostIds.map((id) => state.runtimeHost(id)),
