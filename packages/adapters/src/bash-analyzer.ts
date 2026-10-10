@@ -59,6 +59,9 @@ function resolveGrammarPath(): string {
 }
 
 function isDynamic(node: SyntaxNode): boolean {
+  // Bash parses --format="..." as a concatenation even when both pieces are
+  // literal. Recognize only Docker's simple quoted field template here.
+  if (node.type === 'concatenation' && /^--format="(?:table )?\{\{\.[A-Za-z][A-Za-z0-9]*\}\}(?:(?:\\t|\t)\{\{\.[A-Za-z][A-Za-z0-9]*\}\})*"$/u.test(node.text)) return false;
   if (/expansion|substitution|glob|concatenation|arithmetic/u.test(node.type)) return true;
   return node.namedChildren.some(isDynamic);
 }

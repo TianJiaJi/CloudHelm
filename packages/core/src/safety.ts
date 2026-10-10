@@ -180,6 +180,21 @@ function isQuery(call: CommandCall): boolean {
   const name = path.posix.basename(call.name);
   if (![name, `/bin/${name}`, `/usr/bin/${name}`].includes(call.name)) return false;
   if (isServiceQuery(name, call.args)) return true;
+  // Docker's container listing is a daemon query. Keep the grammar narrow: a
+  // global -H/--host, context switch, or extra subcommand changes the target.
+  if (name === 'docker') {
+    const flags = call.args[0] === 'ps' ? call.args.slice(1)
+      : call.args[0] === 'container' && call.args[1] === 'ls' ? call.args.slice(2) : undefined;
+    if (!flags) return false;
+    for (let index = 0; index < flags.length; index++) {
+      const flag = flags[index]!;
+      if (['-a', '--all', '--no-trunc', '-q', '--quiet', '-s', '--size'].includes(flag)) continue;
+      if (flag !== '--format' && !flag.startsWith('--format=')) return false;
+      const format = flag === '--format' ? flags[++index] : flag.slice('--format='.length);
+      if (!format || !/^(?:table )?\{\{\.[A-Za-z][A-Za-z0-9]*\}\}(?:(?:\\t|\t)\{\{\.[A-Za-z][A-Za-z0-9]*\}\})*$/u.test(format)) return false;
+    }
+    return true;
+  }
   if ((BAD_DISK_TOOLS.has(name) || name.startsWith('mkfs.')) && call.args.length === 1
     && ['--help', '--version', '-h', '-V'].includes(call.args[0]!)) return true;
   if (name === 'fdisk') return ['-l', '--list'].includes(call.args[0] ?? '')
@@ -208,15 +223,24 @@ function isQuery(call: CommandCall): boolean {
 
 /** This capability is minted by the safety gate, never supplied by model/tool arguments. */
 export function isReadOnlyQuery(analysis: CommandAnalysis): boolean {
-  return !analysis.hasError && !analysis.hasCompound && !analysis.hasExpansion && !analysis.hasPipeline
-    && !analysis.hasRedirection && analysis.calls.length === 1 && isQuery(analysis.calls[0]!);
+  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection) return false;
+  if (!analysis.hasCompound && analysis.calls.length === 1) return isQuery(analysis.calls[0]!);
+  // The analyzer exposes a plain sudo invocation both as a wrapper and as its
+  // inner call. Only the Docker listing needed to inspect daemon access gets
+  // this capability; privileged file reads retain their separate review path.
+  const [wrapper, inner] = analysis.calls;
+  return analysis.hasCompound && analysis.steps?.length === 1 && analysis.calls.length === 2
+    && wrapper?.name === 'sudo' && !wrapper.dynamic && !wrapper.redirects
+    && !!inner && path.posix.basename(inner.name) === 'docker' && isQuery(inner)
+    && wrapper.args.length === inner.args.length + 1 && wrapper.args[0] === inner.name
+    && wrapper.args.slice(1).every((arg, index) => arg === inner.args[index]);
 }
 
 function isLowRiskCommand(analysis: CommandAnalysis, operation: ProposedOperation): boolean {
+  if (isReadOnlyQuery(analysis)) return true;
   if (analysis.hasCompound || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || analysis.calls.length !== 1) return false;
   const call = analysis.calls[0];
   if (!call) return false;
-  if (isQuery(call)) return true;
   if (call.name === 'cd' && call.args.length === 1) {
     const target = literalPath(call.args[0] ?? '', operation.scope.cwd);
     return target !== null && operation.scope.allowedWorkingRoots.some((root) => isInside(target, root));

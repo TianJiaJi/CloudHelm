@@ -137,6 +137,8 @@ class PiConversationSession implements ConversationSession {
           const message = event.message;
           if (message.stopReason === 'error' || message.stopReason === 'aborted') {
             this.failure ??= new Error(message.errorMessage || '模型回复未完成');
+          } else if (message.stopReason === 'length') {
+            this.failure ??= new Error('模型输出达到长度上限，尚未给出完整操作或结论。请缩小问题、降低思考档位或切换模型后继续。');
           } else if (this.active === this.selected && message.provider === this.active.provider && message.model === this.active.modelId) this.switched = false;
           options.event({ type: 'response' });
         }

@@ -47,6 +47,7 @@ export class SafetyGate {
           return { decision: safety };
         }
       }
+      await this.deps.audit.classified?.(operation.id, !!analysis && isReadOnlyQuery(analysis));
 
       let settings: SafetySettings;
       try { settings = this.deps.settings(operation.scope.hostId); }
@@ -118,7 +119,7 @@ export class SafetyGate {
           await this.deps.audit.decided(operation.id, canceled, fingerprint);
           return { decision: canceled };
         }
-        const request = { id: randomUUID(), operation, fingerprint, reason: safety.reason,
+        const request = { id: randomUUID(), operation, fingerprint, ruleId: safety.ruleId, reason: safety.reason,
           impact: safety.impact,
           targets: operation.kind === 'command' ? [...new Set([
             ...(analysis?.redirectTargets ?? []),

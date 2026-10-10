@@ -10,6 +10,7 @@ import { OperationCard, VerificationCard } from './workspace-pages.js';
 import { MarkdownMessage } from './markdown-message.js';
 import { ClarificationCard } from './clarification-card.js';
 import { UserMessage } from './user-message.js';
+import { presentError } from './error-presentation.js';
 import { conversationTimeline } from './conversation-timeline.js';
 import { capture, Icon, reviewLabel, statusLabel } from './ui-helpers.js';
 import { copyEntries, copyText } from './clipboard.js';
@@ -29,6 +30,8 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
   const [models, setModels] = useState<ModelOption[]>([]);
   const reasoning = conversation ? snapshot.reasoningProgress?.[conversation.id] : undefined;
   const scroll = useRef<HTMLDivElement>(null);
+  const scrollPinned = useRef(true);
+  const [now, setNow] = useState(Date.now());
   const messages = snapshot.messages.filter((message) => message.taskId === conversation?.id);
   const operations = snapshot.operations.filter((operation) => operation.taskId === conversation?.id);
   const clarifications = (snapshot.clarifications ?? []).filter((request) => request.taskId === conversation?.id);
@@ -42,8 +45,35 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
   const running = conversation && ['running', 'waiting-review', 'waiting-user', 'recovering'].includes(conversation.status);
   const hasRunningOperation = operations.some((operation) => operation.status === 'running'
     || (operation.status === 'unknown' && snapshot.terminals.some((terminal) => terminal.id === operation.logRef)));
+  const currentRequest = useUi((state) => conversation ? state.currentRequests[conversation.id] : undefined);
+  const elapsed = currentRequest ? Math.max(0, Math.floor((now - currentRequest.createdAt) / 1000)) : 0;
+  const activity = approvals.length ? '等待你批准或拒绝当前操作；命令尚未执行'
+    : conversation?.status === 'waiting-review' ? '正在准备操作审批…'
+      : inputs.length ? '等待你提供当前操作所需的信息'
+        : hasRunningOperation ? '远端命令正在执行；可打开 AI 终端查看输出'
+          : running && currentRequest ? `模型正在生成${reasoning ? '思考内容' : '回复'} · ${elapsed} 秒${elapsed >= 90 ? '；如需中止可点击停止' : ''}`
+            : running ? 'AI 正在准备下一步…' : '';
   useEffect(() => { void window.cloudhelm.availableModels().then(setModels).catch((error: unknown) => report(String(error))); }, [snapshot.profile.provider, snapshot.profile.modelId, snapshot.profile.hasKey, report]);
-  useEffect(() => { scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' }); }, [conversation?.id, messages.length, operations.length, clarifications.length, reasoning?.id]);
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+  useEffect(() => {
+    scrollPinned.current = true;
+    if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
+  }, [conversation?.id]);
+  useEffect(() => {
+    const element = scroll.current;
+    if (!element) return;
+    let frame = 0;
+    const observer = new MutationObserver(() => {
+      if (!scrollPinned.current || frame) return;
+      frame = window.requestAnimationFrame(() => { frame = 0; element.scrollTop = element.scrollHeight; });
+    });
+    observer.observe(element, { childList: true, characterData: true, subtree: true });
+    return () => { observer.disconnect(); if (frame) window.cancelAnimationFrame(frame); };
+  }, [conversation?.id]);
   const hostName = (id: string): string => snapshot.hosts.find((item) => item.id === id)?.label ?? id;
   return <>
     <header className={styles.agentHead}><span><Icon name="chat" />AI 助手</span><div><button title="新对话" aria-label="新对话" onClick={() => useUi.getState().newConversation(host?.id ?? null)}><Icon name="plus" /></button>
@@ -55,7 +85,15 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       <span className={styles.status}>{statusLabel[conversation.status]}</span>
       {conversation.session && !running && ['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
     </div>}
-    <div className={styles.agentScroll} ref={scroll}>
+    {activity && <div className={styles.agentActivity} role="status">{activity}</div>}
+    {conversation?.summary && ['paused', 'failed', 'recovering'].includes(conversation.status)
+      && <div className={styles.agentActivity} role="alert">{presentError(conversation.summary).description}</div>}
+    <div className={styles.agentScroll} ref={scroll}
+      onWheel={(event) => { if (event.deltaY < 0) scrollPinned.current = false; }}
+      onTouchMove={() => { scrollPinned.current = false; }}
+      onPointerMove={(event) => { if (event.buttons === 1) scrollPinned.current = false; }}
+      onKeyDown={(event) => { if (['PageUp', 'Home', 'ArrowUp'].includes(event.key)) scrollPinned.current = false; }}
+      onScroll={(event) => { const element = event.currentTarget; if (element.scrollHeight - element.clientHeight - element.scrollTop < 48) scrollPinned.current = true; }}>
       {!conversation && <div className={styles.agentWelcome}><span className={styles.welcomeIcon}><Icon name="chat" size={25} /></span><h2>{host ? '这台服务器，需要做些什么？' : '有什么想聊的？'}</h2>
         <p>{host ? '用自然语言告诉我目标。我会调查、执行并验证结果，需要你决定时会在这里说明。' : '可以直接提问。连接左侧主机后，也可以让我协助操作服务器。'}</p>
         {host && <div className={styles.suggestions}><span>你可以这样说</span><p>检查这台服务器的磁盘占用</p><p>帮我把这个服务装成 Docker 并启动</p></div>}
@@ -75,7 +113,6 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
         </article>;
       })}
       {reasoning && <article className={styles.message} key={reasoning.id}><strong>CloudHelm</strong><ReasoningContent value={reasoning.reasoning} /></article>}
-      {running && !hasRunningOperation && timeline.at(-1)?.kind === 'operation' && <p className={styles.note} role="status">AI 正在处理执行结果…</p>}
       {approvals.map((approval) => <ApprovalCard key={approval.id} approval={approval} host={hostName(approval.hostId)} report={report} />)}
       {inputs.filter((input) => input.kind !== 'secret' && input.kind !== 'otp').map((input) => <InputCard key={input.id} input={input} host={hostName(input.hostId)} report={report} />)}
       {inputs.filter((input) => (input.kind === 'secret' || input.kind === 'otp') && hiddenInputs.includes(input.id)).map((input) => <button className={styles.pendingInput} key={input.id} onClick={() => openInput(input.id)}><Icon name="shield" />{input.title} · 填写</button>)}

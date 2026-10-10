@@ -132,8 +132,23 @@ describe('deterministic safety policy', () => {
     expect(isReadOnlyQuery(await analyzer.analyze(value))).toBe(false);
   });
 
-  it.each(['ls -la /srv/app', 'pwd', 'hostname -I', 'date -u', 'id deploy', 'cat /srv/app/config', 'cat -- ./config ./logs/run.log'])('recognizes a pure read-only query: %s', async (value) => {
-    expect(isReadOnlyQuery(await analyzer.analyze(value))).toBe(true);
+  it.each(['ls -la /srv/app', 'pwd', 'hostname -I', 'date -u', 'id deploy', 'cat /srv/app/config', 'cat -- ./config ./logs/run.log',
+    'docker ps', 'docker ps -a', 'docker container ls --all', 'sudo docker ps -a',
+    'docker ps --format "{{.Names}}"', 'docker ps --format="{{.Names}}"',
+    'docker ps -a --format "table {{.Names}}\\t{{.Image}}\\t{{.Status}}"',
+    'docker container ls --all --format "{{.Names}}"'])('recognizes a pure read-only query: %s', async (value) => {
+    const analysis = await analyzer.analyze(value);
+    expect(isReadOnlyQuery(analysis), JSON.stringify(analysis)).toBe(true);
+    if (value.includes('docker')) for (const mode of ['ask', 'ai-review', 'permissive'] as const) {
+      expect(decideSafety(command(value), { mode, revision: 1 }, analysis).verdict).toBe('allow');
+    }
+  });
+
+  it.each(['docker run --rm alpine true', 'docker --host=tcp://other ps', 'docker ps --format "{{.Names}} {{.Image}}"',
+    'docker ps --format "{{.Names}}$(touch /tmp/changed)"', 'docker ps --format "{{.Names}}" --host=tcp://other',
+    'sudo cat /root/test/test',
+    'docker ps -a && docker rm old', 'sudo sh -c "docker ps -a"'])('does not grant a Docker read capability to %s', async (value) => {
+    expect(isReadOnlyQuery(await analyzer.analyze(value))).toBe(false);
   });
 
   it.each(['fdisk -l', 'fdisk --list /dev/sda', 'sfdisk -l /dev/sda', 'wipefs -n /dev/sda',

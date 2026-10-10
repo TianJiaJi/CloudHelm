@@ -82,6 +82,19 @@ export class SqliteStore {
         INSERT INTO schema_migrations(version, applied_at) VALUES (6, unixepoch());
       `);
     })();
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 7').get()) return;
+      // Legacy records did not persist the read-only capability. Only exact,
+      // trivially safe historical previews can be recovered without the source command.
+      this.raw.exec(`
+        UPDATE records SET value = json_set(value, '$.readOnly', json('true'))
+        WHERE bucket = 'operations' AND json_extract(value, '$.kind') = 'command'
+          AND json_extract(value, '$.status') = 'unknown'
+          AND json_extract(value, '$.readOnly') IS NULL
+          AND json_extract(value, '$.preview') IN ('df -h', 'df -hT', 'docker ps', 'docker ps -a');
+        INSERT INTO schema_migrations(version, applied_at) VALUES (7, unixepoch());
+      `);
+    })();
     this.db = drizzle(this.raw);
   }
 

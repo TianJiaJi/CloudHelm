@@ -285,6 +285,18 @@ describe('conversation deletion', () => {
   it('rejects unknown conversations', () => {
     expect(() => setup().state.deleteTask('missing')).toThrow();
   });
+  it('allows deletion after a read-only query loses its output, while retaining unknown writes', () => {
+    const { state } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    state.record({ type: 'operation', value: { id: 'query', taskId: task.id, hostId: 'host', kind: 'command',
+      preview: 'df -h', status: 'unknown', readOnly: true, createdAt: 1 } });
+    expect(() => state.deleteTask(task.id)).not.toThrow();
+    const writeTask = conversation(state);
+    state.record({ type: 'operation', value: { id: 'write', taskId: writeTask.id, hostId: 'host', kind: 'command',
+      preview: 'touch /tmp/file', status: 'unknown', readOnly: false, createdAt: 2 } });
+    expect(() => state.deleteTask(writeTask.id)).toThrow(/远端结果尚未核验/u);
+  });
 });
 
 describe('shortcut settings persistence', () => {

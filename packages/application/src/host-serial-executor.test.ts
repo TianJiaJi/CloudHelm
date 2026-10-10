@@ -8,6 +8,24 @@ const operation: ProposedOperation = { id: 'one', kind: 'command', command: 'sle
 } };
 
 describe('cross-task host write isolation', () => {
+  it('does not retain a successful command with a completion promise as unresolved', async () => {
+    const remoteCompletion = new Promise<'exited'>(() => {});
+    const downstream = { execute: vi.fn().mockResolvedValueOnce({ operationId: 'one', status: 'succeeded', exitCode: 0,
+      stdoutTail: '', remoteCompletion }).mockResolvedValue({ operationId: 'two', status: 'succeeded', stdoutTail: '' }) };
+    const serial = new HostSerialExecutor(downstream);
+    await serial.execute(operation, 'fingerprint');
+    expect((await serial.execute({ ...operation, id: 'two' }, 'fingerprint')).status).toBe('succeeded');
+    expect(downstream.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retain a recognized read-only query with an unknown result as a write lock', async () => {
+    const remoteCompletion = new Promise<'exited'>(() => {});
+    const downstream = { execute: vi.fn().mockResolvedValueOnce({ operationId: 'one', status: 'unknown',
+      stdoutTail: '', remoteCompletion }).mockResolvedValue({ operationId: 'two', status: 'succeeded', stdoutTail: '' }) };
+    const serial = new HostSerialExecutor(downstream);
+    await serial.execute(operation, 'fingerprint', undefined, { readOnly: true });
+    expect((await serial.execute({ ...operation, id: 'two' }, 'fingerprint')).status).toBe('succeeded');
+  });
   it('revalidates authorization after waiting for a host lock and never sends an expired queued operation', async () => {
     let finishFirst!: (result: OperationResult) => void;
     const firstResult = new Promise<OperationResult>((resolve) => { finishFirst = resolve; });

@@ -8,10 +8,11 @@ import type { AppEvent, ApprovalView, OperationView, InterruptionSource, UserInt
 import { isActiveTaskStatus } from '@cloudhelm/contracts';
 import type { LocalScope } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
-import { recoveryContextMessage } from './recovery-context.js';
+import { hasUnresolvedOperation, recoveryContextMessage } from './recovery-context.js';
 import { createRemoteTools } from './remote-tools.js';
 import { agentPrompt } from './agent-prompt.js';
 import { agentAuthorization } from './agent-authorization.js';
+import { approvalPresentation } from './approval-presentation.js';
 import { WorkJournal } from './work-journal.js';
 import { LocalFileAccess } from './local-file-access.js';
 
@@ -142,7 +143,7 @@ export class TaskRunner {
         if (event.type === 'thinking') this.signals.event({ type: 'thinking', taskId: this.task.id, value: event.value });
         if (event.type === 'activity') this.publishExecution();
         if (event.type === 'text') {
-          if (event.value.role === 'user' && !event.value.document) this.currentGoal = `${this.task.goal}\n用户最近补充：${event.value.text}`;
+          if (event.value.role === 'user' && !event.value.document) this.currentGoal = event.value.text;
           this.signals.event({ type: 'task-message', taskId: this.task.id, ...event.value });
         }
         if (event.type === 'usage') this.signals.event({ type: 'context-usage', taskId: this.task.id,
@@ -195,7 +196,7 @@ export class TaskRunner {
       && ['answered', 'ready-for-review', 'accepted'].includes(this.status)) this.replayProtected.clear();
     if (['paused', 'failed', 'recovering', 'human-control'].includes(this.status)) this.needsRecovery = true;
     this.remoteBlocked = undefined;
-    this.currentGoal = `${this.task.goal}\n用户最近补充：${intent ?? (document ? document.parts.filter((part) => part.type === 'text').map((part) => part.text).join('') || '请分析这段终端输出' : text)}`;
+    this.currentGoal = intent ?? (document ? document.parts.filter((part) => part.type === 'text').map((part) => part.text).join('') || '请分析这段终端输出' : text);
     this.journal.resetReport();
     if (this.agent.isStreaming) {
       void this.agent.steer(text, document).catch((error: unknown) => this.blockRemote(String(error)));
@@ -272,8 +273,11 @@ export class TaskRunner {
     this.setStatus('running');
     await this.appendInterruptionContext(this.agent);
     this.needsRecovery = false;
-    await this.agent.context(recoveryContextMessage([...this.priorOperations, ...this.operations.values()]));
-    await this.agent.prompt('继续处理当前请求，先核验未确定的执行结果。');
+    const operations = [...this.priorOperations, ...this.operations.values()];
+    await this.agent.context(recoveryContextMessage(operations));
+    await this.agent.prompt(hasUnresolvedOperation(operations)
+      ? '继续处理当前请求，先核验未确定的远端操作，核验前不要重放。'
+      : '继续处理当前请求。没有待核验的远端操作；从首个未完成步骤继续。');
     if (this.status === 'running') this.finishRun();
   }
 
@@ -453,6 +457,12 @@ export class TaskRunner {
         this.proposedOperations.set(operation.id, operation);
         this.updateOperation(operation, 'proposed');
       },
+      classified: async (id, readOnly) => {
+        const view = this.operations.get(id);
+        if (!view) return;
+        view.readOnly = readOnly;
+        this.signals.event({ type: 'operation', value: view });
+      },
       decided: async (id, decision) => {
         this.diagnostic({ event: 'review.result', operationId: id, status: decision.verdict, ruleId: decision.ruleId, text: decision.reason });
         this.updateDecision(id, decision);
@@ -495,15 +505,15 @@ export class TaskRunner {
       () => [...this.priorOperations, ...this.operations.values()].slice(-5).map((item) => `${item.kind} ${item.status}: ${item.kind === 'command' ? redactOutput(item.preview).slice(0, 400) : item.preview.split('\n')[0]}`)),
       approvals: { requestApproval: async (request) => {
         this.setStatus('waiting-review');
+        const presentation = approvalPresentation(request);
         const view: ApprovalView = {
           id: request.id, taskId: request.operation.scope.taskId, operationId: request.operation.id,
-          hostId: request.operation.scope.hostId, fingerprint: request.fingerprint, title: '审核远端操作',
-          explanation: `目标：${redactOutput(this.task.goal).slice(0, 240)}。原因：${request.reason}。批准仅适用于这一次完整操作。`,
+          hostId: request.operation.scope.hostId, fingerprint: request.fingerprint, title: presentation.title,
+          explanation: presentation.explanation,
           preview: this.preview(request.operation), account: request.operation.scope.runAs,
           cwd: request.operation.scope.cwd, impact: request.impact,
           targets: request.targets?.map((target) => redactOutput(target)),
-          recovery: request.operation.kind === 'command' ? '执行后核验实际结果；若结果未知，先确认远端状态。'
-            : '结构化文件操作会尝试保留恢复副本；执行后显示副本路径。',
+          recovery: presentation.recovery,
           expiresAt: request.expiresAt
         };
         const allowed = await this.signals.requestApproval(view);

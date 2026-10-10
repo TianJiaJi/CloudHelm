@@ -67,7 +67,7 @@ export interface OperationResult {
   exitCode?: number;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
-  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unknown';
+  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'unknown';
   effects?: 'none' | 'possible';
   stdoutTail: string;
   logRef?: string;
@@ -82,6 +82,7 @@ export interface ApprovalRequest {
   id: string;
   operation: ProposedOperation;
   fingerprint: string;
+  ruleId: string;
   reason: string;
   impact?: SafetyDecision['impact'];
   targets?: string[];

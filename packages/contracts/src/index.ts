@@ -108,6 +108,8 @@ export interface TaskView {
 }
 
 export interface OperationView {
+  /** Capability verified from the full operation before execution, not from its display preview. */
+  readOnly?: boolean;
   ruleId?: string;
   manualReviewAvailable?: boolean;
   reconciledAt?: number;
@@ -115,7 +117,7 @@ export interface OperationView {
   serviceUnit?: string;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
-  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unknown';
+  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'unknown';
   effects?: 'none' | 'possible';
   loginAs?: string;
   runAs?: string;

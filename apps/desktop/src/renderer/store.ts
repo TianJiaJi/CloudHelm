@@ -14,7 +14,7 @@ interface UiState {
   activeHostId: string | null;
   selectedConversationId: string | null;
   conversationSelection: Record<string, string | null>;
-  currentRequests: Record<string, { model: ModelChoice; request: number }>;
+  currentRequests: Record<string, { model: ModelChoice; request: number; createdAt: number }>;
   agentPanelOpen: boolean;
   agentPanelWidth: number;
   settingsOpen: boolean;
@@ -112,7 +112,7 @@ export const useUi = create<UiState>((set) => ({
       return { terminals: { ...state.terminals, [terminal.id]: terminal } };
     }
     if (event.type === 'clarification' && state.snapshot) return { snapshot: { ...state.snapshot, clarifications: [...(state.snapshot.clarifications ?? []).filter((request) => request.id !== event.value.id), event.value] } };
-    if (event.type === 'model-request') return { currentRequests: { ...state.currentRequests, [event.taskId]: { model: event.model, request: event.request } } };
+    if (event.type === 'model-request') return { currentRequests: { ...state.currentRequests, [event.taskId]: { model: event.model, request: event.request, createdAt: event.createdAt } } };
     if (event.type === 'work-progress') return updateConversation(state, event.taskId, { plan: event.plan });
     if (event.type === 'work-report') return updateConversation(state, event.taskId, { report: event.report });
     if (event.type === 'task-message' && state.snapshot) {

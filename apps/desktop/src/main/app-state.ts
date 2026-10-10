@@ -157,7 +157,7 @@ export class AppState {
   assertDeletable(id: string): TaskView {
     const task = this.getTask(id);
     if (isActiveTaskStatus(task.status) || this.execution[id]?.canStop || this.execution[id]?.stopping) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
-    if ([...this.operations.values()].some((op) => op.taskId === id && (op.status === 'unknown'
+    if ([...this.operations.values()].some((op) => op.taskId === id && !op.readOnly && (op.status === 'unknown'
       || (op.status === 'failed' && op.effects === 'possible' && !op.reconciledAt)))) throw new Error('远端结果尚未核验，请先保留操作记录并确认结果后再删除');
     return task;
   }

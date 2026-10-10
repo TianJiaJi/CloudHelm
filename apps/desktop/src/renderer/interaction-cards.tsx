@@ -20,8 +20,8 @@ export function ApprovalCard({ approval, host, report }: { approval: ApprovalVie
     <div className={styles.cardTitle}><Icon name="shield" /><strong>{approval.title}</strong></div>
     <small>{host} · {expired ? '请求已过期' : '等待你的决定'}</small><p>{approval.explanation}</p>
     <small>账号：{approval.account ?? '未知'} · 目录：{approval.cwd ?? '未知'} · 影响：{approval.impact === 'high' ? '高' : approval.impact === 'unknown' ? '尚不明确' : '一般'}</small>
-    <small>影响目标：{approval.targets?.length ? approval.targets.join('、') : '以完整命令中指定的资源为准'}</small>
-    <details><summary>查看完整命令与操作</summary><pre>{approval.preview}</pre></details>
+    <small>影响目标：{approval.targets?.length ? approval.targets.join('、') : '未识别到具体文件或资源路径'}</small>
+    <div className={styles.reviewCommand}><small>待批准的完整操作</small><pre>{approval.preview}</pre></div>
     {approval.recovery && <p>{approval.recovery}</p>}
     <div className={styles.cardActions}><button disabled={expired || busy} onClick={() => decide(false)}>拒绝</button><button className={styles.primary} disabled={expired || busy} onClick={() => decide(true)}>批准这次操作</button></div>
   </section>;

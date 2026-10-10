@@ -225,7 +225,8 @@ void app.whenReady().then(async () => {
     }
   }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event));
   await runtime.call({ method: 'restore-operations', operations: state.snapshot().operations
-    .filter((operation) => operation.status === 'unknown' || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt)).map(({ id, hostId }) => ({ id, hostId })) });
+    .filter((operation) => !operation.readOnly && (operation.status === 'unknown'
+      || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt))).map(({ id, hostId }) => ({ id, hostId })) });
   registerIpc();
   createWindow();
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

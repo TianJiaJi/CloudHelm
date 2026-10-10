@@ -38,6 +38,7 @@ export interface OperationExecutor {
 
 export interface OperationAudit {
   proposed(operation: ProposedOperation, fingerprint: string): Promise<void>;
+  classified?(operationId: string, readOnly: boolean): Promise<void>;
   decided(operationId: string, decision: SafetyDecision, fingerprint: string): Promise<void>;
   completed(result: OperationResult): Promise<void>;
 }
