@@ -4,11 +4,12 @@ import { safeStorage } from 'electron';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
 import { OutputRedactor } from '@cloudhelm/core';
-import { HostDraftSchema, isActiveTaskStatus, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type TaskView } from '@cloudhelm/contracts';
-import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
+import { HostDraftSchema, isActiveTaskStatus, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type TaskView } from '@cloudhelm/contracts';
+import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
 
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; credentialRevision?: string }
 interface StoredShortcuts { bindings: Record<string, string>; enabled: boolean }
+interface StoredReviewer { selection: ReviewSelection; revision: number }
 
 const SHORTCUT_ACTION_LIMIT = 128;
 const SHORTCUT_BINDING_PATTERN = /^[a-z0-9+]{0,40}$/u;
@@ -46,18 +47,23 @@ export class AppState {
   private closed = false;
 
   constructor(private readonly store: SqliteStore, private readonly emit: (event: AppEvent) => void) {
-    for (const host of store.list<HostView>('hosts')) this.hosts.set(host.id, { ...host, status: 'disconnected', policyRevision: host.policyRevision ?? 1 });
+    for (const host of store.list<HostView>('hosts')) this.hosts.set(host.id, { ...host, status: 'disconnected',
+      protectedReadPaths: host.protectedReadPaths ?? host.protectedPaths ?? [],
+      protectedWritePaths: host.protectedWritePaths ?? host.protectedPaths ?? [], policyRevision: host.policyRevision ?? 1 });
     for (const task of store.list<TaskView>('tasks')) this.tasks.set(task.id,
       task.status === 'running' || task.status === 'waiting-review'
-        ? { ...task, localScopes: task.localScopes ?? [], status: 'recovering' }
-        : { ...task, localScopes: task.localScopes ?? [], ...(task.status === 'waiting-user' ? { status: 'paused' as const } : {}) });
+        ? { ...task, localScopes: task.localScopes ?? [], reviewModesByHost: task.reviewModesByHost ?? {}, reviewRevision: task.reviewRevision ?? 1, status: 'recovering' }
+        : { ...task, localScopes: task.localScopes ?? [], reviewModesByHost: task.reviewModesByHost ?? {}, reviewRevision: task.reviewRevision ?? 1,
+          ...(task.status === 'waiting-user' ? { status: 'paused' as const } : {}) });
     for (const request of store.list<ClarificationRequest>('clarifications')) {
       const restored = request.status === 'pending' ? { ...request, status: 'expired' as const } : request;
       this.clarifications.set(restored.id, restored);
       if (restored !== request) store.put('clarifications', restored.id, restored);
     }
     for (const operation of store.list<OperationView>('operations')) this.operations.set(operation.id,
-      operation.status === 'approved' || operation.status === 'running' ? { ...operation, status: 'unknown', reason: 'Application exited before outcome was recorded' } : operation);
+      operation.status === 'approved' || operation.status === 'running'
+        ? { ...operation, manualReviewAvailable: false, status: 'unknown', reason: 'Application exited before outcome was recorded' }
+        : { ...operation, manualReviewAvailable: false });
     for (const task of this.tasks.values()) this.execution[task.id] = { model: 'idle', stopping: false, canStop: false,
       remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown') ? 'unknown' : 'idle' };
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));
@@ -72,7 +78,7 @@ export class AppState {
       hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
-      profile: { ...this.profile, hasKey: !!this.profileSecret(), hasJevKey: !!this.secret('jev-key:vercel-ai-gateway') }
+      profile: { ...this.profile, hasKey: !!this.profileSecret(), hasJevKey: !!this.secret('jev-key:vercel-ai-gateway'), reviewer: this.reviewerSettings().selection }
     };
   }
 
@@ -82,7 +88,8 @@ export class AppState {
       || this.getHost(draft.jumpHostId).jumpHostId)) {
       throw new Error('Choose an existing direct SSH host as the single jump host');
     }
-    const host: HostView = { ...draft, id: randomUUID(), status: 'disconnected', protectedPaths: [], defaultMode: 'ai-review', policyRevision: 1 };
+    const host: HostView = { ...draft, id: randomUUID(), status: 'disconnected', protectedPaths: [],
+      protectedReadPaths: [], protectedWritePaths: [], defaultMode: 'ask', policyRevision: 1 };
     this.hosts.set(host.id, host);
     this.store.put('hosts', host.id, host);
     this.publish();
@@ -251,13 +258,29 @@ export class AppState {
     this.publish();
   }
 
-  saveReviewSettings(settings: { jevKey?: string; disableJev?: boolean }): void {
+  saveReviewSettings(settings: { jevKey?: string; disableJev?: boolean; reviewer?: ReviewSelection }): void {
+    if (!settings || typeof settings !== 'object' || (settings.jevKey !== undefined && typeof settings.jevKey !== 'string')
+      || (settings.disableJev !== undefined && typeof settings.disableJev !== 'boolean')) throw new Error('审核设置无效');
+    const selection = settings.reviewer ?? this.reviewerSettings().selection;
+    if (!selection || typeof selection !== 'object' || !['current', 'jev', 'model'].includes(selection.kind)
+      || (selection.kind === 'model' && (!selection.provider?.trim() || !selection.modelId?.trim()))) {
+      throw new Error('审核模型选择无效');
+    }
+    if (selection.kind === 'jev' && settings.disableJev) throw new Error('选择 Jev 审核时不能删除 Jev Key');
+    if (selection.kind === 'model') this.plainRuntimeProfile(selection);
+    if (selection.kind === 'jev' && !settings.jevKey && !this.reviewKey()) throw new Error('请先配置 Jev Key');
     if (settings.jevKey) this.saveSecret('jev-key:vercel-ai-gateway', settings.jevKey);
     if (settings.disableJev) this.store.remove('secrets', 'jev-key:vercel-ai-gateway');
+    const previous = this.reviewerSettings();
+    this.store.put('settings', 'reviewer', { selection, revision: previous.revision + 1 } satisfies StoredReviewer);
     this.publish();
   }
 
   reviewKey(): string | undefined { return this.secret('jev-key:vercel-ai-gateway'); }
+
+  reviewerSettings(): StoredReviewer {
+    return this.store.get<StoredReviewer>('settings', 'reviewer') ?? { selection: { kind: 'current' }, revision: 1 };
+  }
 
   /** Shortcut preferences are local UI state; unknown action ids are dropped on read. */
   shortcuts(): StoredShortcuts {
@@ -274,6 +297,11 @@ export class AppState {
   }
 
   runtimeProfile(selection?: ModelChoice & { baseUrl?: string }): RuntimeProfile {
+    const profile = this.plainRuntimeProfile(selection);
+    return { ...profile, reviewer: this.runtimeReviewer(profile), jevKey: this.reviewKey() };
+  }
+
+  private plainRuntimeProfile(selection?: ModelChoice & { baseUrl?: string }): RuntimeProfile {
     const choice = selection ?? this.profile;
     const saved = this.modelProviderSettings(choice.provider);
     const provider = listModelProviders().find((item) => item.id === choice.provider);
@@ -289,7 +317,23 @@ export class AppState {
       this.store.put('settings', `model-provider:${provider.id}`, binding);
     }
     return { ...choice, baseUrl: choice.baseUrl ?? saved.baseUrl ?? provider.defaultBaseUrl, apiKey,
-      credentialRevision: binding.credentialRevision, jevKey: this.secret('jev-key:vercel-ai-gateway') };
+      credentialRevision: binding.credentialRevision };
+  }
+
+  runtimeReviewer(current: RuntimeProfile): RuntimeReviewProfile {
+    const { selection, revision } = this.reviewerSettings();
+    if (selection.kind === 'jev') return { selection, provider: 'vercel-ai-gateway', modelId: 'typesafe-ai/jev',
+      apiKey: this.reviewKey(), revision };
+    const profile = selection.kind === 'current' ? current : this.plainRuntimeProfile(selection);
+    return { selection, provider: profile.provider, modelId: profile.modelId, baseUrl: profile.baseUrl,
+      apiKey: profile.apiKey, revision };
+  }
+
+  runtimeReviewerForLiveTask(task: TaskView): RuntimeReviewProfile {
+    const { selection, revision } = this.reviewerSettings();
+    if (selection.kind === 'current') return { selection, provider: task.provider ?? '', modelId: task.modelId,
+      revision };
+    return this.runtimeReviewer({ provider: '', modelId: '', apiKey: '' });
   }
 
   conversationProfile(task: TaskView): RuntimeProfile {
@@ -378,7 +422,9 @@ export class AppState {
     if (!goal.trim() || authorized.some((id) => !this.hosts.has(id))) throw new Error('Describe a goal and select valid hosts');
     const now = Date.now();
     const task: TaskView = {
-      id: randomUUID(), goal: goal.trim(), hostIds: authorized, localScopes, status: 'draft', modelId, provider: this.profile.provider, baseUrl: this.profile.baseUrl,
+      id: randomUUID(), goal: goal.trim(), hostIds: authorized,
+      reviewModesByHost: Object.fromEntries(authorized.map((id) => [id, this.getHost(id).defaultMode])), reviewRevision: 1,
+      localScopes, status: 'draft', modelId, provider: this.profile.provider, baseUrl: this.profile.baseUrl,
       requestCount: 0, requestLimit: 100, createdAt: now, updatedAt: now
     };
     task.session = { version: 1, id: task.id };
@@ -394,10 +440,23 @@ export class AppState {
     if (authorized.some((id) => !this.hosts.has(id))) throw new Error('Unknown authorization target');
     const scopes = [...task.localScopes, ...localScopes]
       .filter((scope, index, all) => all.findIndex((candidate) => candidate.path === scope.path && candidate.kind === scope.kind) === index);
-    const updated = { ...task, hostIds: authorized, localScopes: scopes, updatedAt: Date.now() };
+    const modes = { ...task.reviewModesByHost };
+    for (const id of authorized) modes[id] ??= this.getHost(id).defaultMode;
+    const updated = { ...task, hostIds: authorized, reviewModesByHost: modes, localScopes: scopes, updatedAt: Date.now() };
     this.tasks.set(taskId, updated);
     this.store.put('tasks', taskId, updated);
     this.publish();
+  }
+
+  updateConversationReviewMode(taskId: string, hostId: string, mode: ReviewMode): TaskView {
+    const task = this.getTask(taskId);
+    if (!task.hostIds.includes(hostId)) throw new Error('主机不属于当前对话');
+    const updated: TaskView = { ...task, reviewModesByHost: { ...task.reviewModesByHost, [hostId]: mode },
+      reviewRevision: (task.reviewRevision ?? 1) + 1, updatedAt: Date.now() };
+    this.tasks.set(taskId, updated);
+    this.store.put('tasks', taskId, updated);
+    this.publish();
+    return updated;
   }
 
   record(event: AppEvent | { type: 'approval-open'; value: AppSnapshot['approvals'][number] }

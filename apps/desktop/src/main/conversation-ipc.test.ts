@@ -41,6 +41,8 @@ function setup(task = makeConversation(), running = false) {
   const state = {
     runtimeProfile: vi.fn(() => ({ ...profile })),
     conversationProfile: vi.fn(() => ({ ...profile })),
+    runtimeReviewerForLiveTask: vi.fn((current: TaskView) => ({ selection: { kind: 'current' as const },
+      provider: current.provider ?? '', modelId: current.modelId, revision: 1 })),
     getHost: vi.fn((id: string) => { const host = hosts.find((item) => item.id === id); if (!host) throw new Error('Unknown host'); return host; }),
     getTask: vi.fn((id: string) => { const value = conversations.get(id); if (!value) throw new Error('Unknown conversation'); return value; }),
     runtimeHost: vi.fn((id: string) => ({ ...hosts.find((host) => host.id === id)! })),
@@ -153,6 +155,8 @@ describe('conversation runtime restoration', () => {
     await pending;
     expect(fixture.state.conversationProfile).not.toHaveBeenCalled();
     expect(fixture.state.runtimeProfile).not.toHaveBeenCalled();
+    expect(fixture.call).toHaveBeenCalledWith({ method: 'set-review-profile', taskId: 'conversation-one',
+      reviewer: { selection: { kind: 'current' }, provider: 'cloudhelm-custom', modelId: 'model-one', revision: 1 } });
     expect(fixture.call.mock.calls.filter(([request]) => request.method === 'start-task')).toHaveLength(0);
     expect(fixture.call).toHaveBeenCalledWith(channel === 'send-message'
       ? { method: 'task-message', taskId: 'conversation-one', text: 'Continue' }

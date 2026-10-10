@@ -99,6 +99,19 @@ describe('conversation credential binding', () => {
     expect(state.runtimeProfile().credentialRevision).toBe(task.credentialRevision);
   });
 
+  it('can update a live task reviewer without loading newly saved model credentials', () => {
+    const { state } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    state.saveProfile(customProfile({ apiKey: 'another-account-key' }));
+    expect(() => state.conversationProfile(task)).toThrow('重新选择模型');
+    state.saveReviewSettings({ reviewer: { kind: 'current' } });
+    const reviewer = state.runtimeReviewerForLiveTask(task);
+    expect(reviewer).toMatchObject({ selection: { kind: 'current' },
+      provider: 'cloudhelm-custom', modelId: 'model-one' });
+    expect(reviewer.apiKey).toBeUndefined();
+  });
+
   it('does not redirect an existing conversation when another provider becomes the global default', () => {
     const { state } = setup();
     state.saveProfile(customProfile());

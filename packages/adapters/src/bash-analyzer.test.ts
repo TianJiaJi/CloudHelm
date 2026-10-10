@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { BashAnalyzer, findGrammarPath, grammarPathCandidates } from './bash-analyzer.js';
-import { decideSafety, isReadOnlyQuery, type ProposedOperation } from '@cloudhelm/core';
+import { decideSafety, isReadOnlyQuery, scriptFilePath, type ProposedOperation } from '@cloudhelm/core';
 
 const scope = {
   taskId: 'task-1', hostId: 'host-1', cwd: '/srv/app', runAs: 'deploy',
@@ -16,6 +16,21 @@ function command(value: string): Extract<ProposedOperation, { kind: 'command' }>
 const analyzer = new BashAnalyzer();
 
 describe('deterministic safety policy', () => {
+  it.each([
+    ['pwd', 'allow', 'allow', 'allow'],
+    ['apt-get install -y curl', 'allow', 'allow', 'allow'],
+    ['systemctl restart nginx', 'allow', 'allow', 'allow'],
+    ['rm -rf /srv/app/cache', 'ask', 'ask', 'allow'],
+    ['python3 -c "print(1)"', 'ask', 'evaluate', 'allow'],
+    ['sh ./deploy.sh', 'ask', 'evaluate', 'allow'],
+    ['rm -rf /', 'deny', 'deny', 'deny']
+  ] as const)('applies all three levels to %s', async (value, first, second, third) => {
+    const analysis = await analyzer.analyze(value);
+    expect(decideSafety(command(value), { mode: 'ask', revision: 1 }, analysis).verdict).toBe(first);
+    expect(decideSafety(command(value), { mode: 'ai-review', revision: 1 }, analysis).verdict).toBe(second);
+    expect(decideSafety(command(value), { mode: 'permissive', revision: 1 }, analysis).verdict).toBe(third);
+  });
+
   it.each(['rm -rf /', 'rm -rf /etc/', 'rm -rf /usr/*', 'echo ok; rm -rf /*', 'sudo rm -rf /etc', "bash -c 'rm -rf /'", 'dd if=/dev/zero of=/dev/sda', 'mkfs.ext4 /dev/sdb', 'cat /dev/zero > /dev/sda', 'chmod -R 777 /'])('rejects known catastrophic effect: %s', async (value) => {
     const operation = command(value);
     const decision = decideSafety(operation, { mode: 'permissive', revision: 1 }, await analyzer.analyze(value));
@@ -31,13 +46,13 @@ describe('deterministic safety policy', () => {
     expect(decideSafety(command(value), { mode: 'permissive', revision: 1 }, await analyzer.analyze(value)).verdict).toBe('deny');
   });
 
-  it.each(['ls -la /srv/app', 'pwd', 'ifconfig -a', 'mkdir -p ./cache', 'cd ./cache', 'cat /srv/app/config', 'cat -- ./config'])('allows bounded low-risk operation: %s', async (value) => {
+  it.each(['ls -la /srv/app', 'pwd', 'ifconfig -a', 'mkdir -p ./cache', 'mkdir -p /etc/other', 'cd ./cache', 'cat /srv/app/config', 'cat -- ./config', 'echo text > /tmp/file'])('allows bounded ordinary operation: %s', async (value) => {
     const operation = command(value);
     const decision = decideSafety(operation, { mode: 'ask', revision: 1 }, await analyzer.analyze(value));
     expect(decision.verdict).toBe('allow');
   });
 
-  it.each(['ifconfig eth0 down', 'ls $(touch /tmp/foo)', 'echo text > /tmp/file', 'mkdir -p /etc/other'])('does not whitelist a command name with extra effects: %s', async (value) => {
+  it.each(['ifconfig eth0 down', 'ls $(touch /tmp/foo)', 'python3 -c "print(1)"'])('does not whitelist a command name with unknown effects: %s', async (value) => {
     const operation = command(value);
     const decision = decideSafety(operation, { mode: 'ask', revision: 1 }, await analyzer.analyze(value));
     expect(decision.verdict).toBe('ask');
@@ -52,15 +67,39 @@ describe('deterministic safety policy', () => {
     expect(decideSafety(read, { mode: 'permissive', revision: 1 }, await analyzer.analyze(read.command)).verdict).toBe('deny');
   });
 
+  it('separates read and write protected paths for simple copy operations, including sudo wrappers', async () => {
+    const directional = { ...scope, protectedPaths: [], protectedReadPaths: ['/srv/private-read'],
+      protectedWritePaths: ['/srv/private-write'] };
+    const decide = async (value: string) => decideSafety({ ...command(value), scope: directional },
+      { mode: 'ask', revision: 1 }, await analyzer.analyze(value)).verdict;
+    expect(await decide('cp /srv/private-write/input /srv/app/output')).toBe('allow');
+    expect(await decide('cp /srv/app/input /srv/private-read/output')).toBe('allow');
+    expect(await decide('sudo cp /srv/private-write/input /srv/app/output')).toBe('allow');
+    expect(await decide('cp /srv/private-read/input /srv/app/output')).toBe('deny');
+    expect(await decide('cp /srv/app/input /srv/private-write/output')).toBe('deny');
+    expect(await decide('cat /srv/private-read/input')).toBe('deny');
+    expect(await decide('tee /srv/private-write/output')).toBe('deny');
+  });
+
   it('prevents structured uploads outside the selected local root', () => {
     const upload: ProposedOperation = { id: 'upload-1', kind: 'upload', localPath: '/Users/alice/secrets', localRoot: '/Users/alice/project', remotePath: '/srv/app/secrets', contentSha256: 'a', size: 1, scope };
     expect(decideSafety(upload, { mode: 'permissive', revision: 1 }).verdict).toBe('deny');
   });
 
-  it('requires AI review for an ordinary mutation in level two', async () => {
+  it('allows ordinary mutation without an AI request in level two', async () => {
     const operation = command('docker compose up -d');
+    expect(decideSafety(operation, { mode: 'ai-review', revision: 1 }, await analyzer.analyze(operation.command)).verdict).toBe('allow');
+  });
+
+  it('sends opaque but valid execution for independent review in level two', async () => {
+    const operation = command('python3 -c "print(1)"');
     expect(decideSafety(operation, { mode: 'ai-review', revision: 1 }, await analyzer.analyze(operation.command)).verdict).toBe('evaluate');
   });
+
+  it.each(['sh ./setup.sh arg', 'sudo sh ./setup.sh arg', './setup.sh --flag'])(
+    'identifies a literal script for pre-execution inspection: %s', async (value) => {
+      expect(scriptFilePath(await analyzer.analyze(value))).toBe('./setup.sh');
+    });
 
   it('stops execution when the analyzer cannot establish a complete parse', async () => {
     const operation = command('echo foo; )');
@@ -96,6 +135,19 @@ describe('deterministic safety policy', () => {
   it.each(['ls -la /srv/app', 'pwd', 'hostname -I', 'date -u', 'id deploy', 'cat /srv/app/config', 'cat -- ./config ./logs/run.log'])('recognizes a pure read-only query: %s', async (value) => {
     expect(isReadOnlyQuery(await analyzer.analyze(value))).toBe(true);
   });
+
+  it.each(['fdisk -l', 'fdisk --list /dev/sda', 'sfdisk -l /dev/sda', 'wipefs -n /dev/sda',
+    'parted /dev/sda print', 'parted -s /dev/sda print free', 'mkfs.ext4 --version', 'wipefs --help'])(
+    'permits explicit disk queries without treating the program name as mutation: %s', async (value) => {
+      const analysis = await analyzer.analyze(value);
+      expect(isReadOnlyQuery(analysis)).toBe(true);
+      expect(decideSafety(command(value), { mode: 'ask', revision: 1 }, analysis).verdict).toBe('allow');
+    });
+
+  it.each(['fdisk /dev/sda', 'parted /dev/sda mklabel gpt'])(
+    'keeps disk mutations in the hard prohibition: %s', async (value) => {
+      expect(decideSafety(command(value), { mode: 'permissive', revision: 1 }, await analyzer.analyze(value)).verdict).toBe('deny');
+    });
 
 });
 

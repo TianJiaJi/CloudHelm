@@ -48,19 +48,19 @@ export async function checkComposer(page, screenshot) {
   const permissions = page.getByRole('menu', { name: '权限选择', exact: true });
   assert.equal(await permissions.getByRole('menuitem').count(), 3);
   await screenshot('composer-permissions.png');
-  await permissions.getByRole('menuitem', { name: /人工批准/u }).click();
-  await page.getByRole('button', { name: '权限选择，当前 人工批准' }).waitFor();
+  await permissions.getByRole('menuitem', { name: /重要操作询问/u }).click();
+  await page.getByRole('button', { name: '权限选择，当前 重要操作询问' }).waitFor();
   assert.equal((await page.evaluate(() => window.fixture.calls.filter((call) => call.kind === 'review-mode'))).at(-1).mode, 'ask');
   await page.evaluate(() => {
-    window.fixture.restoreReviewMode = window.cloudhelm.updateHostReviewMode;
-    window.cloudhelm.updateHostReviewMode = async () => { throw new Error('Task runtime is unavailable'); };
+    window.fixture.restoreReviewMode = window.cloudhelm.updateConversationReviewMode;
+    window.cloudhelm.updateConversationReviewMode = async () => { throw new Error('Task runtime is unavailable'); };
   });
   await permission.click();
-  await permissions.getByRole('menuitem', { name: /^自动执行/u }).click();
+  await permissions.getByRole('menuitem', { name: /^完全访问/u }).click();
   await page.getByRole('alertdialog').waitFor();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '权限选择，当前 人工批准' }).waitFor();
-  await page.evaluate(() => { window.cloudhelm.updateHostReviewMode = window.fixture.restoreReviewMode; });
+  await page.getByRole('button', { name: '权限选择，当前 重要操作询问' }).waitFor();
+  await page.evaluate(() => { window.cloudhelm.updateConversationReviewMode = window.fixture.restoreReviewMode; });
   await permission.click();
   await permissions.getByRole('menuitem', { name: /AI 审核/u }).click();
 

@@ -74,6 +74,9 @@ export function OperationCard({ operation, report }: { operation: OperationView;
     <div className={styles.cardTitle}><Icon name="terminal" /><strong>{operation.kind === 'command' ? '远程命令' : '文件操作'}</strong><small>{statuses[operation.status]}</small></div>
     <pre className={styles.command}>{operation.preview}</pre>
     {output && <pre className={styles.outputTail}>{output.slice(-1600)}</pre>}
+    {operation.manualReviewAvailable && operation.ruleId === 'ai-review-deny' && <div className={styles.cardActions}>
+      <button onClick={() => void capture(() => window.cloudhelm.requestAiDenialReview(operation.taskId, operation.id), report)}>申请人工复核这次操作</button>
+    </div>}
     <details><summary>操作详情{operation.exitCode !== undefined ? ` · 退出码 ${operation.exitCode}` : ''}</summary>
       {operation.interruption && <p>用户主动中断（{operation.interruption.source === 'ctrl-c' ? 'Ctrl+C' : operation.interruption.source === 'terminal-close' ? '关闭终端' : '停止按钮'}）；{operation.status === 'unknown' ? '远端结果待核验' : `实际退出码：${operation.exitCode ?? '待确认'}`}。</p>}
       {operation.reason && <p>{operation.reason}</p>}{operation.model && <small>{operation.model.provider} · {operation.model.modelId}</small>}

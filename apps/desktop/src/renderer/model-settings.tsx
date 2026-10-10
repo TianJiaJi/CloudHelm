@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AppSnapshot, ModelProfileDraft, ModelProviderSettings, ModelProviderView } from '@cloudhelm/contracts';
+import type { AppSnapshot, ModelProfileDraft, ModelProviderSettings, ModelProviderView, ReviewSelection } from '@cloudhelm/contracts';
 import { errorMessage, inlineError } from './error-presentation.js';
 import { ShortcutSettings } from './shortcut-settings.js';
 import styles from './model-settings.module.css';
@@ -29,6 +29,8 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
   const [showKey, setShowKey] = useState(false);
   const [jevKey, setJevKey] = useState('');
   const [hasJevKey, setHasJevKey] = useState(current.hasJevKey);
+  const [reviewer, setReviewer] = useState<ReviewSelection>(current.reviewer ?? { kind: 'current' });
+  const [reviewModels, setReviewModels] = useState<Array<{ provider: string; modelId: string; name: string }>>([]);
   const [disableJev, setDisableJev] = useState(false);
   const [busy, setBusy] = useState<'save' | 'test' | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
@@ -46,7 +48,10 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     || item.name.toLowerCase() === defaultProvider.toLowerCase();
   const apiDirty = loaded && configuration !== null && (draft.apiKey !== ''
     || draft.modelId !== configuration.initial.modelId || draft.baseUrl !== configuration.initial.baseUrl);
-  const dirty = section === 'api' ? apiDirty : section === 'review' && (jevKey !== '' || disableJev);
+  const dirty = section === 'api' ? apiDirty : section === 'review' && (jevKey !== '' || disableJev
+    || JSON.stringify(reviewer) !== JSON.stringify(current.reviewer ?? { kind: 'current' }));
+
+  useEffect(() => { void window.cloudhelm.availableModels().then(setReviewModels).catch(() => undefined); }, []);
   const validApi = loaded && !!draft.modelId.trim() && !!draft.baseUrl.trim();
   const hasApiKey = configuration?.saved.hasKey || !!draft.apiKey.trim();
 
@@ -154,7 +159,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     setBusy('save');
     setFeedback(null);
     try {
-      await window.cloudhelm.saveReviewSettings({ jevKey: disableJev ? undefined : jevKey.trim() || undefined, disableJev });
+      await window.cloudhelm.saveReviewSettings({ jevKey: disableJev ? undefined : jevKey.trim() || undefined, disableJev, reviewer });
       setHasJevKey(disableJev ? false : hasJevKey || !!jevKey.trim());
       setJevKey('');
       setDisableJev(false);
@@ -270,19 +275,28 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
 
     {section === 'review' && <div className={styles.reviewPanel} role="tabpanel" id="model-panel-review" aria-labelledby="model-tab-review">
       <div className={styles.providerHeading}><h2>AI 安全审核</h2><p>第二档审核的模型连接，与聊天模型分开配置。</p></div>
-      <div className={styles.reviewStatus}><SettingsIcon kind="shield" /><div><strong>{hasJevKey && !disableJev ? '已配置 Jev 审核' : '使用主模型独立审核'}</strong>
-        <p>{hasJevKey && !disableJev ? 'Jev 服务失败时等待人工处理，不会自动降级。' : '未配置 Jev Key 时，由当前对话的主模型进行独立安全审核。'}</p></div></div>
+      <div className={styles.reviewStatus}><SettingsIcon kind="shield" /><div><strong>{reviewer.kind === 'jev' ? 'Jev 独立审核' : reviewer.kind === 'model' ? '指定模型独立审核' : '当前对话模型独立审核'}</strong>
+        <p>仅第二档的不确定操作调用所选审核模型。审核失败会询问你，不会偷偷换模型或计费账户。</p></div></div>
       <fieldset className={styles.reviewFields} disabled={busy !== null}>
+        <label htmlFor="review-model">审核模型</label>
+        <select id="review-model" value={reviewer.kind === 'model' ? `${reviewer.provider}/${reviewer.modelId}` : reviewer.kind}
+          onChange={(event) => { const value = event.target.value;
+            setReviewer(value === 'current' || value === 'jev' ? { kind: value } : {
+              kind: 'model', provider: value.slice(0, value.indexOf('/')), modelId: value.slice(value.indexOf('/') + 1) });
+            setFeedback(null); }}>
+          <option value="current">当前对话模型（默认）</option><option value="jev">Jev</option>
+          {reviewModels.map((model) => <option key={`${model.provider}/${model.modelId}`} value={`${model.provider}/${model.modelId}`}>{model.name} · {model.provider}</option>)}
+        </select>
         <label htmlFor="review-key">Jev / Vercel Gateway Key {hasJevKey && <span className={styles.badge}>已配置</span>}</label>
         <input id="review-key" type="password" autoComplete="off" spellCheck={false} value={jevKey} disabled={disableJev}
-          onChange={(event) => { setJevKey(event.target.value); setFeedback(null); }} placeholder={hasJevKey ? '留空保留现有 Key' : '可选 · 填写后启用 Jev'} />
+          onChange={(event) => { setJevKey(event.target.value); setFeedback(null); }} placeholder={hasJevKey ? '留空保留现有 Key' : '选择 Jev 后填写'} />
         <p className={styles.hint}>使用 Vercel Gateway 的 typesafe-ai/jev。凭据与聊天模型独立，使用费用按供应商规则计算。</p>
         {hasJevKey && <label className={styles.checkbox}><input type="checkbox" checked={disableJev}
-          onChange={(event) => { setDisableJev(event.target.checked); setFeedback(null); }} />移除 Jev Key，改用主模型审核</label>}
+          onChange={(event) => { setDisableJev(event.target.checked); setFeedback(null); }} />移除 Jev Key</label>}
       </fieldset>
       <div className={styles.reviewExplanation}><h3>审核如何工作</h3>
-        <p>已识别的高危禁令直接拦截，完整满足低风险白名单的操作自动执行。其余操作在第二档交由审核模型判断是否允许、请求人工确认或拒绝。</p>
-        <p>各主机的审核档位在主机安全设置中管理。</p></div>
+        <p>已识别的硬禁令直接拦截，普通操作自动执行；第二档只审核不确定操作。</p>
+        <p>主机安全设置决定新对话的默认档位，输入框旁可调整当前对话。</p></div>
       <FeedbackLine feedback={feedback} />
     </div>}
 

@@ -8,6 +8,7 @@ import { eventDiagnostic } from './diagnostic-events.js';
 import { HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import type { RawTerminal } from '@cloudhelm/core';
 import type { ApprovalView, InputRequestView } from '@cloudhelm/contracts';
 import type { LogPage, RuntimeCall, RuntimeHost, RuntimeMessage } from '@cloudhelm/contracts/runtime';
@@ -33,7 +34,7 @@ export class WorkerServer {
   private readonly hosts = new Map<string, RuntimeHost>();
   private readonly interactions: InteractionCoordinator;
   private readonly tasks = new Map<string, TaskRunner>();
-  private readonly pendingApprovals = new Map<string, { hostId: string; resolve(allowed: boolean): void }>();
+  private readonly pendingApprovals = new Map<string, { taskId: string; hostId: string; resolve(allowed: boolean): void }>();
   private readonly pendingInputs = new Map<string, { connectionId: string; expiresAt: number; resolve(answer: string | null): void; timeout: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly send: (message: RuntimeMessage) => void) {
@@ -101,6 +102,15 @@ export class WorkerServer {
       case 'set-review-key':
         for (const runner of this.tasks.values()) runner.setReviewKey(call.jevKey);
         return;
+      case 'set-review-profile': {
+        const runner = this.tasks.get(call.taskId);
+        if (!runner) throw new Error('对话运行已失效');
+        if (runner.needsReviewProfile(call.reviewer)) {
+          for (const [id, pending] of this.pendingApprovals) if (pending.taskId === call.taskId) this.cancelApproval(id);
+          runner.setReviewProfile(call.reviewer);
+        }
+        return;
+      }
       case 'test-model': return testModelConnection(call.profile);
       case 'set-conversation-thinking': {
         const runner = this.tasks.get(call.taskId);
@@ -124,8 +134,23 @@ export class WorkerServer {
         for (const [id, pending] of this.pendingApprovals) {
           if (pending.hostId === call.hostId) this.cancelApproval(id);
         }
-        for (const runner of this.tasks.values()) runner.updateHostSafety(call.hostId, call.mode, call.protectedPaths, call.revision);
+        for (const runner of this.tasks.values()) runner.updateHostSafety(call.hostId, call.mode,
+          call.protectedReadPaths, call.protectedWritePaths, call.revision);
         return;
+      case 'update-conversation-review-mode': {
+        for (const [id, pending] of this.pendingApprovals) {
+          if (pending.taskId === call.taskId && pending.hostId === call.hostId) this.cancelApproval(id);
+        }
+        const runner = this.tasks.get(call.taskId);
+        if (!runner) throw new Error('对话运行已失效');
+        runner.updateConversationReviewMode(call.hostId, call.mode, call.revision);
+        return;
+      }
+      case 'request-ai-denial-review': {
+        const runner = this.tasks.get(call.taskId);
+        if (!runner) throw new Error('对话运行已失效');
+        return runner.requestAiDenialReview(call.operationId);
+      }
       case 'open-terminal': return this.openTerminal(call.hostId);
       case 'close-terminal':
         this.interactions.cancelForTerminal(call.terminalId);
@@ -162,7 +187,15 @@ export class WorkerServer {
             requestApproval: (view) => this.requestApproval(view),
             cancelApproval: (id) => this.cancelApproval(id)
           }, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor), this.privileged.forTask(call.task.id),
-          { id: call.task.session.id, directory: call.sessionDirectory, restore: !!call.restored });
+          { id: call.task.session.id, directory: call.sessionDirectory, restore: !!call.restored }, {
+            inspect: (operation, scriptPath) => this.ssh.inspectScript(operation.scope.hostId,
+              path.posix.resolve(operation.scope.cwd, scriptPath)),
+            verify: async (operation, scriptPath, sha256) => {
+              const inspected = await this.ssh.inspectScript(operation.scope.hostId,
+                path.posix.resolve(operation.scope.cwd, scriptPath));
+              return inspected.sha256 === sha256;
+            }
+          });
         this.tasks.set(call.task.id, runner);
         const start = runner.start(call.restored, call.thinkingLevel, call.document, call.initialMessage, call.intent);
         if (call.restored) {
@@ -335,7 +368,8 @@ export class WorkerServer {
         this.post({ event: { type: 'approval-close', id: view.id } });
         resolve(false);
       }, Math.max(0, view.expiresAt - Date.now()));
-      this.pendingApprovals.set(view.id, { hostId: view.hostId, resolve: (allowed) => { clearTimeout(timeout); resolve(allowed); } });
+      this.pendingApprovals.set(view.id, { taskId: view.taskId, hostId: view.hostId,
+        resolve: (allowed) => { clearTimeout(timeout); resolve(allowed); } });
     });
   }
 

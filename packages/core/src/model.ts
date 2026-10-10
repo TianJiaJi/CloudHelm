@@ -11,8 +11,13 @@ export interface OperationScope {
   terminalId: string;
   terminalGeneration: number;
   policyRevision: number;
+  conversationRevision?: number;
+  reviewerRevision?: number;
   allowedWorkingRoots: string[];
+  /** Legacy combined rule; new scopes set the directional lists below. */
   protectedPaths: string[];
+  protectedReadPaths?: string[];
+  protectedWritePaths?: string[];
   goal: string;
 }
 
@@ -46,11 +51,14 @@ export interface SafetyDecision {
   verdict: 'allow' | 'ask' | 'evaluate' | 'deny' | 'error';
   ruleId: string;
   reason: string;
+  impact?: 'ordinary' | 'high' | 'unknown';
 }
 
 export interface SafetySettings {
   mode: ReviewMode;
   revision: number;
+  conversationRevision?: number;
+  reviewerRevision?: number;
 }
 
 export interface OperationResult {
@@ -75,6 +83,9 @@ export interface ApprovalRequest {
   operation: ProposedOperation;
   fingerprint: string;
   reason: string;
+  impact?: SafetyDecision['impact'];
+  targets?: string[];
+  scriptSha256?: string;
   expiresAt: number;
 }
 

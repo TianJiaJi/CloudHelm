@@ -19,6 +19,7 @@ export type HostConnectionTestResult =
   | { status: 'trust-required'; requestId: string; stage: 'host' | 'jump'; address: string; port: number;
     fingerprint: string; expectedFingerprint?: string; expiresAt: number };
 export type ReviewMode = 'ask' | 'ai-review' | 'permissive';
+export type ReviewSelection = { kind: 'current' } | { kind: 'jev' } | { kind: 'model'; provider: string; modelId: string };
 export interface ClarificationQuestion {
   id: string;
   prompt: string;
@@ -77,6 +78,8 @@ export interface HostView extends HostDraft {
   fingerprint?: string;
   status: 'disconnected' | 'connecting' | 'connected' | 'changed-key' | 'error';
   protectedPaths: string[];
+  protectedReadPaths?: string[];
+  protectedWritePaths?: string[];
   defaultMode: ReviewMode;
   policyRevision: number;
 }
@@ -87,6 +90,8 @@ export interface TaskView {
   id: string;
   goal: string;
   hostIds: string[];
+  reviewModesByHost?: Record<string, ReviewMode>;
+  reviewRevision?: number;
   localScopes: LocalScope[];
   status: TaskStatus;
   modelId: string;
@@ -103,6 +108,8 @@ export interface TaskView {
 }
 
 export interface OperationView {
+  ruleId?: string;
+  manualReviewAvailable?: boolean;
   reconciledAt?: number;
   intentKey?: string;
   serviceUnit?: string;
@@ -135,6 +142,11 @@ export interface ApprovalView {
   fingerprint: string;
   title: string;
   explanation: string;
+  account?: string;
+  cwd?: string;
+  impact?: 'ordinary' | 'high' | 'unknown';
+  targets?: string[];
+  recovery?: string;
   preview: string;
   expiresAt: number;
 }
@@ -171,7 +183,7 @@ export interface AppSnapshot {
   inputs: InputRequestView[];
   clarifications?: ClarificationRequest[];
   messages: ConversationMessage[];
-  profile: { provider: string; modelId: string; baseUrl?: string; hasKey: boolean; hasJevKey: boolean };
+  profile: { provider: string; modelId: string; baseUrl?: string; hasKey: boolean; hasJevKey: boolean; reviewer?: ReviewSelection };
 }
 
 export interface ModelProviderView {
@@ -221,13 +233,15 @@ export interface DesktopAPI {
   testHostConnection(input: HostConnectionTestInput): Promise<HostConnectionTestResult>;
   setHostSecret(hostId: string, secret: string): Promise<void>;
   updateHostReviewMode(hostId: string, mode: ReviewMode): Promise<void>;
-  updateHostSafety(hostId: string, mode: ReviewMode, protectedPaths: string[]): Promise<void>;
+  updateHostSafety(hostId: string, mode: ReviewMode, protectedReadPaths: string[], protectedWritePaths: string[]): Promise<void>;
+  updateConversationReviewMode(taskId: string, hostId: string, mode: ReviewMode): Promise<void>;
+  requestAiDenialReview(taskId: string, operationId: string): Promise<void>;
   listModelProviders(): Promise<ModelProviderView[]>;
   modelProviderSettings(providerId: string): Promise<ModelProviderSettings>;
   saveModelProfile(profile: ModelProfileDraft): Promise<void>;
   testModelConnection(profile: ModelProfileDraft): Promise<{ latencyMs: number }>;
   availableModels(): Promise<Array<ModelChoice & { name: string; thinkingLevels?: ThinkingLevel[] }>>;
-  saveReviewSettings(settings: { jevKey?: string; disableJev?: boolean }): Promise<void>;
+  saveReviewSettings(settings: { jevKey?: string; disableJev?: boolean; reviewer?: ReviewSelection }): Promise<void>;
   shortcuts(): Promise<ShortcutSettings>;
   saveShortcuts(settings: ShortcutSettings): Promise<void>;
   /** Clipboard access for user-initiated menu actions; contents are never logged. */

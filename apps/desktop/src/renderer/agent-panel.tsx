@@ -50,7 +50,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       {conversation && <button title="展开对话详情" aria-label="展开对话详情" onClick={() => useUi.getState().openReport(conversation.id)}><Icon name="expand" /></button>}
       <button title="收起助手" aria-label="收起助手" onClick={useUi.getState().toggleAgentPanel}><Icon name="close" /></button></div></header>
     <div className={styles.assistantContext}><span><span className={`${styles.dot} ${host?.status === 'connected' ? styles.online : ''}`} />{host ? `${host.label} · ${host.username}` : '自由对话'}</span>
-      <small>{host ? <><Icon name="shield" size={12} />{reviewLabel[host.defaultMode]}</> : '未授权远端操作'}</small></div>
+      <small>{host ? <><Icon name="shield" size={12} />{reviewLabel[conversation?.reviewModesByHost?.[host.id] ?? host.defaultMode]}</> : '未授权远端操作'}</small></div>
     {conversation && <div className={styles.agentActions}>
       <span className={styles.status}>{statusLabel[conversation.status]}</span>
       {conversation.session && !running && ['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
@@ -192,6 +192,6 @@ function Composer({ execution, hostId, host, usage, compaction, conversation, pr
       </div>
     </form>
     {execution && <p className={styles.note} role="status">{stopping ? `正在停止…${execution.model === 'idle' ? '模型已停；' : ''}${execution.remote === 'running' ? '等待远端命令退出' : ''}` : execution.remote === 'unknown' ? `${execution.model === 'idle' ? '模型已停；' : ''}远端结果待核验，请勿重复执行` : canStop ? 'Enter 发送补充消息 · 点击 ■ 停止执行' : ''}</p>}
-    <ComposerFooter compaction={compaction} host={host} legacy={legacy} usage={usage} pendingModel={pendingModel ? model.modelId : undefined} report={report} />
+    <ComposerFooter compaction={compaction} host={host} conversation={conversation} legacy={legacy} usage={usage} pendingModel={pendingModel ? model.modelId : undefined} report={report} />
   </div>;
 }

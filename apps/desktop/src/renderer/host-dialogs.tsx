@@ -47,6 +47,7 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
     <label>服务器地址<input required value={draft.address} onChange={(event) => update({ address: event.target.value })} placeholder="192.0.2.10 或 example.com" /></label>
     <div className={styles.formRow}><label>端口<input type="number" required min="1" max="65535" value={draft.port} onChange={(event) => update({ port: Number(event.target.value) })} /></label>
       <label>账户<input required value={draft.username} onChange={(event) => update({ username: event.target.value })} placeholder="ubuntu" /></label></div>
+    <small>建议使用普通 SSH 用户；需要管理员权限时提交具体的 sudo 命令。也可按需使用 root 登录。</small>
     <label>认证方式<select value={draft.auth} onChange={(event) => update({ auth: event.target.value as HostDraft['auth'], privateKeyPath: undefined })}>
       <option value="agent">SSH Agent</option><option value="private-key">私钥</option><option value="password">密码</option>
     </select></label>
@@ -74,18 +75,22 @@ export function HostDialog({ hosts, editing, close, report }: DialogProps & { ho
 
 export function SafetyDialog({ host, close, report }: DialogProps & { host: HostView }): React.JSX.Element {
   const [mode, setMode] = useState<ReviewMode>(host.defaultMode);
-  const [paths, setPaths] = useState(host.protectedPaths.join('\n'));
+  const [readPaths, setReadPaths] = useState((host.protectedReadPaths ?? host.protectedPaths).join('\n'));
+  const [writePaths, setWritePaths] = useState((host.protectedWritePaths ?? host.protectedPaths).join('\n'));
   return <div className={styles.scrim}><form className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="safety-title"
     onSubmit={(event) => { event.preventDefault(); void capture(async () => {
-      await window.cloudhelm.updateHostSafety(host.id, mode, paths.split('\n').map((value) => value.trim()).filter(Boolean)); close();
+      await window.cloudhelm.updateHostSafety(host.id, mode,
+        readPaths.split('\n').map((value) => value.trim()).filter(Boolean),
+        writePaths.split('\n').map((value) => value.trim()).filter(Boolean)); close();
     }, report); }}>
     <div className={styles.dialogHead}><h2 id="safety-title">{host.label} · 安全设置</h2><button type="button" aria-label="关闭" onClick={close}><Icon name="close" /></button></div>
-    <p>已识别的硬禁令在所有档位都拦截；完整满足低风险白名单的操作自动执行。</p>
-    <label>其他操作如何审核<select value={mode} onChange={(event) => setMode(event.target.value as ReviewMode)}>
-      <option value="ask">第一档 · 每次由我批准</option><option value="ai-review">第二档 · AI 审核（推荐）</option><option value="permissive">第三档 · 默认自动执行</option>
+    <p>这里设置新对话的默认档位；当前对话可在输入框旁单独切换。</p>
+    <label>新对话默认档位<select value={mode} onChange={(event) => setMode(event.target.value as ReviewMode)}>
+      <option value="ask">第一档 · 重要操作询问</option><option value="ai-review">第二档 · AI 审核不确定操作</option><option value="permissive">第三档 · 默认自动执行</option>
     </select></label>
-    <p className={styles.notice}>{mode === 'ai-review' ? '优先由 Jev 审核；未配置 Jev Key 时使用当前对话模型独立审核。审核要求确认时会在助手中提示。' : mode === 'permissive' ? '不透明脚本只能尽力识别风险，无法保证拦截所有危险操作。' : '每条非白名单操作都需你批准；批准只适用于当前完整操作。'}</p>
-    <label>保护路径（每行一个绝对路径）<textarea rows={5} value={paths} onChange={(event) => setPaths(event.target.value)} placeholder={'/srv/backup\n/etc/ssh'} /></label>
+    <p className={styles.notice}>{mode === 'ai-review' ? '不确定操作由设置中显式选择的模型独立审核；高影响操作仍需你确认。' : mode === 'permissive' ? 'SSH 黑名单和路径扫描只能尽力识别，无法保证拦截脚本内部的危险操作。' : '普通写入自动执行，只询问高影响或无法确认影响的操作。'}</p>
+    <label>禁止 AI 读取的路径（每行一个绝对路径）<textarea rows={4} value={readPaths} onChange={(event) => setReadPaths(event.target.value)} placeholder={'/srv/private\n/home/user/.ssh'} /></label>
+    <label>禁止 AI 写入的路径（每行一个绝对路径）<textarea rows={4} value={writePaths} onChange={(event) => setWritePaths(event.target.value)} placeholder={'/srv/backup\n/etc/ssh'} /></label>
     <p>修改安全设置后，尚未执行的批准将失效。你手动输入的命令不受 AI 命令审核约束。</p>
     <div className={styles.dialogActions}><button type="button" onClick={close}>取消</button><button className={styles.primary}>保存</button></div>
   </form></div>;
