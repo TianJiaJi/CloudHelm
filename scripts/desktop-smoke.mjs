@@ -38,6 +38,11 @@ let stderr = '';
 const instances = new Set();
 let currentProcess;
 
+// locator.waitFor() defaults to no timeout and evaluate() never times out. Bound every
+// renderer wait and smoke stage so a stalled Electron fails with diagnostics instead of
+// hanging until the CI job timeout cancels the failure artifacts.
+const waitReady = (target) => target.getByRole('textbox', { name: '给 AI 的消息' }).waitFor({ timeout: 60_000 });
+
 async function launch() {
   application = await electron.launch({ executablePath,
     args: packaged ? [] : [path.join(desktop, 'out/main/index.js')], env: environment, timeout: 30_000 });
@@ -55,25 +60,25 @@ try {
   page = await launch();
   const rendererErrors = [];
   page.on('pageerror', (error) => rendererErrors.push(error.message));
-  await page.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
-  const boundary = await page.evaluate(async () => {
+  await waitReady(page);
+  const boundary = await withTimeout(() => page.evaluate(async () => {
     const snapshot = await window.cloudhelm.snapshot();
     return { hasPreload: typeof window.cloudhelm.startConversation === 'function',
       hasNodeRequire: typeof window.require !== 'undefined', hasProcess: typeof window.process !== 'undefined',
       hostCount: snapshot.hosts.length, conversationCount: snapshot.conversations.length,
       providers: (await window.cloudhelm.listModelProviders()).length };
-  });
+  }), 60_000, 'Renderer boundary probe');
   assert.equal(boundary.hasPreload, true);
   assert.equal(boundary.hasNodeRequire, false);
   assert.equal(boundary.hasProcess, false);
   assert.equal(boundary.hostCount, 0);
   assert.equal(boundary.conversationCount, 0);
   assert.ok(boundary.providers > 0);
-  await checkPrivateKeyPicker(application, page);
-  await checkHostConnectionTest(page, path.join(desktop, 'package.json'));
+  await withTimeout(() => checkPrivateKeyPicker(application, page), 60_000, 'Private key picker probe');
+  await withTimeout(() => checkHostConnectionTest(page, path.join(desktop, 'package.json')), 120_000, 'Host connection probe');
   // utilityProcess.fork only accepts string arguments; the packaged run passes an empty
   // bundle directory and the probe then skips its shared-chunk analyzer import.
-  const runtime = await application.evaluate(async ({ app, safeStorage, utilityProcess }, input) => {
+  const runtime = await withTimeout(() => application.evaluate(async ({ app, safeStorage, utilityProcess }, input) => {
     const appPath = app.getAppPath();
     const grammarPath = input.packaged ? `${process.resourcesPath}/tree-sitter-bash.wasm` : input.grammarPath;
     const available = safeStorage.isEncryptionAvailable();
@@ -88,7 +93,9 @@ try {
       probe.on('exit', (code) => { if (code !== 0) { clearTimeout(timeout); reject(new Error(`Native/WASM probe exited ${code}`)); } });
     });
     return { packaged: app.isPackaged, appPath, native, safeStorageAvailable: available, credentialRoundtrip };
-  }, { packaged, grammarPath: path.join(desktop, 'resources/tree-sitter-bash.wasm'), probePath: path.join(root, 'scripts/desktop-probe.mjs'), bundleDirectory: packaged ? '' : path.join(desktop, 'out/main') });
+  }, { packaged, grammarPath: path.join(desktop, 'resources/tree-sitter-bash.wasm'),
+    probePath: path.join(root, 'scripts/desktop-probe.mjs'), bundleDirectory: packaged ? '' : path.join(desktop, 'out/main') }),
+  60_000, 'Native/WASM and credential probe');
   assert.equal(runtime.native.sqliteRoundtrip, true);
   assert.equal(runtime.native.wasmParsed, true);
   if (!packaged) {
@@ -105,24 +112,28 @@ try {
   if (process.platform === 'win32') {
     // A brand-new Chromium profile persists its Windows encryption key on clean shutdown.
     // Prime that profile before saving the model fixture's credential and crash-testing a task.
-    const encrypted = await application.evaluate(({ safeStorage }) => safeStorage.encryptString('cloudhelm-smoke-bootstrap').toString('base64'));
+    const encrypted = await withTimeout(
+      () => application.evaluate(({ safeStorage }) => safeStorage.encryptString('cloudhelm-smoke-bootstrap').toString('base64')),
+      30_000, 'Windows profile encryption priming');
     await currentProcess.close();
     instances.delete(currentProcess);
     page = await launch();
     page.on('pageerror', (error) => rendererErrors.push(error.message));
-    await page.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
-    const decrypted = await application.evaluate(({ safeStorage }, value) => safeStorage.decryptString(Buffer.from(value, 'base64')), encrypted);
+    await waitReady(page);
+    const decrypted = await withTimeout(
+      () => application.evaluate(({ safeStorage }, value) => safeStorage.decryptString(Buffer.from(value, 'base64')), encrypted),
+      30_000, 'Windows profile decryption check');
     assert.equal(decrypted, 'cloudhelm-smoke-bootstrap', 'Windows profile encryption must survive restart before crash testing');
   }
-  page = await checkClarificationRuntime(page, async () => {
+  page = await withTimeout(() => checkClarificationRuntime(page, async () => {
     // Crash only this isolated smoke-test instance, preserving its temporary database.
     await currentProcess.crash();
     instances.delete(currentProcess);
     const next = await launch();
     next.on('pageerror', (error) => rendererErrors.push(error.message));
-    await next.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
+    await waitReady(next);
     return next;
-  });
+  }), 180_000, 'Clarification runtime probe');
   const databaseBytes = await readFile(path.join(userData, 'cloudhelm.sqlite'));
   assert.equal(databaseBytes.subarray(0, 16).toString(), 'SQLite format 3\0');
   assert.deepEqual(rendererErrors, []);
@@ -133,7 +144,7 @@ try {
     app.emit('before-quit', { preventDefault() {} });
     app.emit('before-quit', { preventDefault() {} });
   });
-  const afterCanceledQuit = await page.evaluate(() => window.cloudhelm.snapshot());
+  const afterCanceledQuit = await withTimeout(() => page.evaluate(() => window.cloudhelm.snapshot()), 30_000, 'Snapshot after canceled quit');
   assert.ok(afterCanceledQuit.profile, 'Application state must remain readable after a canceled/repeated quit');
   console.log(JSON.stringify({ check: 'desktop-smoke', ...boundary, ...runtime }, null, 2));
 } catch (error) {

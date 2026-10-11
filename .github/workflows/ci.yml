@@ -91,14 +91,19 @@ jobs:
       - name: Install browser for renderer smoke
         run: pnpm exec playwright install chromium
       - name: Renderer flows with fake SSH and models
+        # 步骤级超时让挂死快速失败并保留 if: always() 的诊断产物，而不是拖到任务级超时被取消。
+        timeout-minutes: 10
         run: pnpm test:ui
       - name: Safe Markdown rendering and copy-only code blocks
+        timeout-minutes: 10
         run: pnpm test:markdown
       - name: Build native desktop directory package
         run: pnpm --filter @cloudhelm/desktop package
       - name: Built Electron process and credential/native resources
+        timeout-minutes: 10
         run: pnpm test:desktop
       - name: Packaged Electron process and credential/native resources
+        timeout-minutes: 10
         run: pnpm test:desktop:packaged
       - name: Build unsigned DMG or NSIS distribution
         run: pnpm --filter @cloudhelm/desktop exec electron-builder ${{ matrix.builder_args }} --publish never
