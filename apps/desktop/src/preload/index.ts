@@ -52,7 +52,6 @@ const api: DesktopAPI = {
   cancelInput: (requestId) => invoke('cancel-input', requestId),
   pauseConversation: (taskId) => invoke('pause-task', taskId),
   resumeConversation: (taskId) => invoke('resume-task', taskId),
-  acceptConversation: (taskId) => invoke('accept-task', taskId),
   listRemote: (hostId, path) => invoke('list-remote', hostId, path),
   readTerminalLog: (terminalId) => invoke('read-terminal-log', terminalId),
   deleteConversation: (id) => invoke('delete-conversation', id),

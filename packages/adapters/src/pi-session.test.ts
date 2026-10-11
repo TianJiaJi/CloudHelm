@@ -70,6 +70,42 @@ describe('native Pi session compatibility', () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it('uses Pi custom messages for host continuation without inventing a user message', async () => {
+    const root = await directory();
+    const f = await setup(async () => ({ text: '完成。' }), { storage: { directory: root, id: 'control-session', restore: false } });
+    await f.session.prompt('检查状态');
+    expect(f.session.lastTurnAnswered).toBe(true);
+    await f.session.resumeWithContext('只补充当前未完成步骤，不重放已成功的远端操作。');
+    expect(f.session.lastTurnAnswered).toBe(true);
+    expect(f.fixture.requests).toHaveLength(2);
+    expect(f.events.filter((event) => event.type === 'text' && event.value.role === 'user')).toHaveLength(1);
+    expect(JSON.stringify(f.fixture.requests[1]?.messages)).toContain('只补充当前未完成步骤');
+    const saved = await readFile(join(root, (await readdir(root)).find((name) => name.endsWith('.jsonl'))!), 'utf8');
+    expect(saved).toContain('cloudhelm-control');
+  });
+
+  it('aborts an in-flight Pi turn and clears queued follow-ups before an explicit new turn', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const f = await setup(async () => { if (++calls === 1) await pending; return { text: '完成。' }; });
+    try {
+      const run = f.session.prompt('检查状态');
+      await vi.waitFor(() => expect(calls).toBe(1));
+      await f.session.steer('这条排队消息不能自动续跑');
+      f.session.clearQueue();
+      await f.session.abort();
+      await f.session.waitForIdle();
+      await run.catch(() => {});
+      expect(f.session.lastTurnAnswered).toBe(false);
+      expect(f.fixture.requests).toHaveLength(1);
+      release();
+      await f.session.prompt('用户明确提出新请求');
+      expect(f.fixture.requests).toHaveLength(2);
+      expect(JSON.stringify(f.fixture.requests[1]?.messages)).not.toContain('这条排队消息不能自动续跑');
+    } finally { release(); }
+  });
+
   it('fails closed for missing, corrupt or mismatched transcript bindings', async () => {
     const root = await directory();
     const f = await setup(async () => ({ text: 'ok' }), { storage: { directory: root, id: 'bound-session', restore: false } });

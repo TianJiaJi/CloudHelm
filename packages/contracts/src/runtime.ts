@@ -1,4 +1,4 @@
-import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, ReviewSelection, TaskStatus, TaskView } from './index.js';
+import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, ReviewSelection, ResumeReason, TaskStatus, TaskView } from './index.js';
 
 export interface RuntimeHost extends HostView { secret?: string }
 export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 'trust-required' }>
@@ -55,7 +55,7 @@ export type RuntimeMessage =
   | { event: { type: 'input-open'; value: InputRequestView } }
   | { event: { type: 'input-close'; id: string } }
   | { event: { type: 'operation'; value: OperationView } }
-  | { event: { type: 'task-status'; taskId: string; status: TaskStatus; summary?: string; requestCount?: number } }
+  | { event: { type: 'task-status'; taskId: string; status: TaskStatus; summary?: string; resumeReason?: ResumeReason; requestCount?: number } }
   | { event: { type: 'host-status'; hostId: string; status: HostView['status'] } };
 
 export interface HostSafetyConfig { mode: ReviewMode; protectedReadPaths: string[]; protectedWritePaths: string[] }

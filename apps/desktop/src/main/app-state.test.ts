@@ -59,6 +59,18 @@ afterEach(() => {
   for (const state of openStates.splice(0)) state.close();
 });
 
+it('persists explicit continuation reasons and clears them on completion', () => {
+  const { state, store } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  state.record({ type: 'task-status', taskId: task.id, status: 'paused', summary: '等待核验', resumeReason: 'verify' });
+  expect(setup(store).state.getTask(task.id)).toMatchObject({ status: 'paused', resumeReason: 'verify' });
+  state.record({ type: 'task-status', taskId: task.id, status: 'answered' });
+  expect(state.getTask(task.id).resumeReason).toBeUndefined();
+  expect(state.getTask(task.id).summary).toBeUndefined();
+  expect(setup(store).state.getTask(task.id).resumeReason).toBeUndefined();
+});
+
 describe('conversation credential binding', () => {
   it('keeps terminal replacement in authoritative snapshots after further terminal state events', () => {
     const { state, events } = setup();
@@ -274,7 +286,7 @@ describe('conversation deletion', () => {
     expect(restored.conversations.map((item) => item.id)).toEqual([kept.id]);
     expect(restored.messages.map((item) => item.text)).toEqual(['保留']);
   });
-  it.each(['running', 'waiting-review', 'waiting-user', 'recovering', 'human-control', 'answered'] as const)(
+  it.each(['running', 'waiting-review', 'waiting-user', 'recovering', 'human-control'] as const)(
     'refuses to delete a conversation that still owns live work (%s)', (status) => {
       const { state } = setup();
       state.saveProfile(customProfile());
@@ -282,6 +294,15 @@ describe('conversation deletion', () => {
       state.record({ type: 'task-status', taskId: task.id, status });
       expect(() => state.deleteTask(task.id)).toThrow(/进行中/u);
     });
+  it('allows deletion after a completed answer, including a verified change report', () => {
+    const { state } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    state.record({ type: 'work-report', taskId: task.id, report: { summary: '已核验', access: ['无'],
+      evidenceOperationIds: ['check'], changes: ['完成'], recovery: ['无'] } });
+    state.record({ type: 'task-status', taskId: task.id, status: 'answered' });
+    expect(() => state.deleteTask(task.id)).not.toThrow();
+  });
   it('rejects unknown conversations', () => {
     expect(() => setup().state.deleteTask('missing')).toThrow();
   });

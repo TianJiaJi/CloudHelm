@@ -33,10 +33,12 @@ export interface ClarificationRequest {
   answers?: ClarificationAnswer[];
 }
 
-export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'waiting-user' | 'human-control' | 'recovering' | 'paused' | 'answered' | 'ready-for-review' | 'accepted' | 'failed';
+export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'waiting-user' | 'human-control' | 'recovering' | 'paused' | 'answered' | 'failed';
+/** Only these backend-owned reasons permit a host-initiated continuation. */
+export type ResumeReason = 'verify' | 'report' | 'interrupted' | 'model';
 
 /** Statuses in which a conversation still owns live work and must not be deleted. */
-export const ACTIVE_TASK_STATUSES: readonly TaskStatus[] = ['running', 'waiting-review', 'waiting-user', 'human-control', 'recovering', 'answered'];
+export const ACTIVE_TASK_STATUSES: readonly TaskStatus[] = ['running', 'waiting-review', 'waiting-user', 'human-control', 'recovering'];
 export function isActiveTaskStatus(status: TaskStatus): boolean {
   return ACTIVE_TASK_STATUSES.includes(status);
 }
@@ -94,6 +96,7 @@ export interface TaskView {
   reviewRevision?: number;
   localScopes: LocalScope[];
   status: TaskStatus;
+  resumeReason?: ResumeReason;
   modelId: string;
   provider?: string;
   credentialRevision?: string;
@@ -273,7 +276,6 @@ export interface DesktopAPI {
   cancelInput(requestId: string): Promise<void>;
   pauseConversation(taskId: string): Promise<void>;
   resumeConversation(taskId: string): Promise<void>;
-  acceptConversation(taskId: string): Promise<void>;
   listRemote(hostId: string, path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>>;
   readTerminalLog(terminalId: string): Promise<string>;
   /** Permanently removes a finished conversation with its records and terminal logs. */

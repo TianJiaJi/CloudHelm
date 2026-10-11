@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TerminalManager } from '@cloudhelm/application';
+import { BashAnalyzer } from '@cloudhelm/adapters';
+import { isReadOnlyQuery } from '@cloudhelm/core';
 import type { ProposedOperation } from '@cloudhelm/core';
 import type { TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { TaskRunner, type TaskSignals } from './task-runner.js';
 import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
 import { hasUnresolvedOperation } from './recovery-context.js';
+
+it.each(['df -h', 'df -i', 'docker ps', 'sudo docker ps', 'sudo docker ps -a --format "table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}"'])(
+  'classifies %s as an authoritative read-only diagnostic', async (command) => {
+    expect(isReadOnlyQuery(await new BashAnalyzer().analyze(command))).toBe(true);
+  });
 
 it('does not treat a classified read-only unknown as a pending remote write', () => {
   const query = { id: 'old', taskId: 'previous', hostId: 'fixture', kind: 'command' as const,
@@ -74,9 +81,10 @@ describe('remote result analysis', () => {
     const execute = vi.fn(async (operation: { id: string }, _fingerprint: string, _signal?: AbortSignal, _options?: { readOnly?: boolean }) => ({ operationId: operation.id,
       status: 'succeeded' as const, exitCode: 0, effects: 'none' as const, stdoutTail: 'CONTAINER ID', logRef: terminalId }));
     const approval = vi.fn(async () => false);
+    const statuses: string[] = [];
     const runner = new TaskRunner(task, [host], { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'dummy', baseUrl: fixture.baseUrl },
       [], terminal, { execute }, async () => terminalId,
-      { event: () => {}, requestApproval: approval, cancelApproval: () => {} });
+      { event: (event) => { if (event.type === 'task-status') statuses.push(event.status); }, requestApproval: approval, cancelApproval: () => {} });
     try {
       await runner.start();
       runner.message('查看 Docker 服务');
@@ -84,6 +92,7 @@ describe('remote result analysis', () => {
       expect(execute.mock.calls[0]?.[0]).toMatchObject({ command: 'docker ps -a', scope: { goal: '查看 Docker 服务' } });
       expect(execute.mock.calls[0]?.[3]).toMatchObject({ readOnly: true });
       expect(approval).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(statuses.at(-1)).toBe('answered'));
       expect(fixture.errors).toEqual([]);
     } finally {
       await fixture.close();
@@ -128,8 +137,7 @@ describe('remote result analysis', () => {
       const analysis = events.findIndex((event) => event.type === 'task-message' && event.role === 'agent' && event.text === answer);
       expect(completed).toBeGreaterThan(-1);
       expect(analysis).toBeGreaterThan(completed);
-      // Conversational analysis alone must not bypass verification or user acceptance.
-      expect(events.some((event) => event.type === 'task-status' && ['ready-for-review', 'accepted'].includes(event.status))).toBe(false);
+      expect(events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered' });
     } finally {
       await fixture.close();
     }

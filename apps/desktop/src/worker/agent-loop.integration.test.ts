@@ -50,7 +50,7 @@ describe('Pi agent loop over a real loopback SSH session', () => {
             evidenceOperationIds: [evidenceId], changes: [`创建 ${file}`], recovery: ['测试结束后仅清理专用临时目录']
           } }] };
         }
-        case 5: return { text: '配置已写入并验证，结果等待验收。' };
+        case 5: return { text: '配置已写入并验证，结果已记录。' };
         default: throw new Error(`Unexpected autonomous request ${mainRequestCount}`);
       }
     });
@@ -94,7 +94,7 @@ describe('Pi agent loop over a real loopback SSH session', () => {
       await vi.waitFor(() => {
         expect(fixture.errors).toEqual([]);
         const statuses = events.flatMap((message) => 'event' in message && message.event.type === 'task-status' ? [message.event] : []);
-        expect(statuses.at(-1)?.status, JSON.stringify(statuses.at(-1))).toBe('ready-for-review');
+        expect(statuses.at(-1)?.status, JSON.stringify(statuses.at(-1))).toBe('answered');
       }, { timeout: 20_000 });
 
       expect(await readFile(file, 'utf8')).toBe(expectedContent);
@@ -121,7 +121,6 @@ describe('Pi agent loop over a real loopback SSH session', () => {
       expect(output).toContain(expectedContent.trim());
       expect(events.some((message) => 'event' in message && message.event.type === 'work-report'
         && message.event.report?.evidenceOperationIds.length === 1)).toBe(true);
-      expect(events.some((message) => 'event' in message && message.event.type === 'task-status' && message.event.status === 'accepted')).toBe(false);
       expect(JSON.stringify(events)).not.toContain('dummy-key-');
     } finally {
       releaseSecondRequest();

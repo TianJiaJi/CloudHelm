@@ -62,6 +62,41 @@ it('recovers only exact legacy read-only unknown previews', () => {
   expect(migrated.get<{ readOnly?: boolean }>('operations', 'other')?.readOnly).toBeUndefined();
 });
 
+it('migrates completed legacy reviews and only provably answered read-only pauses', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-completion-'));
+  tempDirs.push(directory);
+  const file = join(directory, 'records.sqlite');
+  const legacy = new Database(file);
+  legacy.exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+    CREATE TABLE records(bucket TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY(bucket, id));
+    INSERT INTO schema_migrations VALUES(4, 1), (5, 1), (6, 1), (7, 1);`);
+  const put = legacy.prepare('INSERT INTO records(bucket,id,value,updated_at) VALUES(?,?,?,1)');
+  for (const status of ['ready-for-review', 'accepted']) put.run('tasks', status, JSON.stringify({ status, report: { summary: '已验证' } }));
+  put.run('tasks', 'legacy-unsafe', JSON.stringify({ status: 'accepted' }));
+  put.run('operations', 'legacy-unsafe', JSON.stringify({ taskId: 'legacy-unsafe', readOnly: false, status: 'unknown' }));
+  const summary = '已执行操作，但验证证据尚不完整。请继续核验后验收。';
+  for (const id of ['read', 'unknown', 'interrupted', 'unanswered']) {
+    put.run('tasks', id, JSON.stringify({ status: 'paused', summary }));
+    put.run('operations', id, JSON.stringify({ taskId: id, readOnly: id !== 'unknown', status: 'succeeded',
+      ...(id === 'interrupted' ? { interruption: { source: 'stop-button' } } : {}) }));
+    if (id !== 'unanswered') put.run('messages', id, JSON.stringify({ taskId: id, role: 'agent', text: '查询完成', createdAt: 10 }));
+  }
+  legacy.close();
+  const migrated = new SqliteStore(file);
+  stores.push(migrated);
+  for (const id of ['ready-for-review', 'accepted']) expect(migrated.get<{ status: string; report: { summary: string } }>('tasks', id))
+    .toMatchObject({ status: 'answered', report: { summary: '已验证' } });
+  expect(migrated.get<{ status: string; resumeReason?: string }>('tasks', 'legacy-unsafe'))
+    .toMatchObject({ status: 'paused', resumeReason: 'verify' });
+  expect(migrated.get<{ status: string }>('tasks', 'read')?.status).toBe('answered');
+  for (const id of ['unknown', 'interrupted', 'unanswered']) expect(migrated.get<{ status: string }>('tasks', id)?.status).toBe('paused');
+  migrated.close(); stores.pop();
+  const reopened = new SqliteStore(file);
+  stores.push(reopened);
+  expect(reopened.get<{ status: string }>('tasks', 'read')?.status).toBe('answered');
+});
+
 describe('record cleanup for deleted conversations', () => {
   it('removes records by JSON field and keeps other conversations', () => {
     const store = open();

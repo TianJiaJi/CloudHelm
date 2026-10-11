@@ -162,7 +162,6 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:answer-input', (_event, requestId: string, answer: string) => runtime.call({ method: 'answer-input', requestId, answer }));
   ipcMain.handle('cloudhelm:cancel-input', (_event, requestId: string) => runtime.call({ method: 'cancel-input', requestId }));
   ipcMain.handle('cloudhelm:pause-task', (_event, taskId: string) => runtime.call({ method: 'pause-task', taskId }));
-  ipcMain.handle('cloudhelm:accept-task', (_event, taskId: string) => state.acceptTask(taskId));
   ipcMain.handle('cloudhelm:list-remote', (_event, hostId: string, path: string) => runtime.call({ method: 'list-remote', hostId, path }));
   ipcMain.handle('cloudhelm:read-terminal-log', (_event, terminalId: string) => state.readTerminalLog(terminalId));
 }
@@ -219,9 +218,8 @@ void app.whenReady().then(async () => {
     if (event.type === 'terminal-command' || event.type === 'terminal-data' || event.type === 'terminal-state') references.record(event);
     state.record(event);
     if (!window?.isFocused() && Notification.isSupported()
-      && (event.type === 'approval-open' || event.type === 'input-open'
-        || (event.type === 'task-status' && event.status === 'ready-for-review'))) {
-      new Notification({ title: 'CloudHelm', body: event.type === 'task-status' ? 'AI 已提交验证结果，等待验收。' : 'AI 需要你处理一项请求。' }).show();
+      && (event.type === 'approval-open' || event.type === 'input-open')) {
+      new Notification({ title: 'CloudHelm', body: 'AI 需要你处理一项请求。' }).show();
     }
   }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event));
   await runtime.call({ method: 'restore-operations', operations: state.snapshot().operations

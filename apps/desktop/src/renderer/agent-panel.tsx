@@ -83,7 +83,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       <small>{host ? <><Icon name="shield" size={12} />{reviewLabel[conversation?.reviewModesByHost?.[host.id] ?? host.defaultMode]}</> : '未授权远端操作'}</small></div>
     {conversation && <div className={styles.agentActions}>
       <span className={styles.status}>{statusLabel[conversation.status]}</span>
-      {conversation.session && !running && ['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
+      {conversation.session && !running && conversation.resumeReason && ['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
     </div>}
     {activity && <div className={styles.agentActivity} role="status">{activity}</div>}
     {conversation?.summary && ['paused', 'failed', 'recovering'].includes(conversation.status)
@@ -117,7 +117,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       {inputs.filter((input) => input.kind !== 'secret' && input.kind !== 'otp').map((input) => <InputCard key={input.id} input={input} host={hostName(input.hostId)} report={report} />)}
       {inputs.filter((input) => (input.kind === 'secret' || input.kind === 'otp') && hiddenInputs.includes(input.id)).map((input) => <button className={styles.pendingInput} key={input.id} onClick={() => openInput(input.id)}><Icon name="shield" />{input.title} · 填写</button>)}
       {terminal && <button className={styles.agentTerminalLink} onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 专用终端<Icon name="chevron" size={12} /></button>}
-      {conversation && ['ready-for-review', 'accepted', 'failed'].includes(conversation.status) && <VerificationCard conversation={conversation} report={report} />}
+      {conversation && (conversation.report || conversation.status === 'failed') && <VerificationCard conversation={conversation} report={report} />}
     </div>
     <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} execution={conversation ? snapshot.execution?.[conversation.id] : undefined} hostId={host?.id ?? null} conversation={conversation} host={host} compaction={conversation ? snapshot.contextCompaction?.[conversation.id] : undefined} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} report={report} />
   </>;

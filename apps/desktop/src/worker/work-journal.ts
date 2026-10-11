@@ -36,7 +36,7 @@ export class WorkJournal {
       evidenceOperationIds: Type.Array(Type.String(), { minItems: 1 }),
       changes: Type.Array(Type.String(), { minItems: 1 }), recovery: Type.Array(Type.String(), { minItems: 1 }) });
     const report: BusinessTool<Static<typeof reportParameters>> = {
-      name: 'submit_verification', label: 'Submit verified results for user acceptance', replay: 'never', parameters: reportParameters,
+      name: 'submit_verification', label: 'Record verified change results', replay: 'never', parameters: reportParameters,
       description: 'Only after inspecting actual remote results: provide successful verification operation IDs, access details (or explicit not applicable), concrete changes and recovery instructions. Failed or unknown operations are not evidence.',
       execute: async (_id, value) => {
         const operations = this.operations().filter((operation) => operation.taskId === this.taskId);
@@ -53,7 +53,7 @@ export class WorkJournal {
         }
         this.report = value;
         this.emit({ type: 'work-report', taskId: this.taskId, report: value });
-        return result('Verification report recorded; user acceptance is still required');
+        return result('Verification report recorded; report the conclusion to the user');
       }
     };
     const logParameters = Type.Object({ operationId: Type.String(), cursor: Type.Optional(Type.Integer({ minimum: 0 })) });

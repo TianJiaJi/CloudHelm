@@ -75,6 +75,7 @@ class PiConversationSession implements ConversationSession {
   private usageReady = false;
   private switched = false;
   private failure?: Error;
+  private answered = false;
   private running?: Promise<void>;
 
   constructor(private readonly session: AgentSession, private readonly options: SessionOptions,
@@ -135,6 +136,7 @@ class PiConversationSession implements ConversationSession {
       if (event.type === 'message_end') {
         if (event.message.role === 'assistant') {
           const message = event.message;
+          this.answered = message.stopReason === 'stop' && message.content.some((part) => part.type === 'text' && !!part.text.trim());
           if (message.stopReason === 'error' || message.stopReason === 'aborted') {
             this.failure ??= new Error(message.errorMessage || '模型回复未完成');
           } else if (message.stopReason === 'length') {
@@ -168,6 +170,7 @@ class PiConversationSession implements ConversationSession {
   }
 
   get isStreaming(): boolean { return !!this.running || !this.session.isIdle; }
+  get lastTurnAnswered(): boolean { return this.answered; }
   get profile(): SessionProfile { return this.active; }
   select(profile: SessionProfile): void {
     resolveSessionModel(profile);
@@ -208,8 +211,17 @@ class PiConversationSession implements ConversationSession {
     return this.session.getContextUsage()?.tokens ?? Math.ceil(Buffer.byteLength(JSON.stringify(this.session.messages), 'utf8') / 2) + 4096;
   }
   prompt(text: string, document?: MessageDocument): Promise<void> {
+    return this.runTurn(async () => {
+      this.pendingDocuments.push(document);
+      await this.session.prompt(text, { expandPromptTemplates: false });
+    });
+  }
+  resumeWithContext(text: string): Promise<void> {
+    return this.runTurn(() => this.session.sendCustomMessage({ customType: 'cloudhelm-control', content: text, display: false }, { triggerTurn: true }));
+  }
+  private runTurn(start: () => Promise<void>): Promise<void> {
     if (this.running) return Promise.reject(new Error('会话正在处理，请等待当前请求结束'));
-    const run = this.runPrompt(text, document).finally(() => {
+    const run = this.executeTurn(start).finally(() => {
       if (this.running === run) this.running = undefined;
       this.reasoningStream.clear();
       this.options.event({ type: 'activity' });
@@ -218,13 +230,14 @@ class PiConversationSession implements ConversationSession {
     this.options.event({ type: 'activity' });
     return run;
   }
-  private async runPrompt(text: string, document?: MessageDocument): Promise<void> {
+  private async executeTurn(start: () => Promise<void>): Promise<void> {
     this.failure = undefined;
+    this.answered = false;
     this.options.assertActive();
     await this.prepareModel();
     this.options.assertActive();
-    this.pendingDocuments.push(document);
-    await this.session.prompt(text, { expandPromptTemplates: false });
+    await start();
+    await this.session.waitForIdle();
     this.project();
     this.publishUsage();
     if (this.failure) throw this.failure;

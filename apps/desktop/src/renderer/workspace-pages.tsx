@@ -88,17 +88,16 @@ export function OperationCard({ operation, report }: { operation: OperationView;
 }
 
 export function VerificationCard({ conversation, report }: { conversation: TaskView; report(error: string): void }): React.JSX.Element {
-  const verified = conversation.status === 'ready-for-review' && !!conversation.report?.evidenceOperationIds.length;
+  const verified = conversation.status === 'answered' && !!conversation.report?.evidenceOperationIds.length;
   const failure = conversation.status === 'failed' ? presentError(conversation.summary) : null;
   const conclusion = failure?.description ?? conversation.report?.summary ?? conversation.summary ?? '';
   return <section className={`${styles.reviewCard} ${styles.verificationCard}`}
     onContextMenu={(event) => openContextMenu(event, copyEntries('复制结论', conclusion, report), '验证结论')}>
-    <div className={styles.cardTitle}><Icon name={verified || conversation.status === 'accepted' ? 'check' : 'shield'} /><strong>{failure?.title ?? statusLabel[conversation.status]}</strong></div>
+    <div className={styles.cardTitle}><Icon name={verified ? 'check' : 'shield'} /><strong>{failure?.title ?? statusLabel[conversation.status]}</strong></div>
     <p>{failure?.description ?? conversation.report?.summary ?? conversation.summary ?? '还需要补充验证证据，请查看对话中的说明。'}</p>
     {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
       : conversation.report?.access.map((address) => <code className={styles.access} key={address}>{address}</code>)}
     <div className={styles.cardActions}><button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
-      {verified && conversation.session && <button className={styles.primary} onClick={() => void capture(() => window.cloudhelm.acceptConversation(conversation.id), report)}>验收完成</button>}
     </div>
   </section>;
 }

@@ -4,7 +4,7 @@ import { safeStorage } from 'electron';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
 import { OutputRedactor } from '@cloudhelm/core';
-import { HostDraftSchema, isActiveTaskStatus, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type TaskView } from '@cloudhelm/contracts';
+import { HostDraftSchema, isActiveTaskStatus, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
 
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; credentialRevision?: string }
@@ -141,16 +141,6 @@ export class AppState {
     const task = this.tasks.get(id);
     if (!task) throw new Error('Task not found');
     return task;
-  }
-
-  acceptTask(id: string): void {
-    const task = this.getTask(id);
-    if (!task.session) throw new Error('旧对话仅供查看，请开始新对话');
-    if (task.status !== 'ready-for-review') throw new Error('Only a completed task awaiting review can be accepted');
-    const accepted = { ...task, status: 'accepted' as const, updatedAt: Date.now() };
-    this.tasks.set(id, accepted);
-    this.store.put('tasks', id, accepted);
-    this.publish();
   }
 
   /** Conversations with live work stay until the user finishes them first. */
@@ -462,7 +452,7 @@ export class AppState {
   record(event: AppEvent | { type: 'approval-open'; value: AppSnapshot['approvals'][number] }
     | { type: 'approval-close'; id: string } | { type: 'operation'; value: OperationView }
     | { type: 'input-open'; value: InputRequestView } | { type: 'input-close'; id: string }
-    | { type: 'task-status'; taskId: string; status: TaskView['status']; summary?: string; requestCount?: number }
+    | { type: 'task-status'; taskId: string; status: TaskView['status']; summary?: string; resumeReason?: ResumeReason; requestCount?: number }
     | { type: 'host-status'; hostId: string; status: HostView['status'] }): void {
     if (this.closed) return;
     switch (event.type) {
@@ -490,7 +480,7 @@ export class AppState {
       case 'task-status': {
         const task = this.tasks.get(event.taskId);
         if (task) {
-          Object.assign(task, { status: event.status, updatedAt: Date.now(), summary: event.summary ?? (event.status === 'running' ? undefined : task.summary), requestCount: event.requestCount ?? task.requestCount });
+          Object.assign(task, { status: event.status, updatedAt: Date.now(), summary: event.summary ?? (['running', 'answered'].includes(event.status) ? undefined : task.summary), resumeReason: event.resumeReason, requestCount: event.requestCount ?? task.requestCount });
           this.store.put('tasks', task.id, task);
         }
         break;

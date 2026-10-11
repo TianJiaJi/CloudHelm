@@ -50,9 +50,13 @@ export interface SessionOptions {
 /** SDK-neutral lifecycle; restoration never sends a prompt or executes tools. */
 export interface ConversationSession {
   readonly isStreaming: boolean;
+  /** True only when the most recently settled turn ended in a complete, nonempty assistant answer. */
+  readonly lastTurnAnswered: boolean;
   readonly profile: SessionProfile;
   contextTokens?(): number;
   prompt(text: string, document?: import('./message-content.js').MessageDocument): Promise<void>;
+  /** Host-initiated continuation, never projected as a user message. */
+  resumeWithContext(text: string): Promise<void>;
   steer(text: string, document?: import('./message-content.js').MessageDocument): Promise<void>;
   context(text: string): Promise<void>;
   select(profile: SessionProfile): void;

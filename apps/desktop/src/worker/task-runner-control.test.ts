@@ -66,6 +66,28 @@ async function setup(completeImmediately = true, command = 'df -h', repeat = fal
 }
 
 describe('stop and explicit continuation', () => {
+  it('finishes a diagnostic answer without offering a phantom continuation', async () => {
+    const f = await setup();
+    try {
+      await f.runner.start();
+      expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered' });
+      await expect(f.runner.resume()).rejects.toThrow('没有可自动继续');
+      expect(f.requests()).toBe(2);
+    } finally { await f.fixture.close(); }
+  });
+
+  it('pauses a completed change lacking evidence and resumes without a fabricated user turn or replay', async () => {
+    const f = await setup(true, 'mkdir -p /srv/service');
+    try {
+      await f.runner.start();
+      expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'paused', resumeReason: 'report' });
+      await f.runner.resume();
+      expect(f.requests()).toBe(3);
+      expect(f.sessions.flatMap((session) => session.channel.commands)).toEqual(['mkdir -p /srv/service']);
+      expect(JSON.stringify(f.fixture.requests[2]?.messages)).toContain('verification report is missing');
+      expect(f.events.filter((event) => event.type === 'task-message' && event.role === 'user')).toHaveLength(1);
+    } finally { await f.fixture.close(); }
+  });
   it('preserves successful changes when a subsequent model request fails and the user continues', async () => {
     const f = await setup(true, 'mkdir -p /srv/service');
     try {
@@ -128,6 +150,7 @@ describe('stop and explicit continuation', () => {
       if (source === 'ctrl-c') f.runner.terminalInput(id, '\u0003'); else f.runner.stopOperation(source);
       f.runner.stopOperation(source); // Repeated clicks cannot inject duplicate controls or requests.
       await running;
+      expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'paused', resumeReason: 'interrupted' });
       expect(f.clearCredentials).toHaveBeenCalled();
       expect(f.events.filter((event) => event.type === 'execution').at(-1)).toMatchObject({ value: { model: 'idle', remote: 'running', stopping: true, canStop: true } });
       expect(f.requests()).toBe(1);
@@ -162,6 +185,7 @@ describe('stop and explicit continuation', () => {
       expect(f.runner.resume()).toBe(resuming);
       await vi.waitFor(() => expect(f.sessions).toHaveLength(2), { timeout: 15000 });
       f.runner.pause(); opening.resolve(); await resuming;
+      expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'paused' });
       expect(f.requests()).toBe(1);
       expect(f.terminal.currentGeneration(f.sessions[1]!.id)).toBe(-1);
       expect(f.events.some((event) => event.type === 'terminal-replaced')).toBe(false);

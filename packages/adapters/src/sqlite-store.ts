@@ -95,6 +95,40 @@ export class SqliteStore {
         INSERT INTO schema_migrations(version, applied_at) VALUES (7, unixepoch());
       `);
     })();
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 8').get()) return;
+      this.raw.exec(`
+        UPDATE records SET value = json_remove(json_set(value, '$.status', 'answered'), '$.resumeReason')
+        WHERE bucket = 'tasks' AND json_extract(value, '$.status') IN ('ready-for-review', 'accepted')
+          AND NOT EXISTS (SELECT 1 FROM records AS op WHERE op.bucket = 'operations'
+            AND json_extract(op.value, '$.taskId') = records.id
+            AND coalesce(json_extract(op.value, '$.readOnly'), 0) != 1
+            AND (json_extract(op.value, '$.status') IN ('unknown', 'running', 'proposed', 'approved')
+              OR (json_extract(op.value, '$.status') = 'failed'
+                AND coalesce(json_extract(op.value, '$.effects'), 'possible') != 'none'
+                AND json_extract(op.value, '$.reconciledAt') IS NULL)));
+        UPDATE records SET value = json_set(value, '$.status', 'paused', '$.resumeReason', 'verify')
+        WHERE bucket = 'tasks' AND json_extract(value, '$.status') IN ('ready-for-review', 'accepted');
+        UPDATE records SET value = json_remove(json_set(value, '$.status', 'answered'), '$.resumeReason')
+        WHERE bucket = 'tasks' AND json_extract(value, '$.status') = 'paused'
+          AND json_extract(value, '$.summary') = '已执行操作，但验证证据尚不完整。请继续核验后验收。'
+          AND EXISTS (SELECT 1 FROM records AS op WHERE op.bucket = 'operations'
+            AND json_extract(op.value, '$.taskId') = records.id)
+          AND NOT EXISTS (SELECT 1 FROM records AS op WHERE op.bucket = 'operations'
+            AND json_extract(op.value, '$.taskId') = records.id
+            AND (coalesce(json_extract(op.value, '$.readOnly'), 0) != 1
+              OR json_extract(op.value, '$.status') NOT IN ('succeeded', 'failed')
+              OR json_type(op.value, '$.interruption') IS NOT NULL))
+          AND EXISTS (SELECT 1 FROM records AS msg WHERE msg.bucket = 'messages'
+            AND json_extract(msg.value, '$.taskId') = records.id
+            AND json_extract(msg.value, '$.role') = 'agent'
+            AND length(trim(coalesce(json_extract(msg.value, '$.text'), ''))) > 0
+            AND json_extract(msg.value, '$.createdAt') >= coalesce((SELECT max(json_extract(prior.value, '$.createdAt'))
+              FROM records AS prior WHERE prior.bucket = 'messages' AND json_extract(prior.value, '$.taskId') = records.id
+                AND json_extract(prior.value, '$.role') = 'user'), 0));
+        INSERT INTO schema_migrations(version, applied_at) VALUES (8, unixepoch());
+      `);
+    })();
     this.db = drizzle(this.raw);
   }
 
