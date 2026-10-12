@@ -25,13 +25,9 @@ describe('Pi agent loop over a real loopback SSH session', () => {
       if (request.review) return { text: 'ALLOW' };
       mainRequestCount++;
       switch (mainRequestCount) {
-        case 1: return { calls: [
-          { id: 'plan', name: 'update_plan', arguments: { steps: [
-            { id: 'inspect', title: '检查临时服务目录', status: 'running' },
-            { id: 'write', title: '写入服务配置并读回验证', status: 'pending' }
-          ] } },
-          { id: 'inspect', name: 'run_remote', arguments: { hostId: 'local-fixture', command: 'pwd', cwd: root } }
-        ] };
+        case 1: return { calls: [{ id: 'inspect', name: 'run_remote', arguments: {
+          hostId: 'local-fixture', command: 'pwd', cwd: root
+        } }] };
         case 2:
           await secondRequestHold;
           return { calls: [{ id: 'write', name: 'write_remote_file', arguments: {

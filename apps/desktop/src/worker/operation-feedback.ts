@@ -6,7 +6,7 @@ export function operationFeedback(result: OperationResult, host: string): string
     : result.authentication === 'required'
       ? 'Non-interactive sudo needed authentication; this is not a rejected password or denial. Submit the actual required command without -n through normal review; CloudHelm will prompt privately if necessary.'
       : result.failureKind === 'unresolved-prior-operation'
-        ? 'This command was not sent and had no effects. A previous remote operation still needs verification. Read-only inspection may continue. Identify and reconcile the original operation before any write; do not retry this blocked write to bypass the guard.'
+        ? 'SafetyGate allowed this command, but a separate host outcome lock prevented dispatch; this command had no effects. Read-only inspection may continue. read_operation_log only accepts operations from this conversation: for IDs from another conversation, use the host recovery card to view the original redacted log and confirm each unresolved result. Do not retry this blocked write until every host lock is resolved; a new command still requires its own review.'
       : result.failureKind === 'permission-denied'
         ? 'Check the permission failure for this operation. Use a new reviewed bounded sudo operation when appropriate. Verify possible partial effects before retrying; do not repeat known failing unprivileged checks.'
         : result.status === 'failed' && result.effects === 'none'

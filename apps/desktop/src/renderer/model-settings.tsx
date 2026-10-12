@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppSnapshot, ModelProfileDraft, ModelProviderSettings, ModelProviderView, ReviewSelection } from '@cloudhelm/contracts';
 import { errorMessage, inlineError } from './error-presentation.js';
 import { ShortcutSettings } from './shortcut-settings.js';
+import { MenuSurface } from './menu-surface.js';
+import { useMenuAnchor } from './composer-controls.js';
+import { Icon } from './ui-helpers.js';
 import styles from './model-settings.module.css';
 
 type Profile = AppSnapshot['profile'];
@@ -9,7 +12,7 @@ type Section = 'api' | 'subscription' | 'review' | 'shortcuts';
 type Destination = { section: Section } | { providerId: string } | { close: true } | { externalAction(): void };
 type NavigationGuard = (next: () => void) => void;
 type Feedback = { kind: 'success' | 'error'; text: string } | null;
-interface ApiDraft { modelId: string; baseUrl: string; apiKey: string }
+interface ApiDraft { modelId: string; baseUrl: string; apiKey: string; contextWindow: string; maxTokens: string }
 interface ProviderConfiguration { providerId: string; saved: ModelProviderSettings; initial: ApiDraft }
 
 function message(error: unknown): string { return inlineError(error); }
@@ -23,13 +26,14 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
   const [providers, setProviders] = useState<ModelProviderView[]>([]);
   const [providerId, setProviderId] = useState('');
   const [configuration, setConfiguration] = useState<ProviderConfiguration | null>(null);
-  const [draft, setDraft] = useState<ApiDraft>({ modelId: '', baseUrl: '', apiKey: '' });
+  const [draft, setDraft] = useState<ApiDraft>({ modelId: '', baseUrl: '', apiKey: '', contextWindow: '', maxTokens: '' });
   const [providerSearch, setProviderSearch] = useState('');
   const [modelSearch, setModelSearch] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [jevKey, setJevKey] = useState('');
   const [hasJevKey, setHasJevKey] = useState(current.hasJevKey);
   const [reviewer, setReviewer] = useState<ReviewSelection>(current.reviewer ?? { kind: 'current' });
+  const reviewMenu = useMenuAnchor();
   const [reviewModels, setReviewModels] = useState<Array<{ provider: string; modelId: string; name: string }>>([]);
   const [disableJev, setDisableJev] = useState(false);
   const [busy, setBusy] = useState<'save' | 'test' | null>(null);
@@ -47,12 +51,18 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
   const isDefault = (item: ModelProviderView): boolean => item.id === defaultProvider
     || item.name.toLowerCase() === defaultProvider.toLowerCase();
   const apiDirty = loaded && configuration !== null && (draft.apiKey !== ''
-    || draft.modelId !== configuration.initial.modelId || draft.baseUrl !== configuration.initial.baseUrl);
+    || draft.modelId !== configuration.initial.modelId || draft.baseUrl !== configuration.initial.baseUrl
+    || draft.contextWindow !== configuration.initial.contextWindow || draft.maxTokens !== configuration.initial.maxTokens);
   const dirty = section === 'api' ? apiDirty : section === 'review' && (jevKey !== '' || disableJev
     || JSON.stringify(reviewer) !== JSON.stringify(current.reviewer ?? { kind: 'current' }));
 
   useEffect(() => { void window.cloudhelm.availableModels().then(setReviewModels).catch(() => undefined); }, []);
-  const validApi = loaded && !!draft.modelId.trim() && !!draft.baseUrl.trim();
+  const custom = providerId === 'cloudhelm-custom';
+  const capacity = (value: string) => /^(?:[1-9][0-9]*)$/u.test(value) && Number.isSafeInteger(Number(value));
+  const validLimits = !custom || ((!draft.contextWindow && !draft.maxTokens)
+    || (capacity(draft.contextWindow) && capacity(draft.maxTokens)
+      && Number(draft.contextWindow) >= 2 && Number(draft.maxTokens) <= Number(draft.contextWindow)));
+  const validApi = loaded && !!draft.modelId.trim() && !!draft.baseUrl.trim() && validLimits;
   const hasApiKey = configuration?.saved.hasKey || !!draft.apiKey.trim();
 
   useEffect(() => {
@@ -72,7 +82,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     if (!selected) return;
     let active = true;
     setConfiguration(null);
-    setDraft({ modelId: '', baseUrl: '', apiKey: '' });
+    setDraft({ modelId: '', baseUrl: '', apiKey: '', contextWindow: '', maxTokens: '' });
     setShowKey(false);
     setModelSearch('');
     setFeedback(null);
@@ -80,7 +90,8 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     void window.cloudhelm.modelProviderSettings(providerId).then((saved) => {
       if (!active) return;
       const initial = { modelId: saved.modelId ?? selected.models[0]?.id ?? '',
-        baseUrl: saved.baseUrl ?? selected.defaultBaseUrl ?? '', apiKey: '' };
+        baseUrl: saved.baseUrl ?? selected.defaultBaseUrl ?? '', apiKey: '',
+        contextWindow: saved.contextWindow?.toString() ?? '', maxTokens: saved.maxTokens?.toString() ?? '' };
       setConfiguration({ providerId, saved, initial });
       setDraft(initial);
     }).catch((error: unknown) => { if (active) setLoadError(message(error)); });
@@ -98,6 +109,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     `${item.name} ${item.id}`.toLowerCase().includes(modelSearch.trim().toLowerCase())), [provider, modelSearch]);
 
   function navigate(destination: Destination): void {
+    reviewMenu.close();
     setPending(null);
     setFeedback(null);
     setShowKey(false);
@@ -131,7 +143,9 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
 
   function profileDraft(): ModelProfileDraft {
     return { provider: providerId, modelId: draft.modelId.trim(), baseUrl: draft.baseUrl.trim(),
-      apiKey: draft.apiKey.trim() || undefined };
+      apiKey: draft.apiKey.trim() || undefined,
+      contextWindow: custom && draft.contextWindow ? Number(draft.contextWindow) : undefined,
+      maxTokens: custom && draft.maxTokens ? Number(draft.maxTokens) : undefined };
   }
 
   async function saveApi(): Promise<boolean> {
@@ -141,8 +155,10 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     try {
       const profile = profileDraft();
       await window.cloudhelm.saveModelProfile(profile);
-      const initial = { modelId: profile.modelId, baseUrl: profile.baseUrl ?? '', apiKey: '' };
+      const initial = { modelId: profile.modelId, baseUrl: profile.baseUrl ?? '', apiKey: '',
+        contextWindow: profile.contextWindow?.toString() ?? '', maxTokens: profile.maxTokens?.toString() ?? '' };
       setConfiguration({ providerId, saved: { modelId: initial.modelId, baseUrl: initial.baseUrl,
+        contextWindow: profile.contextWindow, maxTokens: profile.maxTokens,
         hasKey: configuration.saved.hasKey || !!profile.apiKey }, initial });
       setDraft(initial);
       setShowKey(false);
@@ -241,6 +257,13 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
                     onClick={() => updateDraft({ baseUrl: provider.defaultBaseUrl ?? '' })}>恢复预置</button></div>
                 <p className={styles.hint}>{provider.defaultBaseUrl ? '已预置供应商地址，可单独修改。' : '填写自定义服务的 API 地址，支持 HTTPS 或本机 HTTP。'}</p>
               </div></div>
+              {custom && <div className={styles.field}><label htmlFor="model-context-window">模型容量</label><div>
+                <input id="model-context-window" type="number" min="2" step="1" value={draft.contextWindow}
+                  onChange={(event) => updateDraft({ contextWindow: event.target.value })} placeholder="上下文窗口 token 数" />
+                <input aria-label="最大输出 token 数" type="number" min="1" step="1" value={draft.maxTokens}
+                  onChange={(event) => updateDraft({ maxTokens: event.target.value })} placeholder="最大输出 token 数" />
+                <p className={styles.hint}>按服务端文档同时填写；留空使用保守的 32000 / 8192。连接测试无法验证容量。</p>
+              </div></div>}
               <div className={styles.testRow}>
                 <button type="button" className={styles.button} disabled={!validApi || !hasApiKey || busy !== null}
                   onClick={() => void testConnection()}><span aria-hidden="true">▷</span>{busy === 'test' ? '正在测试…' : '测试连接'}</button>
@@ -278,15 +301,27 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
       <div className={styles.reviewStatus}><SettingsIcon kind="shield" /><div><strong>{reviewer.kind === 'jev' ? 'Jev 独立审核' : reviewer.kind === 'model' ? '指定模型独立审核' : '当前对话模型独立审核'}</strong>
         <p>仅第二档的不确定操作调用所选审核模型。审核失败会询问你，不会偷偷换模型或计费账户。</p></div></div>
       <fieldset className={styles.reviewFields} disabled={busy !== null}>
-        <label htmlFor="review-model">审核模型</label>
-        <select id="review-model" value={reviewer.kind === 'model' ? `${reviewer.provider}/${reviewer.modelId}` : reviewer.kind}
-          onChange={(event) => { const value = event.target.value;
-            setReviewer(value === 'current' || value === 'jev' ? { kind: value } : {
-              kind: 'model', provider: value.slice(0, value.indexOf('/')), modelId: value.slice(value.indexOf('/') + 1) });
-            setFeedback(null); }}>
-          <option value="current">当前对话模型（默认）</option><option value="jev">Jev</option>
-          {reviewModels.map((model) => <option key={`${model.provider}/${model.modelId}`} value={`${model.provider}/${model.modelId}`}>{model.name} · {model.provider}</option>)}
-        </select>
+        <label id="review-model-label">审核模型</label>
+        <button type="button" className={styles.reviewSelect} aria-labelledby="review-model-label review-model-value"
+          aria-haspopup="menu" aria-expanded={!!reviewMenu.anchor} {...reviewMenu.trigger}>
+          <span id="review-model-value">{reviewer.kind === 'current' ? '当前对话模型（默认）' : reviewer.kind === 'jev' ? 'Jev'
+            : `${reviewModels.find((model) => model.provider === reviewer.provider && model.modelId === reviewer.modelId)?.name ?? reviewer.modelId} · ${reviewer.provider}`}</span>
+          <Icon name="chevron" size={14} />
+        </button>
+        {reviewMenu.anchor && <MenuSurface anchor={reviewMenu.anchor} label="审核模型" align="start" className={styles.reviewMenu} close={reviewMenu.close}>
+          {([{ kind: 'current', label: '当前对话模型（默认）' }, { kind: 'jev', label: 'Jev' }] as const).map((item) =>
+            <button type="button" role="menuitem" key={item.kind} aria-current={reviewer.kind === item.kind ? 'true' : undefined}
+              onClick={() => { setReviewer({ kind: item.kind }); setFeedback(null); reviewMenu.close(); }}>
+              <span>{item.label}</span>{reviewer.kind === item.kind && <Icon name="check" size={14} />}
+            </button>)}
+          {reviewModels.map((model) => <button type="button" role="menuitem" key={`${model.provider}/${model.modelId}`}
+            aria-current={reviewer.kind === 'model' && reviewer.provider === model.provider && reviewer.modelId === model.modelId ? 'true' : undefined}
+            title={`${model.name} · ${model.provider} / ${model.modelId}`}
+            onClick={() => { setReviewer({ kind: 'model', provider: model.provider, modelId: model.modelId }); setFeedback(null); reviewMenu.close(); }}>
+            <span>{model.name} · {model.provider}</span>
+            {reviewer.kind === 'model' && reviewer.provider === model.provider && reviewer.modelId === model.modelId && <Icon name="check" size={14} />}
+          </button>)}
+        </MenuSurface>}
         <label htmlFor="review-key">Jev / Vercel Gateway Key {hasJevKey && <span className={styles.badge}>已配置</span>}</label>
         <input id="review-key" type="password" autoComplete="off" spellCheck={false} value={jevKey} disabled={disableJev}
           onChange={(event) => { setJevKey(event.target.value); setFeedback(null); }} placeholder={hasJevKey ? '留空保留现有 Key' : '选择 Jev 后填写'} />

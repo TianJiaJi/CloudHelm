@@ -1,6 +1,24 @@
 import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation } from '@cloudhelm/core';
 
-/** Serializes Agent writes across tasks sharing one target host. */
+/**
+ * Serializes Agent writes across tasks sharing one target host.
+ *
+ * Outcome state transitions guarded here:
+ * - running → succeeded | failed | unknown on real terminal evidence, including
+ *   late PTY exits that arrive after the tool call already returned;
+ * - unknown / failed-with-possible-effects → resolved only through fresh
+ *   same-host evidence or an explicit recorded user risk acceptance — never by
+ *   replaying the original action;
+ * - resolved stays resolved for this process; restore() re-arms locks from the
+ *   persisted unresolved set after a restart.
+ *
+ * Invariants:
+ * - While any non-read-only operation on the host has an unresolved outcome,
+ *   every further write is refused before dispatch regardless of how low-risk
+ *   the new write is; read-only inspection stays available.
+ * - An operation with a live remote completion promise is still running and
+ *   cannot be reconciled away.
+ */
 export class HostSerialExecutor implements OperationExecutor {
   private readonly tails = new Map<string, Promise<void>>();
   private readonly unsettled = new Map<string, Map<string, Promise<'exited' | 'unknown'> | null>>();
@@ -24,9 +42,15 @@ export class HostSerialExecutor implements OperationExecutor {
     if (!pending.size) this.unsettled.delete(hostId);
   }
 
+  /** A live remote completion cannot be overridden even by a risk acceptance. */
+  canReconcile(hostId: string, operationId: string): boolean {
+    return !this.unsettled.get(hostId)?.get(operationId);
+  }
+
+  /** Releases one unresolved record after evidence or an explicit risk acceptance. */
   reconcile(hostId: string, operationId: string): boolean {
     const operations = this.unsettled.get(hostId);
-    if (operations?.get(operationId)) return false;
+    if (!this.canReconcile(hostId, operationId)) return false;
     operations?.delete(operationId);
     if (!operations?.size) this.unsettled.delete(hostId);
     return true;

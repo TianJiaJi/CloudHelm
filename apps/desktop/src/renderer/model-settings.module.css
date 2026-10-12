@@ -109,6 +109,15 @@
 .reviewFields { display: flex; flex-direction: column; gap: 10px; max-width: 650px; margin: 25px 0; padding: 0; border: 0; }
 .reviewFields > label { font-size: 12px; }
 .reviewFields > label .badge { margin-left: 5px; }
+.page .reviewSelect { display: flex; justify-content: space-between; width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--canvas); color: var(--text); text-align: left; font-size: 12px; }
+.page .reviewSelect:hover, .page .reviewSelect[aria-expanded="true"] { border-color: var(--accent); background: var(--raised); }
+.reviewSelect span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reviewSelect svg { flex: none; color: var(--muted); }
+.reviewMenu { width: min(650px, calc(100vw - 16px)); }
+.reviewMenu button { gap: 12px; color: var(--text); }
+.reviewMenu button:hover, .reviewMenu button:focus-visible { background: var(--raised); }
+.reviewMenu button[aria-current="true"] { background: var(--accentSoft); color: var(--accent); }
+.reviewMenu button svg { flex: none; color: var(--accent); }
 .reviewFields .hint { margin: 0; }
 .page .checkbox { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); }
 .page .checkbox input { width: 15px; height: 15px; flex: none; accent-color: var(--accent); }

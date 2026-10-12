@@ -6,11 +6,13 @@ export interface FixtureRequest {
   thinking?: { type: string };
   reasoning_effort?: string;
   model: string;
+  max_tokens?: number;
+  max_completion_tokens?: number;
   authorization: string;
   review: boolean;
   messages: FixtureMessage[];
   stream: boolean;
-  tools?: Array<{ function: { name: string } }>;
+  tools?: Array<{ function: { name: string; description?: string } }>;
 }
 export type FixtureResponse = ({ text: string } | { calls: Array<{ id: string; name: string; arguments: unknown }> } | { error: string; status: number }) & { reasoning?: string[]; finishReason?: 'stop' | 'length'; afterReasoning?: () => Promise<void>; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens: number } } };
 
@@ -35,7 +37,7 @@ export async function openAiFixture(reply: (request: FixtureRequest) => Promise<
     if (incoming.method !== 'POST' || incoming.url !== '/v1/chat/completions') throw new Error(`Unexpected route: ${incoming.url}`);
     const chunks: Buffer[] = [];
     for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
-    const body = JSON.parse(Buffer.concat(chunks).toString()) as Pick<FixtureRequest, 'model' | 'messages' | 'stream'>;
+    const body = JSON.parse(Buffer.concat(chunks).toString()) as Pick<FixtureRequest, 'model' | 'messages' | 'stream' | 'max_tokens' | 'max_completion_tokens'>;
     const request = { ...body, authorization: incoming.headers.authorization ?? '', review: body.messages.some((message) =>
       ['system', 'developer'].includes(message.role) && fixtureMessageText(message).includes('independent security reviewer')) };
     requests.push(request);

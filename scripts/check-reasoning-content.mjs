@@ -15,8 +15,11 @@ export async function checkReasoningContent(page, screenshot) {
     window.fixture.inject({ type: 'snapshot', value: structuredClone(snapshot) });
   });
   const card = page.getByRole('region', { name: '思考内容', exact: true });
-  await card.getByText('先查看服务状态，再核对退出码。', { exact: true }).waitFor();
   await card.getByText('正在接收…', { exact: true }).waitFor();
+  assert.equal(await card.getByRole('button').getAttribute('aria-expanded'), 'false');
+  assert.equal(await card.getByText('先查看服务状态，再核对退出码。').count(), 0);
+  await card.getByRole('button').click();
+  await card.getByText('先查看服务状态，再核对退出码。', { exact: true }).waitFor();
   await card.getByRole('button').click();
   assert.equal(await card.getByText('先查看服务状态，再核对退出码。').count(), 0);
   await page.evaluate(() => {
@@ -59,6 +62,7 @@ export async function checkReasoningContent(page, screenshot) {
     window.fixture.inject({ type: 'snapshot', value: structuredClone(snapshot) });
   });
   await page.getByRole('region', { name: '思考摘要', exact: true }).getByText('已中断', { exact: true }).waitFor();
+  await page.getByRole('region', { name: '思考内容', exact: true }).last().getByRole('button').click();
   await page.getByText('此响应未返回可展示的思考内容。', { exact: true }).waitFor();
   await screenshot('reasoning-completed-and-unavailable.png');
 }

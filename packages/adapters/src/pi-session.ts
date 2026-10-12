@@ -1,6 +1,7 @@
 import type { MessageDocument } from '@cloudhelm/core';
 import { PiReasoningStream, reasoningView } from './pi-reasoning.js';
 import { modelThinking } from './model-catalog.js';
+import { conversationOutputTokens } from './model-capacity.js';
 import type { ThinkingLevel, ThinkingView } from '@cloudhelm/core';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,8 @@ import { installSessionModel, isolatedModelRuntime, resolveSessionModel } from '
 import { description, guidelines } from './pi-extensions/ask-user/prompts.js';
 import askUser, { ASK_CHANNEL, type AskBridgeEvent } from './pi-extensions/ask-user/index.js';
 
+const conversationSystemPrompt = (prompt: string) => [prompt, description, ...guidelines].join('\n');
+
 /** One native Pi session, with CloudHelm's explicit tools, credentials and lifecycle limits. */
 export async function createConversationSession(options: SessionOptions): Promise<ConversationSession> {
   const cwd = await mkdtemp(join(tmpdir(), 'cloudhelm-session-'));
@@ -21,8 +24,8 @@ export async function createConversationSession(options: SessionOptions): Promis
     const runtime = await isolatedModelRuntime(options.profile);
     const settings = SettingsManager.inMemory({ packages: [], retry: { enabled: false, provider: { maxRetries: 0 } },
       cacheWarming: 'off', compaction: { enabled: true, reserveTokens: 8192, keepRecentTokens: 8000 } });
-    const configureWindow = (model: { contextWindow: number }) => settings.applyOverrides({ compaction: {
-      reserveTokens: Math.max(1, Math.min(8192, Math.floor(model.contextWindow * 0.25))),
+    const configureWindow = (model: { contextWindow: number; maxTokens: number }) => settings.applyOverrides({ compaction: {
+      reserveTokens: conversationOutputTokens(model),
       keepRecentTokens: Math.max(1, Math.min(8000, Math.floor(model.contextWindow * 0.25)))
     } });
     configureWindow(resolveSessionModel(options.profile).model);
@@ -33,7 +36,7 @@ export async function createConversationSession(options: SessionOptions): Promis
     });
     const loader = new DefaultResourceLoader({ cwd, agentDir: cwd, settingsManager: settings, eventBus: bus,
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-      systemPrompt: [options.systemPrompt, description, ...guidelines].join('\n'),
+      systemPrompt: conversationSystemPrompt(options.systemPrompt),
       extensionFactories: [{ name: '@cloudhelm/pi-ask-user', factory: askUser }, {
         name: '@cloudhelm/lifecycle', factory: (pi) => {
           pi.on('session_before_compact', (event) => {
@@ -96,7 +99,7 @@ class PiConversationSession implements ConversationSession {
     const previous = [...session.messages].reverse().find((message) => message.role === 'assistant');
     this.switched = !!previous && (previous.provider !== this.active.provider || previous.model !== this.active.modelId);
     const agent = session.agent;
-    agent.toolExecution = 'parallel';
+    agent.toolExecution = 'sequential'; // one tool call at a time: remote review/execution must never overlap
     const prepare = agent.prepareNextTurnWithContext;
     agent.prepareNextTurnWithContext = async (turn, signal) => {
       options.assertActive();
@@ -121,10 +124,23 @@ class PiConversationSession implements ConversationSession {
       options.assertActive();
       if (this.failure) throw this.failure;
       const purpose = streamOptions?.sessionId === session.sessionManager.getSessionId() ? 'conversation' : 'compaction';
+      let requestContext = context;
+      if (purpose === 'conversation' && options.currentSystemPrompt) {
+        const leading = context.messages[0];
+        if (leading?.role !== 'system' || leading.content !== '' || typeof leading.sections?.preamble !== 'string') {
+          throw new Error('CloudHelm system authorization projection unavailable');
+        }
+        // Pi stores custom prompts in the preamble section; changing content would duplicate the prompt.
+        const current = conversationSystemPrompt(options.currentSystemPrompt());
+        if (!current.trim()) throw new Error('CloudHelm system authorization projection is empty');
+        requestContext = { ...context, messages: context.messages.map((message) => message.role === 'system'
+          && typeof message.sections?.preamble === 'string'
+          ? { ...message, sections: { ...message.sections, preamble: current } } : message) };
+      }
       options.beforeRequest(purpose, this.active);
       if (purpose === 'conversation') { this.usageReady = true; this.publishUsage(); }
-      return stream(model, context, { ...streamOptions, apiKey: this.active.apiKey, env: {}, maxRetries: 0,
-        maxTokens: purpose === 'conversation' ? Math.max(1, Math.min(8192, model.maxTokens, Math.floor(model.contextWindow * 0.25))) : streamOptions?.maxTokens });
+      return stream(model, requestContext, { ...streamOptions, apiKey: this.active.apiKey, env: {}, maxRetries: 0,
+        maxTokens: purpose === 'conversation' ? conversationOutputTokens(model) : streamOptions?.maxTokens });
     };
     // This listener runs after Pi's persistence listener. Public message_end runs before persistence.
     agent.subscribe(async (event) => {

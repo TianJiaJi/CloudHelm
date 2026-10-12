@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Type } from 'typebox';
 import type { SessionEvent, SessionOptions } from '@cloudhelm/core';
 import { createConversationSession } from './pi-session.js';
-import { openAiFixture, type FixtureResponse } from './pi-session-fixture.js';
+import { fixtureMessageText, openAiFixture, type FixtureResponse } from './pi-session-fixture.js';
 
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
@@ -31,6 +31,81 @@ const usage = { prompt_tokens: 440, completion_tokens: 20, total_tokens: 460, pr
 const lastUsage = (events: SessionEvent[]) => events.filter((event) => event.type === 'usage').at(-1)?.value;
 
 describe('native Pi session compatibility', () => {
+  it('assembles custom core, clarification guidance and tool descriptions once per request', async () => {
+    const f = await setup(async () => ({ text: '已回答。' }), { systemPrompt: '# Role and trust\nCore safety boundary.' });
+    await f.session.prompt('What does SSH mean?');
+    const request = f.fixture.requests[0]!;
+    const instructions = request.messages.filter((message) => ['system', 'developer'].includes(message.role))
+      .map(fixtureMessageText).join('\n');
+    expect(instructions).toContain('# Role and trust\nCore safety boundary.');
+    expect(instructions).toContain('consequential missing choice');
+    expect(instructions).toContain('Never ask for passwords');
+    expect(instructions.match(/Core safety boundary\./gu)).toHaveLength(1);
+    expect(request.tools?.find((tool) => tool.function.name === 'ask_user')?.function.description)
+      .toContain('consequential missing choice');
+    await f.session.context('CloudHelm backend authorization updated to host B.');
+    await f.session.prompt('Continue the answer.');
+    expect(f.fixture.requests[1]?.messages.map(fixtureMessageText).join('\n'))
+      .toContain('CloudHelm backend authorization updated to host B.');
+  });
+
+  it('projects only backend-owned current authority into the system preamble on each model call', async () => {
+    let scope = 'Current authorized host: first';
+    let requests = 0;
+    const execute = vi.fn(async () => {
+      scope = 'Current authorized host: second';
+      return { content: [{ type: 'text' as const, text: 'Completed a read-only observation' }], details: undefined };
+    });
+    const f = await setup(async () => ++requests === 1
+      ? { calls: [{ id: 'observe', name: 'observe', arguments: {} }] } : { text: 'Complete' }, {
+      systemPrompt: 'Stale initial host: first', currentSystemPrompt: () => scope,
+      tools: [{ name: 'observe', label: 'Observe', description: 'Observe once', parameters: Type.Object({}), replay: 'never', execute }]
+    });
+    await f.session.prompt('Check the host');
+    expect(requests).toBe(2);
+    const system = (index: number) => f.fixture.requests[index]!.messages.filter((message) =>
+      ['system', 'developer'].includes(message.role)).map(fixtureMessageText).join('\n');
+    expect(system(0)).toContain('Current authorized host: first');
+    expect(system(1)).toContain('Current authorized host: second');
+    expect(system(1)).not.toContain('Stale initial host: first');
+    expect(system(1)).not.toContain('Current authorized host: first');
+    expect(system(1).match(/Current authorized host:/gu)).toHaveLength(1);
+    expect(f.fixture.requests[1]?.tools?.map((tool) => tool.function.name).sort()).toEqual(['ask_user', 'observe']);
+  });
+
+  it('executes parallel model tool calls one at a time so reviews and commands never overlap', async () => {
+    let requests = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const order: string[] = [];
+    const tool = (name: string, gate?: Promise<void>) => ({
+      name, label: name, description: name, parameters: Type.Object({}), replay: 'never' as const,
+      execute: async () => {
+        order.push(`${name}:start`);
+        if (gate) await gate;
+        order.push(`${name}:end`);
+        return { content: [{ type: 'text' as const, text: 'ok' }], details: undefined };
+      }
+    });
+    const f = await setup(async () => ++requests === 1
+      ? { calls: [{ id: 'a', name: 'first', arguments: {} }, { id: 'b', name: 'second', arguments: {} }] }
+      : { text: 'done' }, { tools: [tool('first', firstGate), tool('second')] });
+    const prompt = f.session.prompt('run both');
+    await vi.waitFor(() => expect(order).toEqual(['first:start']));
+    expect(order).not.toContain('second:start');
+    releaseFirst();
+    await prompt;
+    expect(order).toEqual(['first:start', 'first:end', 'second:start', 'second:end']);
+  });
+
+  it('fails closed before transport if the backend system projection is unavailable', async () => {
+    const f = await setup(async () => ({ text: 'must not be requested' }), {
+      currentSystemPrompt: () => { throw new Error('Backend authority unavailable'); }
+    });
+    await expect(f.session.prompt('Run anything')).rejects.toThrow('Backend authority unavailable');
+    expect(f.fixture.requests).toHaveLength(0);
+  });
+
   it('persists full tool/model metadata, projects stable IDs, and restores without requests or tool replay', async () => {
     const root = await directory();
     let calls = 0;
@@ -174,6 +249,16 @@ describe('native Pi session compatibility', () => {
     await expect(f.session.prompt('hello')).rejects.toThrow();
     expect(f.fixture.requests).toHaveLength(1);
     expect(f.requests).toEqual(['conversation']);
+  });
+
+  it('uses configured model capacity rather than a fixed 8192 output ceiling', async () => {
+    const f = await setup(async () => ({ text: 'ok' }));
+    const configured = await createConversationSession({ ...f.options, profile: {
+      ...f.options.profile, contextWindow: 1_000_000, maxTokens: 384_000
+    } });
+    cleanup.push(() => configured.dispose());
+    await configured.prompt('hello');
+    expect(f.fixture.requests[0]?.max_completion_tokens).toBe(384_000);
   });
 
   it('reports a reasoning-only response that hit the output limit instead of silently finishing', async () => {

@@ -9,7 +9,7 @@ const operation: ProposedOperation = { id: 'op', kind: 'command', command: 'dock
 
 function setup(profile: ReviewProfile): { evaluator: AiRiskEvaluator; jev: ReturnType<typeof vi.fn>; ordinary: ReturnType<typeof vi.fn> } {
   const jev = vi.fn().mockResolvedValue('allow');
-  const ordinary = vi.fn().mockResolvedValue('allow');
+  const ordinary = vi.fn(async (..._args: unknown[]) => 'allow' as const);
   const client: ReviewClient = { jev, ordinary };
   return { evaluator: new AiRiskEvaluator(() => profile, client), jev, ordinary };
 }
@@ -20,6 +20,14 @@ describe('paid Jev and ordinary model review selection', () => {
     expect(await evaluator.evaluate(operation, undefined)).toMatchObject({ verdict: 'allow', reviewer: 'model' });
     expect(ordinary).toHaveBeenCalledOnce();
     expect(jev).not.toHaveBeenCalled();
+  });
+
+  it('forwards only a safe high-impact classification and script hash to the independent reviewer', async () => {
+    const { evaluator, ordinary } = setup({ provider: 'anthropic', modelId: 'model', apiKey: 'main-key' });
+    await evaluator.evaluate(operation, undefined, { classification: {
+      verdict: 'evaluate', ruleId: 'high-impact-script', reason: 'Changes account access', impact: 'high'
+    }, inspectedScriptSha256: 'sha256-safe' });
+    expect(ordinary.mock.calls[0]?.[4]).toMatchObject({ classification: { ruleId: 'high-impact-script' }, inspectedScriptSha256: 'sha256-safe' });
   });
 
   it('uses Jev only when explicitly selected and never falls back after its failure', async () => {

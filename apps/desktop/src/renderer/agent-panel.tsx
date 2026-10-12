@@ -3,10 +3,11 @@ import { draftFor, useMessageDrafts } from './message-drafts.js';
 import { ReasoningContent } from './reasoning-content.js';
 import { ThinkingPicker } from './thinking-picker.js';
 import { useEffect, useRef, useState } from 'react';
-import type { AppSnapshot, HostView, LocalScope, ModelChoice, TaskView } from '@cloudhelm/contracts';
+import { operationNeedsVerification, type AppSnapshot, type HostView, type LocalScope, type ModelChoice, type TaskView } from '@cloudhelm/contracts';
 import { useUi } from './store.js';
 import { ApprovalCard, InputCard } from './interaction-cards.js';
 import { OperationCard, VerificationCard } from './workspace-pages.js';
+import { RecoveryCard } from './recovery-card.js';
 import { MarkdownMessage } from './markdown-message.js';
 import { ClarificationCard } from './clarification-card.js';
 import { UserMessage } from './user-message.js';
@@ -44,7 +45,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
   });
   const running = conversation && ['running', 'waiting-review', 'waiting-user', 'recovering'].includes(conversation.status);
   const hasRunningOperation = operations.some((operation) => operation.status === 'running'
-    || (operation.status === 'unknown' && snapshot.terminals.some((terminal) => terminal.id === operation.logRef)));
+    || (operation.status === 'unknown' && !operation.reconciledAt && snapshot.terminals.some((terminal) => terminal.id === operation.logRef)));
   const currentRequest = useUi((state) => conversation ? state.currentRequests[conversation.id] : undefined);
   const elapsed = currentRequest ? Math.max(0, Math.floor((now - currentRequest.createdAt) / 1000)) : 0;
   const activity = approvals.length ? '等待你批准或拒绝当前操作；命令尚未执行'
@@ -83,8 +84,14 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       <small>{host ? <><Icon name="shield" size={12} />{reviewLabel[conversation?.reviewModesByHost?.[host.id] ?? host.defaultMode]}</> : '未授权远端操作'}</small></div>
     {conversation && <div className={styles.agentActions}>
       <span className={styles.status}>{statusLabel[conversation.status]}</span>
-      {conversation.session && !running && conversation.resumeReason && ['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status) && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
+      {conversation.session && !running && conversation.resumeReason && (['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status)
+        || (conversation.status === 'answered' && conversation.verificationState?.status === 'unverified'))
+        && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />{conversation.status === 'answered' ? '继续核验' : '继续 AI'}</button>}
     </div>}
+    {conversation?.status === 'paused' && conversation.resumeReason === 'verify' && host
+      && snapshot.operations.some((item) => item.taskId === conversation.id && item.hostId === host.id && item.reconciliation?.kind === 'risk-accepted')
+      && !snapshot.operations.some((item) => item.hostId === host.id && operationNeedsVerification(item))
+      && <div className={styles.agentActivity} role="status">风险已接管，但 AI 不会自动运行；点击上方「继续 AI」或发送消息。原命令不会自动重放。</div>}
     {activity && <div className={styles.agentActivity} role="status">{activity}</div>}
     {conversation?.summary && ['paused', 'failed', 'recovering'].includes(conversation.status)
       && <div className={styles.agentActivity} role="alert">{presentError(conversation.summary).description}</div>}
@@ -112,12 +119,13 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
           {message.model && <small>{message.model.provider} · {message.model.modelId}</small>}
         </article>;
       })}
+      {host && <RecoveryCard snapshot={snapshot} hostId={host.id} conversation={conversation} report={report} />}
       {reasoning && <article className={styles.message} key={reasoning.id}><strong>CloudHelm</strong><ReasoningContent value={reasoning.reasoning} /></article>}
       {approvals.map((approval) => <ApprovalCard key={approval.id} approval={approval} host={hostName(approval.hostId)} report={report} />)}
       {inputs.filter((input) => input.kind !== 'secret' && input.kind !== 'otp').map((input) => <InputCard key={input.id} input={input} host={hostName(input.hostId)} report={report} />)}
       {inputs.filter((input) => (input.kind === 'secret' || input.kind === 'otp') && hiddenInputs.includes(input.id)).map((input) => <button className={styles.pendingInput} key={input.id} onClick={() => openInput(input.id)}><Icon name="shield" />{input.title} · 填写</button>)}
       {terminal && <button className={styles.agentTerminalLink} onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 专用终端<Icon name="chevron" size={12} /></button>}
-      {conversation && (conversation.report || conversation.status === 'failed') && <VerificationCard conversation={conversation} report={report} />}
+      {conversation && (conversation.report || conversation.status === 'answered' && conversation.verificationState?.status === 'unverified' || conversation.status === 'failed') && <VerificationCard conversation={conversation} report={report} />}
     </div>
     <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} execution={conversation ? snapshot.execution?.[conversation.id] : undefined} hostId={host?.id ?? null} conversation={conversation} host={host} compaction={conversation ? snapshot.contextCompaction?.[conversation.id] : undefined} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} report={report} />
   </>;

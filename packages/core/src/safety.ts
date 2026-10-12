@@ -180,11 +180,14 @@ function isQuery(call: CommandCall): boolean {
   const name = path.posix.basename(call.name);
   if (![name, `/bin/${name}`, `/usr/bin/${name}`].includes(call.name)) return false;
   if (isServiceQuery(name, call.args)) return true;
-  // Docker's container listing is a daemon query. Keep the grammar narrow: a
-  // global -H/--host, context switch, or extra subcommand changes the target.
+  // Exact Docker metadata/listing subcommands cannot change the daemon. Keep
+  // the grammar narrow: a global -H/--host, context switch or mutation option
+  // is never enough to mint the read-only capability.
   if (name === 'docker') {
+    if (call.args.length === 1 && call.args[0] === 'version') return true;
     const flags = call.args[0] === 'ps' ? call.args.slice(1)
-      : call.args[0] === 'container' && call.args[1] === 'ls' ? call.args.slice(2) : undefined;
+      : call.args[0] === 'container' && call.args[1] === 'ls' ? call.args.slice(2)
+        : call.args[0] === 'network' && call.args[1] === 'ls' ? call.args.slice(2) : undefined;
     if (!flags) return false;
     for (let index = 0; index < flags.length; index++) {
       const flag = flags[index]!;
@@ -222,18 +225,41 @@ function isQuery(call: CommandCall): boolean {
 }
 
 /** This capability is minted by the safety gate, never supplied by model/tool arguments. */
+function plainSudoQuery(analysis: CommandAnalysis, names: readonly string[], allowList = false): boolean {
+  const steps = analysis.steps;
+  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection
+    || !analysis.hasCompound || !steps?.length || (!allowList && steps.length !== 1)
+    || analysis.calls.length !== steps.length * 2) return false;
+  return steps.every(({ call }, step) => {
+    const wrapper = analysis.calls[step * 2];
+    const inner = analysis.calls[step * 2 + 1];
+    return wrapper?.name === 'sudo' && wrapper.name === call.name && !wrapper.dynamic && !wrapper.redirects
+      && wrapper.args.length === call.args.length && wrapper.args.every((arg, index) => arg === call.args[index])
+      && !!inner && names.includes(path.posix.basename(inner.name)) && isQuery(inner)
+      && wrapper.args.length === inner.args.length + 1 && wrapper.args[0] === inner.name
+      && wrapper.args.slice(1).every((arg, index) => arg === inner.args[index]);
+  });
+}
+
+/** Low-risk auto-approval is deliberately narrower than effect classification. */
 export function isReadOnlyQuery(analysis: CommandAnalysis): boolean {
   if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection) return false;
   if (!analysis.hasCompound && analysis.calls.length === 1) return isQuery(analysis.calls[0]!);
-  // The analyzer exposes a plain sudo invocation both as a wrapper and as its
-  // inner call. Only the Docker listing needed to inspect daemon access gets
-  // this capability; privileged file reads retain their separate review path.
-  const [wrapper, inner] = analysis.calls;
-  return analysis.hasCompound && analysis.steps?.length === 1 && analysis.calls.length === 2
-    && wrapper?.name === 'sudo' && !wrapper.dynamic && !wrapper.redirects
-    && !!inner && path.posix.basename(inner.name) === 'docker' && isQuery(inner)
-    && wrapper.args.length === inner.args.length + 1 && wrapper.args[0] === inner.name
-    && wrapper.args.slice(1).every((arg, index) => arg === inner.args[index]);
+  return plainSudoQuery(analysis, ['docker']);
+}
+
+/** Multiple literal reads are effect-free, but not automatically approved. */
+function literalReadList(analysis: CommandAnalysis): boolean {
+  return !analysis.hasError && !analysis.hasExpansion && !analysis.hasPipeline && !analysis.hasRedirection
+    && !!analysis.steps && analysis.steps.length > 1 && analysis.calls.length === analysis.steps.length
+    && analysis.steps.every(({ call }, index) => !call.dynamic && !call.redirects && isQuery(call)
+      && analysis.calls[index]?.name === call.name && analysis.calls[index]?.args.length === call.args.length
+      && call.args.every((arg, argIndex) => analysis.calls[index]?.args[argIndex] === arg));
+}
+
+/** Effect-free capability: privileged file inspection still takes its normal review path. */
+export function isEffectFreeQuery(analysis: CommandAnalysis): boolean {
+  return isReadOnlyQuery(analysis) || literalReadList(analysis) || plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true);
 }
 
 function isLowRiskCommand(analysis: CommandAnalysis, operation: ProposedOperation): boolean {
@@ -317,19 +343,34 @@ export function inspectScriptSafety(operation: Extract<ProposedOperation, { kind
   analysis: CommandAnalysis, settings: SafetySettings): SafetyDecision {
   const inspected = { ...operation, command: source };
   const base = decideSafety(inspected, { ...settings, mode: 'ask' }, analysis);
-  if (base.verdict === 'deny' || base.verdict === 'error' || base.ruleId === 'high-impact-command') return base;
-  if (analysis.hasExpansion || analysis.hasPipeline || analysis.calls.length === 0
-    || analysis.calls.some((call) => call.dynamic || !['echo', 'printf'].includes(path.posix.basename(call.name))
-      && !ordinaryCommand({ ...analysis, calls: [call], hasCompound: false, hasRedirection: false, hasPipeline: false }))) {
-    return { verdict: 'ask', ruleId: 'script-uncertain', reason: 'Inspected script still has effects that cannot be determined confidently', impact: 'unknown' };
+  if (base.verdict === 'deny' || base.verdict === 'error') return base;
+  const high = base.ruleId === 'high-impact-command';
+  const bounded = !high && !analysis.hasExpansion && !analysis.hasPipeline && analysis.calls.length > 0
+    && !analysis.calls.some((call) => call.dynamic || !['echo', 'printf'].includes(path.posix.basename(call.name))
+      && !ordinaryCommand({ ...analysis, calls: [call], hasCompound: false, hasRedirection: false, hasPipeline: false }));
+  if (bounded) return decision('allow', 'inspected-script', 'The current script source contains only bounded recognized actions');
+  const ruleId = high ? 'high-impact-script' : 'script-uncertain';
+  const reason = high ? base.reason : 'Inspected script still has effects that cannot be determined confidently';
+  // High-impact script effects keep their risk in every mode: the permissive tier
+  // relaxes opacity, never an identified high-impact action.
+  if (settings.mode === 'permissive' && !high) {
+    return decision('allow', 'permissive-script', 'Opaque script allowed in full-access mode');
   }
-  return { verdict: 'allow', ruleId: 'inspected-script', reason: 'The current script source contains only bounded recognized actions' };
+  // The ai-review tier triages opacity and high impact through the independent
+  // reviewer first; only important or uncertain findings reach a human.
+  if (settings.mode === 'ai-review') return { ...decision('evaluate', ruleId, reason), impact: high ? 'high' : 'unknown' };
+  return { ...decision('ask', ruleId, reason), impact: high ? 'high' : 'unknown' };
 }
 
 function highImpactFile(operation: ProposedOperation): boolean {
   if (operation.kind === 'command') return false;
   const target = literalPath(operation.kind === 'upload' ? operation.remotePath : operation.path, operation.scope.cwd);
   return !!target && securityConfiguration(target, operation.scope.cwd);
+}
+
+/** Identified high impact always keeps a human or independent reviewer in the loop. */
+function highImpactDecision(ruleId: string, reason: string, settings: SafetySettings): SafetyDecision {
+  return { ...decision(settings.mode === 'ai-review' ? 'evaluate' : 'ask', ruleId, reason), impact: 'high' };
 }
 
 export function decideSafety(operation: ProposedOperation, settings: SafetySettings, analysis?: CommandAnalysis): SafetyDecision {
@@ -371,10 +412,14 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     if (protectedCommandTarget(operation, analysis)) return decision('deny', 'protected-resource', 'Command accesses or removes a user-protected resource');
     if (isLowRiskCommand(analysis, operation)) return decision('allow', 'low-risk-command', 'Known low-risk command in the authorized context');
     const high = highImpactCommand(analysis, operation.scope.cwd);
-    if (high && settings.mode !== 'permissive') return { ...decision('ask', 'high-impact-command', high), impact: 'high' };
+    // Three-tier routing for identified high impact: the cautious tier asks,
+    // the AI tier triages first, and even the permissive tier keeps asking.
+    if (high) return highImpactDecision('high-impact-command', high, settings);
     if (ordinaryCommand(analysis)) return decision('allow', 'ordinary-command', 'Bounded ordinary command');
   }
-  if (highImpactFile(operation) && settings.mode !== 'permissive') return { ...decision('ask', 'high-impact-file', 'Changes host access or security configuration'), impact: 'high' };
+  if (highImpactFile(operation)) {
+    return highImpactDecision('high-impact-file', 'Changes host access or security configuration', settings);
+  }
   if (operation.kind !== 'command') return decision('allow', 'structured-file', 'Bounded file operation with a literal target');
   if (settings.mode === 'ask') return { ...decision('ask', 'uncertain-command', 'Command effects cannot be determined with enough confidence'), impact: 'unknown' };
   if (settings.mode === 'ai-review') return { ...decision('evaluate', 'uncertain-command', 'Independent AI review required for uncertain effects'), impact: 'unknown' };

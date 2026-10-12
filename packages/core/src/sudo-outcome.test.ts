@@ -24,8 +24,9 @@ describe('sudo result interpretation from the deployment regression', () => {
     expect(describeSudoOutcome(analysis(['cat', '/missing']), result(1, 'sudo: cat: command not found'), 1).requiresUserAction).not.toBe(true);
   });
   it('recognizes only bounded diagnostic forms, never a business operation or wrapper', () => {
-    for (const args of [['-n', '-l'], ['-l'], ['-v'], ['--non-interactive', '--list']]) expect(isSudoStatusProbe(analysis(args))).toBe(true);
-    for (const args of [['-S', 'cat', '/root/file'], ['-n', 'docker', 'ps'], ['sh', '-c', 'id']]) expect(isSudoStatusProbe(analysis(args))).toBe(false);
+    for (const args of [['-n', '-l'], ['-l'], ['-v'], ['--non-interactive', '--list'],
+      ['true'], ['-n', 'true'], ['--non-interactive', '/bin/true']]) expect(isSudoStatusProbe(analysis(args))).toBe(true);
+    for (const args of [['-S', 'cat', '/root/file'], ['-n', 'docker', 'ps'], ['-n', 'cat', '/root/file'], ['sh', '-c', 'id']]) expect(isSudoStatusProbe(analysis(args))).toBe(false);
     expect(isSudoStatusProbe({ ...analysis(['-l']), hasPipeline: true })).toBe(false);
   });
   it('retains authentication rejection for compound commands without caching their final exit as authentication proof', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { BashAnalyzer, findGrammarPath, grammarPathCandidates } from './bash-analyzer.js';
-import { decideSafety, isReadOnlyQuery, scriptFilePath, type ProposedOperation } from '@cloudhelm/core';
+import { decideSafety, isEffectFreeQuery, isReadOnlyQuery, scriptFilePath, type ProposedOperation } from '@cloudhelm/core';
 
 const scope = {
   taskId: 'task-1', hostId: 'host-1', cwd: '/srv/app', runAs: 'deploy',
@@ -16,11 +16,31 @@ function command(value: string): Extract<ProposedOperation, { kind: 'command' }>
 const analyzer = new BashAnalyzer();
 
 describe('deterministic safety policy', () => {
+  it('treats a literal list of ordinary queries as effect-free, but not a dynamic or mutating list', async () => {
+    expect(isEffectFreeQuery(await analyzer.analyze('id; ls -ld /root'))).toBe(true);
+    for (const command of ['id; touch /tmp/change', 'id; ls "$(touch /tmp/change)"', 'ls /tmp/staged*']) {
+      expect(isEffectFreeQuery(await analyzer.analyze(command))).toBe(false);
+    }
+  });
+
+  it('classifies only literal foreground sudo file queries as effect-free, not auto-approved', async () => {
+    for (const command of ['sudo ls -la /root/test/test.py && sudo cat /root/test/test.py',
+      "sudo stat -c '%n %s' /root/test/test.py; sudo cat /root/test/test.py"]) {
+      const parsed = await analyzer.analyze(command);
+      expect(isEffectFreeQuery(parsed)).toBe(true);
+      expect(isReadOnlyQuery(parsed)).toBe(false);
+    }
+    for (const command of ['sudo cat /root/test/test.py && sudo head -n 1 /root/test/test.py',
+      'sudo cat /root/test/test.py && sudo install /tmp/stage /root/test/test.py',
+      'sudo cat /root/test/test.py | head -1', 'sudo cat /root/test/test.py > /tmp/out']) {
+      expect(isEffectFreeQuery(await analyzer.analyze(command))).toBe(false);
+    }
+  });
   it.each([
     ['pwd', 'allow', 'allow', 'allow'],
     ['apt-get install -y curl', 'allow', 'allow', 'allow'],
     ['systemctl restart nginx', 'allow', 'allow', 'allow'],
-    ['rm -rf /srv/app/cache', 'ask', 'ask', 'allow'],
+    ['rm -rf /srv/app/cache', 'ask', 'evaluate', 'ask'],
     ['python3 -c "print(1)"', 'ask', 'evaluate', 'allow'],
     ['sh ./deploy.sh', 'ask', 'evaluate', 'allow'],
     ['rm -rf /', 'deny', 'deny', 'deny']
@@ -134,6 +154,7 @@ describe('deterministic safety policy', () => {
 
   it.each(['ls -la /srv/app', 'pwd', 'hostname -I', 'date -u', 'id deploy', 'cat /srv/app/config', 'cat -- ./config ./logs/run.log',
     'docker ps', 'docker ps -a', 'docker container ls --all', 'sudo docker ps -a',
+    'docker version', 'docker network ls', 'sudo docker version',
     'docker ps --format "{{.Names}}"', 'docker ps --format="{{.Names}}"',
     'docker ps -a --format "table {{.Names}}\\t{{.Image}}\\t{{.Status}}"',
     'docker container ls --all --format "{{.Names}}"'])('recognizes a pure read-only query: %s', async (value) => {
@@ -144,8 +165,28 @@ describe('deterministic safety policy', () => {
     }
   });
 
+  it.each(['sudo cat /root/test/test.py', 'sudo ls -la /root/test', 'sudo stat /root/test/test.py'])(
+    'classifies privileged file inspection as effect-free without granting low-risk approval: %s', async (value) => {
+      const analysis = await analyzer.analyze(value);
+      expect(analysis.calls.map((call) => call.name)).toEqual(['sudo', value.split(' ')[1]]);
+      expect(isEffectFreeQuery(analysis)).toBe(true);
+      expect(isReadOnlyQuery(analysis)).toBe(false);
+      expect(decideSafety(command(value), { mode: 'ask', revision: 1 }, analysis).ruleId).not.toBe('low-risk-command');
+    });
+
+  it.each(['sudo -u root cat /root/test/test.py', 'sudo -E cat /root/test/test.py',
+    'sudo sh -c "cat /root/test/test.py"', 'sudo cat /root/test/test.py 2>&1',
+    'sudo cat $(echo /root/test/test.py)', 'sudo cat /root/test/test.py; touch /root/test/new',
+    'sudo install file /root/test/test.py',
+    'sudo cat /srv/backup/private'])('does not mint privileged inspection for unsafe shape or scope: %s', async (value) => {
+    const analysis = await analyzer.analyze(value);
+    if (value.includes('/srv/backup')) expect(decideSafety(command(value), { mode: 'ask', revision: 1 }, analysis).verdict).toBe('deny');
+    else expect(isEffectFreeQuery(analysis)).toBe(false);
+  });
+
   it.each(['docker run --rm alpine true', 'docker --host=tcp://other ps', 'docker ps --format "{{.Names}} {{.Image}}"',
     'docker ps --format "{{.Names}}$(touch /tmp/changed)"', 'docker ps --format "{{.Names}}" --host=tcp://other',
+    'docker network rm app', 'docker network ls --host=tcp://other', 'docker version && touch /tmp/changed',
     'sudo cat /root/test/test',
     'docker ps -a && docker rm old', 'sudo sh -c "docker ps -a"'])('does not grant a Docker read capability to %s', async (value) => {
     expect(isReadOnlyQuery(await analyzer.analyze(value))).toBe(false);

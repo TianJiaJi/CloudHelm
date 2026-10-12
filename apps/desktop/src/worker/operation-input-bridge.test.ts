@@ -193,8 +193,14 @@ it('does not suspend a live task for an unsupported sudo status probe', async ()
   expect(f.terminal.isAgentOwner(f.terminalId)).toBe(true); expect(f.channel.commands).toEqual([]);
 });
 
+it('refuses the sudo -n true capability probe without dispatching it', async () => {
+  const f = fixture('sudo -n true');
+  expect(await f.result).toMatchObject({ status: 'failed', failureKind: 'unsupported', effects: 'none' });
+  expect(f.channel.commands).toEqual([]);
+});
+
 it('lets the model recover from sudo -n requiring a password without manual takeover', async () => {
-  const f = fixture('sudo -n true'); await f.ready(); f.channel.emit('sudo: a password is required\n'); f.channel.complete(1);
+  const f = fixture('sudo -n docker ps'); await f.ready(); f.channel.emit('sudo: a password is required\n'); f.channel.complete(1);
   expect(await f.result).toMatchObject({ authentication: 'required', effects: 'none', requiresUserAction: false });
   expect(f.terminal.isAgentOwner(f.terminalId)).toBe(true);
 });

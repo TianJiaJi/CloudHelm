@@ -21,6 +21,19 @@ export async function checkMessageReferences(page, screenshot) {
   await input.getByRole('button', { name: '粘贴文本', exact: true }).click();
   const preview = page.getByRole('dialog', { name: '粘贴文本预览' });
   await preview.getByRole('textbox', { name: '编辑粘贴内容' }).fill(body + '// edited');
+  assert.deepEqual(await preview.evaluate((dialog) => {
+    const canvas = dialog.querySelector('textarea');
+    return { themed: dialog.parentElement.parentElement === document.getElementById('root').firstElementChild,
+      panel: window.getComputedStyle(dialog).backgroundColor,
+      canvas: window.getComputedStyle(canvas).backgroundColor,
+      save: window.getComputedStyle(dialog.querySelector('button:last-child')).backgroundColor };
+  }).then(({ themed, panel, canvas, save }) => ({ themed, distinctCanvas: canvas !== panel,
+    opaquePanel: panel !== 'rgba(0, 0, 0, 0)', primarySave: save !== panel })),
+  { themed: true, distinctCanvas: true, opaquePanel: true, primarySave: true });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await screenshot('paste-preview-dark.png');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await screenshot('paste-preview-light.png');
   await preview.getByRole('button', { name: '保存', exact: true }).click();
   const copied = await input.evaluate((element) => {
     const chip = element.querySelector('[data-reference]');

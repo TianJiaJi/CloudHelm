@@ -76,13 +76,16 @@ describe('stop and explicit continuation', () => {
     } finally { await f.fixture.close(); }
   });
 
-  it('pauses a completed change lacking evidence and resumes without a fabricated user turn or replay', async () => {
+  it('ends a completed change with a warning and resumes verification without a fabricated user turn or replay', async () => {
     const f = await setup(true, 'mkdir -p /srv/service');
     try {
       await f.runner.start();
-      expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'paused', resumeReason: 'report' });
+      expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered', resumeReason: 'report' });
+      expect(f.events.filter((event) => event.type === 'verification-state').at(-1)).toMatchObject({ value: { status: 'unverified', reasonCode: 'report-missing' } });
       await f.runner.resume();
       expect(f.requests()).toBe(3);
+      expect(f.events.filter((event) => event.type === 'verification-state').at(-1)).toMatchObject({ value: { status: 'unverified' } });
+      expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered', resumeReason: 'report' });
       expect(f.sessions.flatMap((session) => session.channel.commands)).toEqual(['mkdir -p /srv/service']);
       expect(JSON.stringify(f.fixture.requests[2]?.messages)).toContain('verification report is missing');
       expect(f.events.filter((event) => event.type === 'task-message' && event.role === 'user')).toHaveLength(1);
@@ -94,6 +97,7 @@ describe('stop and explicit continuation', () => {
       f.control.failResponse = true;
       await f.runner.start();
       expect(f.requests()).toBe(2);
+      expect(f.events.some((event) => event.type === 'verification-state' && event.value?.status === 'unverified')).toBe(true);
       f.control.failResponse = false; f.control.replayNext = true;
       f.runner.message('继续检查原结果');
       await vi.waitFor(() => expect(f.requests()).toBe(4), { timeout: 15_000 });
@@ -109,6 +113,18 @@ describe('stop and explicit continuation', () => {
       await f.runner.start();
       expect(f.sessions.flatMap((session) => session.channel.commands)).toEqual(['mkdir -p /srv/service']);
       expect(JSON.stringify(f.fixture.requests.at(-1)?.messages)).toContain('already records this action');
+    } finally { f.runner.pause(); await f.fixture.close(); }
+  });
+
+  it('does not replay a succeeded mutation after an unverified answer when the user sends a follow-up', async () => {
+    const f = await setup(true, 'mkdir -p /srv/service');
+    try {
+      await f.runner.start();
+      f.control.replayNext = true;
+      f.runner.message('继续检查原变更');
+      await vi.waitFor(() => expect(f.requests()).toBe(4), { timeout: 15_000 });
+      expect(f.sessions.flatMap((session) => session.channel.commands)).toEqual(['mkdir -p /srv/service']);
+      expect(JSON.stringify(f.fixture.requests[3]?.messages)).toContain('already records this action');
     } finally { f.runner.pause(); await f.fixture.close(); }
   });
 

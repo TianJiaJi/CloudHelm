@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell } from 'electron';
-import { SqliteStore, listModelProviders } from '@cloudhelm/adapters';
+import { BashAnalyzer, SqliteStore, listModelProviders } from '@cloudhelm/adapters';
 import type { AppEvent, DesktopAPI, HostDraft, LocalScope } from '@cloudhelm/contracts';
+import { operationNeedsVerification } from '@cloudhelm/contracts';
+import { registerRecoveryIpc } from './recovery-ipc.js';
 import { AppState } from './app-state.js';
 import { registerHostSafetyIpc } from './host-safety-ipc.js';
 import { registerConversationIpc } from './conversation-ipc.js';
@@ -159,6 +161,7 @@ function registerIpc(): void {
     if (!operation?.manualReviewAvailable || operation.ruleId !== 'ai-review-deny') throw new Error('该操作不可人工复核');
     return runtime.call({ method: 'request-ai-denial-review', taskId, operationId });
   });
+
   ipcMain.handle('cloudhelm:answer-input', (_event, requestId: string, answer: string) => runtime.call({ method: 'answer-input', requestId, answer }));
   ipcMain.handle('cloudhelm:cancel-input', (_event, requestId: string) => runtime.call({ method: 'cancel-input', requestId }));
   ipcMain.handle('cloudhelm:pause-task', (_event, taskId: string) => runtime.call({ method: 'pause-task', taskId }));
@@ -222,10 +225,13 @@ void app.whenReady().then(async () => {
       new Notification({ title: 'CloudHelm', body: 'AI 需要你处理一项请求。' }).show();
     }
   }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event));
+  // Reclassify only provably read-only completed legacy commands before the
+  // worker restores host locks. Ambiguous commands remain blocked.
+  await state.normalizeHistoricalQueries(new BashAnalyzer());
   await runtime.call({ method: 'restore-operations', operations: state.snapshot().operations
-    .filter((operation) => !operation.readOnly && (operation.status === 'unknown'
-      || (operation.status === 'failed' && operation.effects === 'possible' && !operation.reconciledAt))).map(({ id, hostId }) => ({ id, hostId })) });
+    .filter(operationNeedsVerification).map(({ id, hostId }) => ({ id, hostId })) });
   registerIpc();
+  registerRecoveryIpc(state, runtime);
   createWindow();
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 }).catch((error: unknown) => {

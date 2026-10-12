@@ -37,6 +37,23 @@ export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'waiting-user'
 /** Only these backend-owned reasons permit a host-initiated continuation. */
 export type ResumeReason = 'verify' | 'report' | 'interrupted' | 'model';
 
+/**
+ * How an uncertain remote outcome was resolved. It never rewrites the recorded
+ * outcome: `evidence` observed the real result; `risk-accepted` means the user
+ * explicitly took over an outcome that could not be proven after inspection.
+ */
+export interface OperationReconciliation {
+  kind: 'evidence' | 'risk-accepted';
+  /** Observed result, only for kind `evidence`. */
+  outcome?: 'succeeded' | 'failed';
+  /** Newer successful inspection operations from the same host, only for kind `evidence`. */
+  evidenceOperationIds?: string[];
+  /** Conversation from which the user initiated recovery, if any. */
+  sourceTaskId?: string;
+  explanation: string;
+  at: number;
+}
+
 /** Statuses in which a conversation still owns live work and must not be deleted. */
 export const ACTIVE_TASK_STATUSES: readonly TaskStatus[] = ['running', 'waiting-review', 'waiting-user', 'human-control', 'recovering'];
 export function isActiveTaskStatus(status: TaskStatus): boolean {
@@ -55,9 +72,11 @@ export interface ContextUsageView {
   source: 'provider' | 'estimate' | 'unknown';
   updatedAt: number;
 }
-export interface ModelProfileDraft extends ModelChoice { baseUrl?: string; apiKey?: string }
+export interface ModelProfileDraft extends ModelChoice { baseUrl?: string; apiKey?: string; contextWindow?: number; maxTokens?: number }
 export interface PlanStep { id: string; title: string; status: 'pending' | 'running' | 'done' | 'blocked' }
 export interface VerificationReport { summary: string; access: string[]; evidenceOperationIds: string[]; changes: string[]; recovery: string[] }
+/** Execution completed is not the same claim as the effect having been verified. */
+export interface VerificationState { status: 'verified' | 'unverified'; operationIds: string[]; reasonCode?: 'report-missing' }
 export type InterruptionSource = 'stop-button' | 'ctrl-c' | 'terminal-close';
 export interface UserInterruption { source: InterruptionSource; requestedAt: number; operationIds: string[] }
 export interface ReasoningView {
@@ -101,8 +120,11 @@ export interface TaskView {
   provider?: string;
   credentialRevision?: string;
   baseUrl?: string;
+  contextWindow?: number;
+  maxTokens?: number;
   plan?: PlanStep[];
   report?: VerificationReport;
+  verificationState?: VerificationState;
   requestCount: number;
   requestLimit: number;
   createdAt: number;
@@ -116,6 +138,7 @@ export interface OperationView {
   ruleId?: string;
   manualReviewAvailable?: boolean;
   reconciledAt?: number;
+  reconciliation?: OperationReconciliation;
   intentKey?: string;
   serviceUnit?: string;
   authentication?: 'succeeded' | 'required' | 'failed';
@@ -137,6 +160,30 @@ export interface OperationView {
   outputTail?: string;
   model?: ModelChoice;
   createdAt: number;
+}
+
+/** Outcome fields the write-lock and recovery rules reason about. */
+export type OperationOutcomeState = Pick<OperationView, 'readOnly' | 'status' | 'effects' | 'reconciledAt'>;
+
+/**
+ * True while a non-read-only operation's recorded remote outcome still gates
+ * host writes and blocks acceptance. In-flight operations count as unresolved:
+ * they are never resolved by guessing, only by their real completion.
+ */
+export function operationNeedsVerification(operation: OperationOutcomeState): boolean {
+  if (operation.readOnly || operation.reconciledAt) return false;
+  return ['proposed', 'approved', 'running', 'unknown'].includes(operation.status)
+    || (operation.status === 'failed' && operation.effects !== 'none');
+}
+
+/**
+ * True when the outcome is terminal-unknown and may be resolved either by fresh
+ * same-host evidence or by an explicit user risk acceptance. Running operations
+ * are excluded: the user cannot accept an outcome that is still being produced.
+ */
+export function operationOutcomeResolvable(operation: OperationOutcomeState): boolean {
+  if (operation.readOnly || operation.reconciledAt) return false;
+  return operation.status === 'unknown' || (operation.status === 'failed' && operation.effects !== 'none');
 }
 
 export interface ApprovalView {
@@ -201,6 +248,8 @@ export interface ModelProviderView {
 export interface ModelProviderSettings {
   modelId?: string;
   baseUrl?: string;
+  contextWindow?: number;
+  maxTokens?: number;
   hasKey: boolean;
 }
 
@@ -220,7 +269,8 @@ export type AppEvent =
   | { type: 'context-compaction'; taskId: string; status: 'running' | 'complete' | 'failed' }
   | { type: 'model-request'; purpose?: 'conversation' | 'compaction'; taskId: string; model: ModelChoice; request: number; createdAt: number }
   | { type: 'work-progress'; taskId: string; plan: PlanStep[] }
-  | { type: 'work-report'; taskId: string; report?: VerificationReport };
+  | { type: 'work-report'; taskId: string; report?: VerificationReport }
+  | { type: 'verification-state'; taskId: string; value?: VerificationState };
 
 export interface ShortcutSettings { bindings: Record<string, string>; enabled: boolean }
 
@@ -241,6 +291,8 @@ export interface DesktopAPI {
   updateHostSafety(hostId: string, mode: ReviewMode, protectedReadPaths: string[], protectedWritePaths: string[]): Promise<void>;
   updateConversationReviewMode(taskId: string, hostId: string, mode: ReviewMode): Promise<void>;
   requestAiDenialReview(taskId: string, operationId: string): Promise<void>;
+  readRecoveryOperationLog(operationId: string, cursor: number): Promise<{ text: string; nextCursor: number; more: boolean }>;
+  acceptOperationRisk(operationId: string, explanation: string, sourceTaskId?: string, evidenceOperationIds?: string[]): Promise<void>;
   listModelProviders(): Promise<ModelProviderView[]>;
   modelProviderSettings(providerId: string): Promise<ModelProviderSettings>;
   saveModelProfile(profile: ModelProfileDraft): Promise<void>;

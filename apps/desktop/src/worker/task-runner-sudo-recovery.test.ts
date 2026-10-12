@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import type { SshTransport } from '@cloudhelm/adapters';
-import type { InputRequest, RawTerminal } from '@cloudhelm/core';
+import type { InputRequest, OperationExecutor, RawTerminal } from '@cloudhelm/core';
 import type { TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { OperationInputBridge } from './operation-input-bridge.js';
@@ -41,6 +41,68 @@ class SudoTerminal implements RawTerminal {
 }
 
 describe('deployment sudo recovery through the model protocol, gate and authentication bridge', () => {
+  it.each([
+    'id; test -w /root && echo ROOT_WRITABLE || echo ROOT_NOT_WRITABLE; sudo -n true 2>&1 | head -1; echo done',
+    'sudo cat /root/test | head -1',
+    'sudo -S cat /root/test'
+  ])('rejects unsupported authentication before approval without pausing: %s', async (command) => {
+    let requests = 0;
+    const fixture = await openAiFixture(async (request) => {
+      requests++;
+      if (requests === 1) return { calls: [{ id: 'unsupported', name: 'run_remote', arguments: { hostId: 'host', command } }] };
+      const feedback = fixtureMessageText(request.messages.find((message) => message.tool_call_id === 'unsupported')!);
+      expect(feedback).toContain('No command sent; effects: none');
+      expect(feedback).toContain('unsupported by the private authentication channel');
+      return { text: '命令未执行，应分别提交有界命令。' };
+    });
+    const host: RuntimeHost = { id: 'host', label: '测试', address: '192.0.2.1', port: 22, username: 'ubuntu', auth: 'agent',
+      status: 'connected', defaultMode: 'ask', protectedPaths: [], policyRevision: 1 };
+    const task: TaskView = { id: 'unsupported-auth', goal: '检查 /root', hostIds: ['host'], localScopes: [],
+      provider: 'cloudhelm-custom', modelId: 'fixture', status: 'draft', requestCount: 0, requestLimit: 3, createdAt: 1, updatedAt: 1 };
+    const terminal = new TerminalManager({ data() {}, state() {} });
+    const channel = new SudoTerminal(); const terminalId = terminal.open(host.id, channel, task.id, '/home/ubuntu');
+    const requestApproval = vi.fn(async () => false);
+    const events: Parameters<TaskSignals['event']>[0][] = [];
+    const runner = new TaskRunner(task, [host], { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'dummy', baseUrl: fixture.baseUrl },
+      [], terminal, { execute: vi.fn() }, async () => terminalId,
+      { event: (event) => events.push(structuredClone(event)), requestApproval, cancelApproval() {} });
+    try {
+      await runner.start();
+      expect(fixture.errors).toEqual([]);
+      expect(requests).toBe(2);
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(channel.commands).toEqual([]);
+      expect(events.some((event) => event.type === 'task-status' && event.status === 'paused')).toBe(false);
+    } finally { runner.dispose(); await fixture.close(); }
+  });
+  it.each(['test -e /tmp && echo ok', 'printf "one;two" | head -1'])(
+    'allows bounded non-sudo shell operators through normal review: %s', async (command) => {
+      let requests = 0;
+      const fixture = await openAiFixture(async (request) => {
+        requests++;
+        if (requests === 1) return { calls: [{ id: 'bounded', name: 'run_remote', arguments: { hostId: 'host', command } }] };
+        expect(fixtureMessageText(request.messages.find((message) => message.tool_call_id === 'bounded')!)).toContain('ok');
+        return { text: '查询已完成。' };
+      });
+      const host: RuntimeHost = { id: 'host', label: '测试', address: '192.0.2.1', port: 22, username: 'ubuntu', auth: 'agent',
+        status: 'connected', defaultMode: 'permissive', protectedPaths: [], policyRevision: 1 };
+      const task: TaskView = { id: 'bounded-query', goal: '检查状态', hostIds: ['host'], localScopes: [],
+        provider: 'cloudhelm-custom', modelId: 'fixture', status: 'draft', requestCount: 0, requestLimit: 3, createdAt: 1, updatedAt: 1 };
+      const terminal = new TerminalManager({ data() {}, state() {} });
+      const terminalId = terminal.open(host.id, { onData() {}, onClose() {}, write() {}, resize() {}, close() {} },
+        task.id, '/home/ubuntu');
+      const execute = vi.fn(async (...[operation]: Parameters<OperationExecutor['execute']>) => ({ operationId: operation.id,
+        status: 'succeeded' as const, exitCode: 0, stdoutTail: 'ok' }));
+      const runner = new TaskRunner(task, [host], { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'dummy', baseUrl: fixture.baseUrl },
+        [], terminal, { execute }, async () => terminalId, { event() {}, requestApproval: async () => true, cancelApproval() {} });
+      try {
+        await runner.start();
+        expect(fixture.errors).toEqual([]);
+        expect(requests).toBe(2);
+        expect(execute).toHaveBeenCalledOnce();
+        expect(execute.mock.calls[0]?.[0]).toMatchObject({ command });
+      } finally { runner.dispose(); await fixture.close(); }
+    });
   it.each(['sudo docker ps', 'sudo -n true', 'sudo -n -l'])('continues after %s without manual restart or another probe', async (first) => {
     let requests = 0;
     const fixture = await openAiFixture(async (request) => {
@@ -51,8 +113,7 @@ describe('deployment sudo recovery through the model protocol, gate and authenti
       if (requests === 2) {
         const result = fixtureMessageText(request.messages.find((message) => message.role === 'tool' && message.tool_call_id === 'initial')!);
         if (first === 'sudo docker ps') { expect(result).toContain('Authentication: succeeded'); expect(result).not.toContain('Sorry, try again.'); }
-        else if (first === 'sudo -n true') expect(result).toContain('Authentication: required');
-        else expect(result).toContain('recoverable tool limitation');
+        else { expect(result).toContain('No command sent'); expect(result).toContain('不被支持'); }
         return { calls: [{ id: 'build', name: 'run_remote', arguments: { hostId: 'host', cwd: '/srv/app', command: 'sudo docker compose build' } }] };
       }
       expect(requests).toBe(3);
@@ -79,7 +140,8 @@ describe('deployment sudo recovery through the model protocol, gate and authenti
       await runner.start();
       expect(fixture.errors).toEqual([]); expect(requests).toBe(3);
       expect(prompts).toHaveLength(1);
-      expect(channel.commands).toEqual(first === 'sudo -n -l' ? ['sudo docker compose build'] : [first, 'sudo docker compose build']);
+      // Capability probes are refused before review and never dispatched.
+      expect(channel.commands).toEqual(first === 'sudo docker ps' ? [first, 'sudo docker compose build'] : ['sudo docker compose build']);
       expect(events.filter((event) => event.type === 'operation' && event.value.preview === 'sudo docker compose build').at(-1))
         .toMatchObject({ value: { status: 'succeeded', runAs: 'root' } });
       expect(diagnostics).toContainEqual(expect.objectContaining({ event: 'operation.proposed', runAs: 'root', cwd: '/srv/app' }));

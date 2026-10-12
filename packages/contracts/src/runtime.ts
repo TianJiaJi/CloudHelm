@@ -4,7 +4,8 @@ export interface RuntimeHost extends HostView { secret?: string }
 export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 'trust-required' }>
   | { status: 'trust-required'; stage: 'host' | 'jump'; fingerprint: string; expectedFingerprint?: string };
 export interface RuntimeReviewProfile { selection: ReviewSelection; provider: string; modelId: string; baseUrl?: string; apiKey?: string; revision: number }
-export interface RuntimeProfile { provider: string; modelId: string; baseUrl?: string; apiKey: string; credentialRevision?: string; jevKey?: string; reviewer?: RuntimeReviewProfile }
+export interface RuntimeProfile { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number;
+  apiKey: string; credentialRevision?: string; jevKey?: string; reviewer?: RuntimeReviewProfile }
 
 export type RuntimeCall =
   | { method: 'prepare-message'; taskId?: string; requestId: string; document: import('./message-content.js').MessageDocument; bodies: import('./message-content.js').ReferenceBody[]; profile: RuntimeProfile; usedTokens: number }
@@ -14,6 +15,8 @@ export type RuntimeCall =
   | { method: 'answer-clarification'; taskId: string; requestId: string; answers: ClarificationAnswer[] }
   | { method: 'cancel-clarification'; taskId: string; requestId: string }
   | { method: 'restore-operations'; operations: Array<{ id: string; hostId: string }> }
+  | { method: 'prepare-operation-risk'; operationId: string; hostId: string }
+  | { method: 'commit-operation-risk'; operationId: string; hostId: string; explanation: string; at: number }
   | { method: 'connect'; host: RuntimeHost; jump?: RuntimeHost }
   | { method: 'test-host'; host: RuntimeHost; jump?: RuntimeHost }
   | { method: 'disconnect'; hostId: string }

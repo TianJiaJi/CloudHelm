@@ -1,13 +1,13 @@
-import { modelThinking } from '@cloudhelm/adapters';
+import { customModelLimits, modelThinking } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
-import { OutputRedactor } from '@cloudhelm/core';
-import { HostDraftSchema, isActiveTaskStatus, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
+import { OutputRedactor, isReadOnlyQuery, type CommandAnalyzer } from '@cloudhelm/core';
+import { HostDraftSchema, isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
 
-interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; credentialRevision?: string }
+interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number; credentialRevision?: string }
 interface StoredShortcuts { bindings: Record<string, string>; enabled: boolean }
 interface StoredReviewer { selection: ReviewSelection; revision: number }
 
@@ -61,11 +61,13 @@ export class AppState {
       if (restored !== request) store.put('clarifications', restored.id, restored);
     }
     for (const operation of store.list<OperationView>('operations')) this.operations.set(operation.id,
-      operation.status === 'approved' || operation.status === 'running'
+      // A stored in-flight state can no longer be observed after restart: treat it as
+      // an unknown outcome so it stays blocking but is resolvable through recovery.
+      operation.status === 'approved' || operation.status === 'running' || operation.status === 'proposed'
         ? { ...operation, manualReviewAvailable: false, status: 'unknown', reason: 'Application exited before outcome was recorded' }
         : { ...operation, manualReviewAvailable: false });
     for (const task of this.tasks.values()) this.execution[task.id] = { model: 'idle', stopping: false, canStop: false,
-      remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown') ? 'unknown' : 'idle' };
+      remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown' && !op.reconciledAt) ? 'unknown' : 'idle' };
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));
     this.profile = store.get<ProfileRecord>('settings', 'model-profile') ?? { provider: 'vercel-ai-gateway', modelId: 'anthropic/claude-sonnet-4.5' };
     store.cleanupLogs();
@@ -144,11 +146,33 @@ export class AppState {
   }
 
   /** Conversations with live work stay until the user finishes them first. */
+  /**
+   * Older completed queries can lack the read-only capability, even though
+   * their exact recorded command is a deterministic query. Reclassify only
+   * failed commands with a known exit code and an unredacted, fully parsed
+   * command; never infer an unknown write outcome from output or a preview.
+   */
+  async normalizeHistoricalQueries(analyzer: CommandAnalyzer): Promise<void> {
+    for (const operation of this.operations.values()) {
+      if (operation.kind !== 'command' || operation.readOnly || operation.reconciledAt
+        || operation.status !== 'failed' || operation.exitCode === undefined
+        || operation.preview.includes('[REDACTED]')) continue;
+      let safe = false;
+      try { safe = isReadOnlyQuery(await analyzer.analyze(operation.preview)); }
+      catch { continue; } // Missing parser never grants a capability.
+      if (!safe) continue;
+      const updated = { ...operation, readOnly: true };
+      this.store.put('operations', operation.id, updated);
+      this.operations.set(operation.id, updated);
+    }
+  }
+
   assertDeletable(id: string): TaskView {
     const task = this.getTask(id);
     if (isActiveTaskStatus(task.status) || this.execution[id]?.canStop || this.execution[id]?.stopping) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
-    if ([...this.operations.values()].some((op) => op.taskId === id && !op.readOnly && (op.status === 'unknown'
-      || (op.status === 'failed' && op.effects === 'possible' && !op.reconciledAt)))) throw new Error('远端结果尚未核验，请先保留操作记录并确认结果后再删除');
+    if ([...this.operations.values()].some((op) => op.taskId === id && operationNeedsVerification(op))) {
+      throw new Error('远端结果尚未核验，请先保留操作记录并确认结果后再删除');
+    }
     return task;
   }
 
@@ -222,7 +246,7 @@ export class AppState {
     return safeStorage.decryptString(Buffer.from(ciphertext, 'base64'));
   }
 
-  saveProfile(draft: { provider: string; modelId: string; baseUrl?: string; apiKey?: string }): void {
+  saveProfile(draft: ModelProfileDraft): void {
     const provider = listModelProviders().find((candidate) => candidate.id === draft.provider);
     if (!provider) throw new Error('Choose a Pi model provider');
     const modelId = draft.modelId.trim();
@@ -232,6 +256,8 @@ export class AppState {
     const requestedUrl = draft.baseUrl?.trim();
     if (provider.id === 'cloudhelm-custom' && !requestedUrl) throw new Error('Custom model URL is required');
     const baseUrl = requestedUrl && requestedUrl !== provider.defaultBaseUrl ? validModelUrl(requestedUrl) : undefined;
+    const limits = provider.id === 'cloudhelm-custom' ? customModelLimits(draft) : undefined;
+    if (!limits && (draft.contextWindow !== undefined || draft.maxTokens !== undefined)) throw new Error('内置模型容量由 Pi 模型目录提供');
     const legacyKey = this.sameProfileProvider(provider.id, provider.name) ? this.profileSecret() : undefined;
     const previous = this.store.get<ProfileRecord>('settings', `model-provider:${provider.id}`);
     const savedKey = this.secret(this.modelSecretId(provider.id));
@@ -240,10 +266,11 @@ export class AppState {
     // Encrypt before changing defaults: OS keychain failure must leave the prior profile intact.
     const ciphertext = keyToSave ? this.encryptSecret(keyToSave) : undefined;
     const credentialRevision = previous?.credentialRevision && previous.baseUrl === baseUrl
+      && previous.contextWindow === limits?.contextWindow && previous.maxTokens === limits?.maxTokens
       && (!draft.apiKey || draft.apiKey === previousKey) ? previous.credentialRevision : randomUUID();
-    this.profile = { provider: provider.id, modelId, baseUrl, credentialRevision };
+    this.profile = { provider: provider.id, modelId, baseUrl, ...limits, credentialRevision };
     this.store.put('settings', 'model-profile', this.profile);
-    this.store.put('settings', `model-provider:${provider.id}`, { modelId, baseUrl, credentialRevision });
+    this.store.put('settings', `model-provider:${provider.id}`, { modelId, baseUrl, ...limits, credentialRevision });
     if (ciphertext) this.store.put('secrets', this.modelSecretId(provider.id), ciphertext);
     this.publish();
   }
@@ -307,6 +334,8 @@ export class AppState {
       this.store.put('settings', `model-provider:${provider.id}`, binding);
     }
     return { ...choice, baseUrl: choice.baseUrl ?? saved.baseUrl ?? provider.defaultBaseUrl, apiKey,
+      ...(provider.id === 'cloudhelm-custom' ? customModelLimits({ ...choice,
+        contextWindow: saved.contextWindow, maxTokens: saved.maxTokens }) : {}),
       credentialRevision: binding.credentialRevision };
   }
 
@@ -341,8 +370,10 @@ export class AppState {
     const apiKey = draft.apiKey?.trim() || this.secret(this.modelSecretId(draft.provider))
       || (this.sameProfileProvider(provider.id, provider.name) ? this.profileSecret() : undefined);
     if (!apiKey) throw new Error('请输入 API Key');
+    const limits = provider.id === 'cloudhelm-custom' ? customModelLimits(draft) : undefined;
+    if (!limits && (draft.contextWindow !== undefined || draft.maxTokens !== undefined)) throw new Error('内置模型容量由 Pi 模型目录提供');
     return { provider: draft.provider, modelId: draft.modelId, apiKey,
-      baseUrl: draft.baseUrl ? validModelUrl(draft.baseUrl) : undefined };
+      baseUrl: draft.baseUrl ? validModelUrl(draft.baseUrl) : undefined, ...limits };
   }
 
   availableModels(): Array<ModelChoice & { name: string; thinkingLevels?: import('@cloudhelm/contracts').ThinkingLevel[] }> {
@@ -351,7 +382,8 @@ export class AppState {
       if (!settings.hasKey) return [];
       const models = provider.id === 'cloudhelm-custom' && settings.modelId
         ? [{ id: settings.modelId, name: settings.modelId }] : provider.models;
-      return models.map((model) => ({ provider: provider.id, modelId: model.id, name: model.name, thinkingLevels: modelThinking({ provider: provider.id, modelId: model.id, baseUrl: settings.baseUrl }).levels }));
+      return models.map((model) => ({ provider: provider.id, modelId: model.id, name: model.name, thinkingLevels: modelThinking({ provider: provider.id, modelId: model.id, baseUrl: settings.baseUrl,
+        contextWindow: settings.contextWindow, maxTokens: settings.maxTokens }).levels }));
     });
   }
 
@@ -362,7 +394,9 @@ export class AppState {
       const choice = modelThinking(profile, task.thinking?.selected);
       task.thinking = { ...choice, effective: task.thinking?.effective ?? choice.selected, pending: true };
     }
-    Object.assign(task, { provider: profile.provider, modelId: profile.modelId, baseUrl: profile.baseUrl, credentialRevision: profile.credentialRevision, updatedAt: Date.now() });
+    Object.assign(task, { provider: profile.provider, modelId: profile.modelId, baseUrl: profile.baseUrl,
+      contextWindow: profile.contextWindow, maxTokens: profile.maxTokens,
+      credentialRevision: profile.credentialRevision, updatedAt: Date.now() });
     this.store.put('tasks', id, task);
     this.publish();
   }
@@ -372,12 +406,14 @@ export class AppState {
   modelProviderSettings(providerId: string): ModelProviderSettings {
     const provider = listModelProviders().find((candidate) => candidate.id === providerId);
     if (!provider) throw new Error('Unknown Pi model provider');
-    const saved = this.store.get<Pick<ProfileRecord, 'modelId' | 'baseUrl'>>('settings', `model-provider:${providerId}`);
+    const saved = this.store.get<Pick<ProfileRecord, 'modelId' | 'baseUrl' | 'contextWindow' | 'maxTokens'>>('settings', `model-provider:${providerId}`);
     const active = this.sameProfileProvider(provider.id, provider.name) ? this.profile : undefined;
     const legacyKey = active ? this.secret(this.legacyModelSecretId(active)) : undefined;
     return {
       modelId: saved?.modelId ?? active?.modelId,
       baseUrl: saved?.baseUrl ?? active?.baseUrl,
+      contextWindow: saved?.contextWindow ?? active?.contextWindow,
+      maxTokens: saved?.maxTokens ?? active?.maxTokens,
       hasKey: !!(this.secret(this.modelSecretId(providerId)) ?? legacyKey)
     };
   }
@@ -405,6 +441,26 @@ export class AppState {
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error('Invalid log cursor');
     this.flushLogs();
     return this.store.readLogPage(`operation:${operationId}`, cursor);
+  }
+
+  /**
+   * Persists an explicit user risk acceptance. The remote outcome stays unknown:
+   * this only records that the user took over the risk so the write lock can be
+   * released. Callers re-arm the write lock when this throws.
+   */
+  acceptOperationRisk(operationId: string, explanation: string, at: number, sourceTaskId?: string, evidenceOperationIds?: string[]): void {
+    const operation = this.operations.get(operationId);
+    if (!operation) throw new Error('未找到该操作');
+    if (operation.reconciledAt) {
+      if (operation.reconciliation?.kind === 'risk-accepted' && operation.reconciliation.at === at) return;
+      throw new Error('该操作已经核验或确认，不能重复解除');
+    }
+    if (!operationOutcomeResolvable(operation)) throw new Error('该操作没有可确认的未知结果');
+    const updated: OperationView = { ...operation, reconciledAt: at,
+      reconciliation: { kind: 'risk-accepted', explanation, at, sourceTaskId, evidenceOperationIds } };
+    this.store.put('operations', operationId, updated);
+    this.operations.set(operationId, updated);
+    this.publish();
   }
 
   createTask(goal: string, hostIds: string[], modelId: string, localScopes: LocalScope[]): TaskView {
@@ -551,10 +607,12 @@ export class AppState {
         this.store.put('model-requests', `${event.taskId}:${event.request}`, event);
         break;
       case 'work-progress':
-      case 'work-report': {
+      case 'work-report':
+      case 'verification-state': {
         const task = this.getTask(event.taskId);
         if (event.type === 'work-progress') task.plan = event.plan;
-        else task.report = event.report;
+        else if (event.type === 'work-report') task.report = event.report;
+        else task.verificationState = event.value;
         this.store.put('tasks', task.id, task);
         break;
       }

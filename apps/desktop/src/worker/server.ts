@@ -98,6 +98,22 @@ export class WorkerServer {
         finally { clearTimeout(timer); this.preparations.delete(call.requestId); }
       }
       case 'restore-operations': return this.executor.restore(call.operations);
+      case 'prepare-operation-risk':
+        for (const runner of this.tasks.values()) runner.assertResolvableOutcome(call.operationId);
+        if (!this.executor.canReconcile(call.hostId, call.operationId)) {
+          throw new Error('原远端操作仍在运行，请等待其退出或停止后重试');
+        }
+        return;
+      case 'commit-operation-risk':
+        if (!this.executor.reconcile(call.hostId, call.operationId)) throw new Error('远端进程尚未退出，无法解除写锁');
+        // The durable acceptance already exists. A failed execution-status
+        // notification must not turn this successful release into a rollback
+        // of the authoritative record while the executor remains unlocked.
+        for (const runner of this.tasks.values()) {
+          try { runner.recordRiskAcceptance(call.operationId, call.explanation, call.at); }
+          catch { console.warn('Could not publish risk acceptance execution status'); }
+        }
+        return;
       case 'has-task': return this.tasks.has(call.taskId);
       case 'set-review-key':
         for (const runner of this.tasks.values()) runner.setReviewKey(call.jevKey);

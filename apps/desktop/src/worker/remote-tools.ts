@@ -15,7 +15,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     const parameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) });
     const tool: BusinessTool<Static<typeof parameters>> = {
       name: 'run_remote', label: 'Execute an audited remote SSH command',
-      description: 'Perform one logical action on an authorized host. Do not chain independent actions or print decorative separators. Use cwd instead of cd prefixes. Commands are shown in its dedicated real SSH terminal after safety review. Use absolute paths when possible. Pass sessionId only for a confirmed root session.',
+      description: 'Perform one logical action on an authorized host. Issue one remote call at a time and wait for its result before the next. Do not chain independent actions or print decorative separators. Use cwd instead of cd prefixes. Commands are shown in its dedicated real SSH terminal after safety review. Use absolute paths when possible. Pass sessionId only for a confirmed root session.',
       parameters,
       replay: 'never',
       execute: async (_id, params, signal) => {

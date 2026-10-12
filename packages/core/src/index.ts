@@ -9,6 +9,7 @@ export * from './diagnostics.js';
 export * from './sudo-outcome.js';
 export * from './agent-session.js';
 export * from './command-preflight.js';
+export * from './serial-call.js';
 export * from './service-observation.js';
 
 export * from './message-content.js';

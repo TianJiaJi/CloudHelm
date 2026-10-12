@@ -165,7 +165,10 @@ export class SshTransport {
     const previous = this.commandPreflights.get(hostId);
     if (previous?.generation === generation) return previous.promise;
     const promise = this.execFixed(hostId, `python3 -I -c 'import pty, fcntl, termios, socket, subprocess, shutil'`).then((result) => {
-      if (result.exitCode !== 0) throw new Error('远端需要可用的 POSIX Python 3；请安装后继续');
+      if (result.exitCode !== 0) {
+        const detail = redactOutput(result.output).trim().slice(-300);
+        throw new Error(`远端环境检查未通过（exit ${result.exitCode}）：需要可用的 POSIX Python 3${detail ? `；远端输出：${detail}` : ''}`);
+      }
     }).catch((error: unknown) => {
       if (this.commandPreflights.get(hostId)?.promise === promise) this.commandPreflights.delete(hostId);
       throw error;
@@ -212,7 +215,8 @@ export class SshTransport {
     const directory = lines[1];
     if (result.exitCode !== 0 || lines.length !== 2 || !lines[0]?.startsWith('/')
       || !directory || !/^\/tmp\/cloudhelm-run\.[A-Za-z0-9]+$/u.test(directory)) {
-      throw new Error('Direct command execution requires Python 3 on the host; no command was sent.');
+      const detail = redactOutput(result.output).trim().slice(-300);
+      throw new Error(`远端命令通道准备失败（exit ${result.exitCode}）：需要可解析的 python3 且 /tmp 可写${detail ? `；远端输出：${detail}` : ''}`);
     }
     const script = `${directory}/process.py`;
     try {

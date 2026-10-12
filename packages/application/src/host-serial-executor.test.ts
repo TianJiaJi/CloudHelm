@@ -78,6 +78,20 @@ describe('cross-task host write isolation', () => {
     expect((await serial.execute(operation, 'fingerprint')).status).toBe('succeeded');
   });
 
+  it('keeps three restored blockers until every outcome is resolved one at a time', async () => {
+    const downstream = { execute: vi.fn().mockResolvedValue({ operationId: 'new', status: 'succeeded', stdoutTail: '' }) };
+    const serial = new HostSerialExecutor(downstream);
+    serial.restore(['a', 'b', 'c'].map((id) => ({ id, hostId: 'host' })));
+    for (const id of ['a', 'b', 'c']) {
+      expect((await serial.execute({ ...operation, id: 'new' }, 'fingerprint'))).toMatchObject({
+        status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation' });
+      expect(serial.reconcile('host', id)).toBe(true);
+    }
+    expect(downstream.execute).not.toHaveBeenCalled();
+    expect((await serial.execute({ ...operation, id: 'new' }, 'fingerprint')).status).toBe('succeeded');
+    expect(downstream.execute).toHaveBeenCalledOnce();
+  });
+
   it('does not release a running command when an inspection fails or becomes unknown', async () => {
     let finish!: (value: 'exited' | 'unknown') => void;
     const remoteCompletion = new Promise<'exited' | 'unknown'>((resolve) => { finish = resolve; });

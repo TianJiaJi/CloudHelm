@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  decideSafety, inspectScriptSafety, isReadOnlyQuery, operationFingerprint, scriptFilePath,
+  decideSafety, inspectScriptSafety, isEffectFreeQuery, operationFingerprint, scriptFilePath,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
   type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
   type SafetyDecision, type SafetySettings, type ScriptInspector, type TerminalLease
@@ -47,7 +47,7 @@ export class SafetyGate {
           return { decision: safety };
         }
       }
-      await this.deps.audit.classified?.(operation.id, !!analysis && isReadOnlyQuery(analysis));
+      await this.deps.audit.classified?.(operation.id, !!analysis && isEffectFreeQuery(analysis));
 
       let settings: SafetySettings;
       try { settings = this.deps.settings(operation.scope.hostId); }
@@ -76,12 +76,16 @@ export class SafetyGate {
               return { decision: unavailable };
             }
             const result = inspectScriptSafety(operation, inspected.source, scriptAnalysis, settings);
-            safety = result.verdict === 'ask' && settings.mode === 'permissive'
-              ? { verdict: 'allow', ruleId: 'permissive-script', reason: 'Opaque script allowed in full-access mode' }
-              : result;
+            safety = result;
           } else if (settings.mode !== 'permissive') {
-            safety = { verdict: 'ask', ruleId: 'script-uninspectable',
-              reason: 'Script could not be read safely before execution', impact: 'unknown' };
+            // An unreadable script never downgrades a decision that already carries
+            // higher risk (for example a high-impact wrapper command).
+            const fallback = settings.mode === 'ai-review'
+              ? { verdict: 'evaluate' as const, ruleId: 'script-uninspectable',
+                reason: 'Script could not be read safely before execution', impact: 'unknown' as const }
+              : { verdict: 'ask' as const, ruleId: 'script-uninspectable',
+                reason: 'Script could not be read safely before execution', impact: 'unknown' as const };
+            safety = safety.impact === 'high' || safety.verdict === 'evaluate' ? safety : fallback;
           }
         }
       }
@@ -90,7 +94,9 @@ export class SafetyGate {
       };
       if (safety.verdict === 'evaluate') {
         let assessment: Awaited<ReturnType<RiskEvaluator['evaluate']>>;
-        try { assessment = await this.deps.evaluator.evaluate(operation, analysis); }
+        try { assessment = await this.deps.evaluator.evaluate(operation, analysis, {
+            classification: safety, inspectedScriptSha256: inspectedScript?.sha256
+          }); }
         catch { assessment = { verdict: 'error', reason: '审核模型调用失败' }; }
         const result = typeof assessment === 'string' ? { verdict: assessment } : assessment;
         const detail = result.reason ? `：${result.reason}` : result.verdict === 'deny' ? '（审核模型未提供具体理由）' : '';
@@ -162,7 +168,7 @@ export class SafetyGate {
         return { decision: safety };
       }
       let result: OperationResult;
-      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly: !!analysis && isReadOnlyQuery(analysis), isAuthorized: stillCurrent }); }
+      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly: !!analysis && isEffectFreeQuery(analysis), isAuthorized: stillCurrent }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       }

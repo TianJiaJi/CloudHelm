@@ -121,6 +121,9 @@
 .cardTitle svg { color: var(--accent); }
 .cardTitle > small { margin-left: auto; font-size: 10px; }
 .operationCard details, .reviewCard details { color: var(--muted); font-size: 10px; margin-top: 9px; }
+.operationCard label { display: block; margin: 9px 0; font-size: 11px; line-height: 1.6; }
+.operationCard label input[type="checkbox"] { margin-right: 7px; }
+.operationCard textarea { display: block; box-sizing: border-box; width: 100%; min-height: 60px; margin-top: 4px; resize: vertical; }
 .operationCard details pre, .reviewCard details pre { color: var(--text); }
 .operationCard p, .reviewCard p { margin: 9px 0; font-size: 11px; line-height: 1.7; white-space: pre-wrap; }
 .command { padding: 9px 0 0; margin: 0; font-size: 11px; }
@@ -135,6 +138,7 @@
 .reviewCommand pre { margin: 6px 0 0; max-height: 170px; overflow: auto; color: var(--text); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .reviewCard label { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; font-size: 11px; }
 .verificationCard { background: var(--accentSoft); }
+.verificationWarning { border-color: #c58735; background: #c587351a; }
 .access { display: block; overflow-wrap: anywhere; padding: 8px 0; font-size: 11px; }
 .agentTerminalLink { display: flex !important; justify-content: flex-start !important; width: 100%; padding: 9px !important; font-size: 11px; margin-bottom: 15px; color: var(--muted) !important; }
 .agentTerminalLink > svg:last-child { margin-left: auto; }

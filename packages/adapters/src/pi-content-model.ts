@@ -1,10 +1,11 @@
 import { redactOutput, type ContentModelPort, type SessionProfile } from '@cloudhelm/core';
 import { resolveSessionModel } from './pi-session-model.js';
+import { conversationOutputTokens } from './model-capacity.js';
 
 /** Conservative UTF-8 estimate; CJK and source code must not be estimated as English prose. */
 export function contentModel(profile: SessionProfile): ContentModelPort {
   const { model, catalog } = resolveSessionModel(profile);
-  const reserveTokens = Math.max(1, Math.min(8192, model.maxTokens, Math.floor(model.contextWindow * 0.25)));
+  const reserveTokens = conversationOutputTokens(model);
   return {
     contextWindow: model.contextWindow, reserveTokens,
     estimate: (text) => Math.ceil(Buffer.byteLength(text, 'utf8') / 2),

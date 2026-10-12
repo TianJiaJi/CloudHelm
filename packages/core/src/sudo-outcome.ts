@@ -5,8 +5,12 @@ import { isSudo, sudoTarget } from './sudo-plan.js';
 export function isSudoStatusProbe(analysis: CommandAnalysis): boolean {
   if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || analysis.steps?.length !== 1) return false;
   const call = analysis.steps[0]!.call;
-  return isSudo(call) && call.args.length > 0
-    && call.args.every((arg) => ['-n', '--non-interactive', '-l', '--list', '-v', '--validate'].includes(arg))
+  if (!isSudo(call) || call.args.length === 0) return false;
+  // sudo -n true / sudo true only probe capability and have no business effect.
+  const target = call.args.filter((arg) => !['-n', '--non-interactive'].includes(arg));
+  if (target.length === 1 && ['true', '/bin/true', '/usr/bin/true'].includes(target[0]!)
+    && call.args.every((arg) => ['-n', '--non-interactive', 'true', '/bin/true', '/usr/bin/true'].includes(arg))) return true;
+  return call.args.every((arg) => ['-n', '--non-interactive', '-l', '--list', '-v', '--validate'].includes(arg))
     && call.args.some((arg) => ['-l', '--list', '-v', '--validate'].includes(arg));
 }
 

@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { createModelCatalog, listModelProviders } from './model-catalog.js';
 
 describe('Pi model catalog settings', () => {
+  it('uses explicit custom capacity and rejects invalid or fabricated limits', () => {
+    const selection = { provider: 'cloudhelm-custom', modelId: 'large', baseUrl: 'https://example.com/v1' };
+    expect(createModelCatalog({ ...selection, contextWindow: 1_000_000, maxTokens: 384_000 })
+      .getModel('cloudhelm-custom', 'large')).toMatchObject({ contextWindow: 1_000_000, maxTokens: 384_000 });
+    expect(createModelCatalog(selection).getModel('cloudhelm-custom', 'large'))
+      .toMatchObject({ contextWindow: 32_000, maxTokens: 8192 });
+    for (const [contextWindow, maxTokens] of [[10, 11], [0, 1], [10, -1], [Number.NaN, 1], [10, 1.5]]) {
+      expect(() => createModelCatalog({ ...selection, contextWindow, maxTokens })).toThrow('容量无效');
+    }
+  });
+
   it('provides a prefilled URL and uses a provider-specific override for model requests', () => {
     const provider = listModelProviders().find((item) => item.id === 'deepseek');
     expect(provider?.defaultBaseUrl).toBe('https://api.deepseek.com');

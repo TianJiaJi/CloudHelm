@@ -6,14 +6,39 @@
 .chip button { font-size: 12px; padding: 0 2px; color: var(--muted); }
 .chip small { font-size: 10px; color: var(--muted); }
 .message { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
-.scrim { position: fixed; inset: 0; z-index: 1000; background: #0008; display: flex; align-items: center; justify-content: center; padding: 24px; }
-.preview { display: flex; flex-direction: column; gap: 12px; width: min(800px, 90vw); max-height: 85vh; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); padding: 20px; box-shadow: 0 16px 64px #0005; }
-.preview header, .preview footer { display: flex; align-items: center; gap: 12px; }
-.preview header strong { flex: 1; }
-.preview small { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-.preview pre, .preview textarea { min-height: 150px; max-height: 55vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); padding: 12px; border: 1px solid var(--border); border-radius: 6px; font: 12px/1.6 SFMono-Regular, Consolas, monospace; color: inherit; }
-.preview textarea { width: 100%; height: 45vh; resize: vertical; }
-.preview footer { justify-content: flex-end; }
-.preview button { padding: 5px 9px; }
-.previewTabs { display: flex; gap: 8px; }
-.previewTabs [aria-pressed="true"] { background: var(--border); }
+.scrim { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: #101514bd; backdrop-filter: blur(4px); }
+.preview { display: flex; flex-direction: column; width: min(760px, 100%); height: min(640px, calc(100dvh - 40px)); max-height: calc(100dvh - 40px); overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); color: var(--text); box-shadow: 0 24px 72px #0008; }
+.previewHead { display: flex; align-items: center; gap: 12px; flex: none; padding: 18px 20px 14px; }
+.previewIcon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); border-radius: 10px; background: var(--accentSoft); color: var(--accent); }
+.previewTitle { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.previewTitle strong { font-size: 15px; font-weight: 600; }
+.previewTitle span { color: var(--muted); font-size: 11px; }
+.preview .iconButton { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; color: var(--muted); }
+.preview .iconButton:hover { background: var(--raised); color: var(--text); }
+.previewMeta { flex: none; margin: 0 20px 12px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--raised); color: var(--muted); font-size: 11px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.previewNotice { margin: 0 20px 12px; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.previewTabs { display: flex; gap: 4px; flex: none; margin: 0 20px 10px; border-bottom: 1px solid var(--border); }
+.previewTabs button { padding: 8px 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 11px; }
+.previewTabs button[aria-pressed="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+.previewBody { flex: 1; min-height: 150px; margin: 0 20px 18px; overflow: hidden; }
+.previewBody pre, .previewBody textarea { display: block; width: 100%; height: 100%; min-height: 150px; margin: 0; padding: 14px 16px; overflow: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--canvas); color: var(--text); font: 12px/1.65 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; }
+.previewBody textarea { resize: none; outline: none; }
+.previewBody textarea:focus { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.previewActions { display: flex; align-items: center; justify-content: space-between; flex: none; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--panel); }
+.previewActions > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.preview .secondaryButton, .preview .removeButton, .preview .primaryButton { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 33px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--text); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.preview .secondaryButton:hover { background: var(--raised); }
+.preview .removeButton { color: var(--muted); border-color: transparent; }
+.preview .removeButton:hover { color: light-dark(#a14432, #eda38d); background: var(--raised); }
+.preview .primaryButton { padding-inline: 17px; border-color: transparent; background: var(--accent); color: var(--canvas); font-weight: 650; }
+.preview .primaryButton:hover { filter: brightness(1.08); }
+.preview button:focus-visible, .preview textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .scrim { padding: 12px; }
+  .preview { max-height: calc(100dvh - 24px); }
+  .previewHead { padding: 14px 14px 10px; }
+  .previewMeta, .previewTabs { margin-inline: 14px; }
+  .previewBody { margin: 0 14px 12px; }
+  .previewActions { padding: 11px 14px; flex-wrap: wrap; }
+  .previewActions > div:last-child { margin-left: auto; }
+}

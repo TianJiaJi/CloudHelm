@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SqliteStore } from '@cloudhelm/adapters';
+import { BashAnalyzer, type SqliteStore } from '@cloudhelm/adapters';
 import type { AppEvent, ModelProfileDraft, TaskView } from '@cloudhelm/contracts';
+import { operationNeedsVerification } from '@cloudhelm/contracts';
 import { AppState } from './app-state.js';
 
 const encryption = vi.hoisted(() => ({ available: true }));
@@ -71,6 +72,22 @@ it('persists explicit continuation reasons and clears them on completion', () =>
   expect(setup(store).state.getTask(task.id).resumeReason).toBeUndefined();
 });
 
+it('persists an answered but unverified change separately from a verified report', () => {
+  const { state, store } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  state.record({ type: 'verification-state', taskId: task.id, value: {
+    status: 'unverified', operationIds: ['write-1'], reasonCode: 'report-missing'
+  } });
+  state.record({ type: 'task-status', taskId: task.id, status: 'answered', resumeReason: 'report', summary: '变更已执行，待核验' });
+  expect(setup(store).state.getTask(task.id)).toMatchObject({ status: 'answered', resumeReason: 'report',
+    verificationState: { status: 'unverified', operationIds: ['write-1'] } });
+  state.record({ type: 'verification-state', taskId: task.id, value: { status: 'verified', operationIds: ['write-1'] } });
+  state.record({ type: 'task-status', taskId: task.id, status: 'answered' });
+  expect(setup(store).state.getTask(task.id)).toMatchObject({ status: 'answered', verificationState: { status: 'verified' } });
+  expect(state.getTask(task.id).resumeReason).toBeUndefined();
+});
+
 describe('conversation credential binding', () => {
   it('keeps terminal replacement in authoritative snapshots after further terminal state events', () => {
     const { state, events } = setup();
@@ -97,6 +114,18 @@ describe('conversation credential binding', () => {
     expect(inFlightProfile.baseUrl).toBe('http://localhost:1234/v1');
     const restarted = setup(store).state;
     expect(() => restarted.conversationProfile(restarted.getTask(task.id))).toThrow('重新选择模型');
+  });
+
+  it('persists custom model capacity and requires reselection when it changes', () => {
+    const { state, store } = setup();
+    state.saveProfile(customProfile({ contextWindow: 1_000_000, maxTokens: 384_000 }));
+    const task = conversation(state);
+    expect(state.conversationProfile(task)).toMatchObject({ contextWindow: 1_000_000, maxTokens: 384_000 });
+    expect(state.modelProviderSettings('cloudhelm-custom')).toMatchObject({ contextWindow: 1_000_000, maxTokens: 384_000 });
+    expect(setup(store).state.conversationProfile(task).maxTokens).toBe(384_000);
+    state.saveProfile(customProfile({ contextWindow: 1_000_000, maxTokens: 128_000 }));
+    expect(() => state.conversationProfile(task)).toThrow('重新选择模型');
+    expect(() => state.saveProfile(customProfile({ contextWindow: 8192, maxTokens: 384_000 }))).toThrow('容量无效');
   });
 
   it('keeps the binding when only the default model changes or an identical key is saved', () => {
@@ -385,6 +414,90 @@ it('rebuilds native message projections idempotently and clears compaction statu
   expect(rebuilt.snapshot().messages).toEqual([]);
   rebuilt.record(message);
   expect(rebuilt.snapshot().messages).toHaveLength(1);
+});
+
+it('reclassifies only exact completed historical read-only commands before restoring host write locks', async () => {
+  const { state, store } = setup();
+  const cases = [
+    { id: 'query', preview: 'docker ps -a', status: 'failed', exitCode: 1 },
+    { id: 'listing', preview: 'ls -ld /home/tian/test', status: 'failed', exitCode: 2 },
+    { id: 'compound', preview: 'ls /home/tian; touch /home/tian/test', status: 'failed', exitCode: 1 },
+    { id: 'unknown', preview: 'ls -ld /home/tian/test', status: 'unknown' },
+    { id: 'redacted', preview: 'ls [REDACTED]', status: 'failed', exitCode: 1 }
+  ] as const;
+  for (const item of cases) state.record({ type: 'operation', value: { ...item, taskId: 'source', hostId: 'host',
+    kind: 'command', effects: 'possible', createdAt: 1 } });
+  await state.normalizeHistoricalQueries(new BashAnalyzer());
+  expect(state.snapshot().operations.filter(operationNeedsVerification).map((item) => item.id))
+    .toEqual(['compound', 'unknown', 'redacted']);
+  const restored = setup(store).state.snapshot().operations;
+  expect(restored.filter(operationNeedsVerification).map((item) => item.id)).toEqual(['compound', 'unknown', 'redacted']);
+  expect(restored.find((item) => item.id === 'query')?.status).toBe('failed');
+  expect(restored.find((item) => item.id === 'query')?.readOnly).toBe(true);
+});
+
+it('does not release a historical lock if query analysis fails', async () => {
+  const { state } = setup();
+  state.record({ type: 'operation', value: { id: 'query', taskId: 'source', hostId: 'host', kind: 'command',
+    preview: 'ls -la /home/tian', status: 'failed', effects: 'possible', exitCode: 1, createdAt: 1 } });
+  await state.normalizeHistoricalQueries({ analyze: async () => { throw new Error('parser unavailable'); } });
+  expect(operationNeedsVerification(state.snapshot().operations[0]!)).toBe(true);
+});
+
+it('keeps an unknown outcome truthful while persisting explicit risk acceptance across restart', () => {
+  const { state, store } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  state.record({ type: 'operation', value: { id: 'uncertain', taskId: task.id, hostId: 'host', kind: 'command',
+    preview: 'mkdir -p /home/tian/test', status: 'unknown', createdAt: 1 } });
+  expect(operationNeedsVerification(state.snapshot().operations.at(-1)!)).toBe(true);
+  state.acceptOperationRisk('uncertain', '已检查实际状态，接受仍有未知变更的风险', 42, task.id, []);
+  const saved = store.get<{ status: string; reconciledAt: number }>('operations', 'uncertain');
+  expect(saved).toMatchObject({ status: 'unknown', reconciledAt: 42 });
+  const restored = setup(store).state.snapshot().operations.find((item) => item.id === 'uncertain')!;
+  expect(restored.reconciliation).toMatchObject({ kind: 'risk-accepted', at: 42, sourceTaskId: task.id });
+  expect(operationNeedsVerification(restored)).toBe(false);
+  expect(setup(store).state.snapshot().execution?.[task.id]?.remote).toBe('idle');
+  expect(() => state.acceptOperationRisk('uncertain', '再次解除', 43)).toThrow();
+  expect(() => state.assertDeletable(task.id)).not.toThrow();
+});
+
+it('does not mutate authoritative state when persisting a risk acceptance fails', () => {
+  const { state, store } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  state.record({ type: 'operation', value: { id: 'uncertain', taskId: task.id, hostId: 'host', kind: 'command',
+    preview: 'old write', status: 'unknown', createdAt: 1 } });
+  const original = store.put.bind(store);
+  const failure = vi.spyOn(store, 'put').mockImplementation((bucket, id, value) => {
+    if (bucket === 'operations') throw new Error('disk full');
+    original(bucket, id, value);
+  });
+  expect(() => state.acceptOperationRisk('uncertain', '人工承担未知结果风险', 42)).toThrow('disk full');
+  expect(operationNeedsVerification(state.snapshot().operations.find((item) => item.id === 'uncertain')!)).toBe(true);
+  failure.mockRestore();
+});
+
+it('does not accept still-running, read-only or completed operations', () => {
+  const { state } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  for (const [id, status, readOnly] of [['active', 'running', false], ['query', 'unknown', true], ['done', 'succeeded', false]] as const) {
+    state.record({ type: 'operation', value: { id, taskId: task.id, hostId: 'host', kind: 'command', preview: id,
+      status, readOnly, createdAt: 1 } });
+    expect(() => state.acceptOperationRisk(id, '已检查实际状态，接受仍有未知变更的风险', 42)).toThrow();
+  }
+});
+
+it('restores a proposed operation as an unknown but resolvable outcome after restart', () => {
+  const { state, store } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  state.record({ type: 'operation', value: { id: 'reviewing', taskId: task.id, hostId: 'host', kind: 'command',
+    preview: 'command', status: 'proposed', createdAt: 1 } });
+  const restored = setup(store).state.snapshot().operations.find((item) => item.id === 'reviewing')!;
+  expect(restored.status).toBe('unknown');
+  expect(operationNeedsVerification(restored)).toBe(true);
 });
 
 it('preserves execution state across model selection and projects uncertainty after restart', () => {

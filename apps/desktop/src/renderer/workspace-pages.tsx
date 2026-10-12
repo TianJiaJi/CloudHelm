@@ -71,7 +71,7 @@ export function OperationCard({ operation, report }: { operation: OperationView;
     return entries;
   }
   return <section className={styles.operationCard} onContextMenu={(event) => openContextMenu(event, menuEntries(), '操作详情')}>
-    <div className={styles.cardTitle}><Icon name="terminal" /><strong>{operation.kind === 'command' ? '远程命令' : '文件操作'}</strong><small>{statuses[operation.status]}</small></div>
+    <div className={styles.cardTitle}><Icon name="terminal" /><strong>{operation.kind === 'command' ? '远程命令' : '文件操作'}</strong><small>{operation.reconciliation?.kind === 'risk-accepted' ? '风险已接管' : statuses[operation.status]}</small></div>
     <pre className={styles.command}>{operation.preview}</pre>
     {output && <pre className={styles.outputTail}>{output.slice(-1600)}</pre>}
     {operation.manualReviewAvailable && operation.ruleId === 'ai-review-deny' && <div className={styles.cardActions}>
@@ -79,7 +79,7 @@ export function OperationCard({ operation, report }: { operation: OperationView;
     </div>}
     <details><summary>操作详情{operation.exitCode !== undefined ? ` · 退出码 ${operation.exitCode}` : ''}</summary>
       {operation.interruption && <p>用户主动中断（{operation.interruption.source === 'ctrl-c' ? 'Ctrl+C' : operation.interruption.source === 'terminal-close' ? '关闭终端' : '停止按钮'}）；{operation.status === 'unknown' ? '远端结果待核验' : `实际退出码：${operation.exitCode ?? '待确认'}`}。</p>}
-      {operation.reason && <p>{operation.reason}</p>}{operation.model && <small>{operation.model.provider} · {operation.model.modelId}</small>}
+      {operation.reason && <p>{operation.reason}</p>}{operation.reconciliation?.kind === 'risk-accepted' && <p>用户已逐条接管未知结果风险：{operation.reconciliation.explanation}。这不是成功证据，也未执行新命令。</p>}{operation.model && <small>{operation.model.provider} · {operation.model.modelId}</small>}
       <div className={styles.cardActions}>{terminal && <button onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 终端</button>}
         {operation.logRef && <button onClick={() => void capture(async () => setFullLog(await window.cloudhelm.readTerminalLog(operation.logRef!)), report)}>查看日志</button>}</div>
       {fullLog && <pre>{fullLog}</pre>}
@@ -88,16 +88,21 @@ export function OperationCard({ operation, report }: { operation: OperationView;
 }
 
 export function VerificationCard({ conversation, report }: { conversation: TaskView; report(error: string): void }): React.JSX.Element {
-  const verified = conversation.status === 'answered' && !!conversation.report?.evidenceOperationIds.length;
+  const verified = conversation.status === 'answered' && conversation.verificationState?.status === 'verified' && !!conversation.report?.evidenceOperationIds.length;
+  const unverified = conversation.status === 'answered' && conversation.verificationState?.status === 'unverified';
   const failure = conversation.status === 'failed' ? presentError(conversation.summary) : null;
-  const conclusion = failure?.description ?? conversation.report?.summary ?? conversation.summary ?? '';
-  return <section className={`${styles.reviewCard} ${styles.verificationCard}`}
+  const warning = `${conversation.summary && unverified ? conversation.summary : '远端操作已返回成功，但效果尚未核验。'} 不能仅凭退出码断言目标已完成；可查看已有检查或继续核验，切勿重放已成功的变更。`;
+  const conclusion = failure?.description ?? (unverified ? warning : conversation.report?.summary ?? conversation.summary ?? '');
+  return <section className={`${styles.reviewCard} ${styles.verificationCard} ${unverified ? styles.verificationWarning : ''}`}
+    role={unverified ? 'alert' : undefined}
     onContextMenu={(event) => openContextMenu(event, copyEntries('复制结论', conclusion, report), '验证结论')}>
-    <div className={styles.cardTitle}><Icon name={verified ? 'check' : 'shield'} /><strong>{failure?.title ?? statusLabel[conversation.status]}</strong></div>
-    <p>{failure?.description ?? conversation.report?.summary ?? conversation.summary ?? '还需要补充验证证据，请查看对话中的说明。'}</p>
+    <div className={styles.cardTitle}><Icon name={verified ? 'check' : 'shield'} /><strong>{unverified ? '已执行 · 未核验' : failure?.title ?? statusLabel[conversation.status]}</strong></div>
+    <p>{failure?.description ?? (unverified ? warning : conversation.report?.summary ?? conversation.summary ?? '还需要补充验证证据，请查看对话中的说明。')}</p>
     {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
       : conversation.report?.access.map((address) => <code className={styles.access} key={address}>{address}</code>)}
-    <div className={styles.cardActions}><button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
+    <div className={styles.cardActions}>
+      {unverified && conversation.session && conversation.status === 'answered' && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}>继续核验</button>}
+      <button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
     </div>
   </section>;
 }
@@ -107,7 +112,7 @@ export function ReportPage({ conversation, operations, report }: { conversation:
   const messages = snapshot?.messages.filter((message) => message.taskId === conversation.id) ?? [];
   return <section className={styles.reportPage}>
     <div className={styles.pageHead}><div><small>AI 对话详情</small><h2>{conversation.goal}</h2></div><span className={styles.pill}>{statusLabel[conversation.status]}</span></div>
-    {!conversation.report && conversation.status === 'failed' && <VerificationCard conversation={conversation} report={report} />}
+    {!conversation.report && (conversation.status === 'failed' || conversation.status === 'answered' && conversation.verificationState?.status === 'unverified') && <VerificationCard conversation={conversation} report={report} />}
     {conversation.report && <>
       <VerificationCard conversation={conversation} report={report} />
       <h3>变更</h3><ul>{conversation.report.changes.map((item) => <li key={item}>{item}</li>)}</ul>

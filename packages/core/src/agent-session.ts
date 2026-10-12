@@ -4,7 +4,8 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 export interface ThinkingView { levels: ThinkingLevel[]; selected: ThinkingLevel; effective: ThinkingLevel; pending: boolean }
 
 export interface SessionProfile {
-  provider: string; modelId: string; baseUrl?: string; apiKey: string; credentialRevision?: string; jevKey?: string;
+  provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number;
+  apiKey: string; credentialRevision?: string; jevKey?: string;
 }
 export interface BusinessTool<T = never> {
   name: string; label: string; description: string; parameters: object; replay: 'never';
@@ -42,6 +43,8 @@ export type SessionEvent =
   | { type: 'compaction'; status: 'running' | 'complete' | 'failed'; error?: string };
 export interface SessionOptions {
   thinkingLevel?: ThinkingLevel; profile: SessionProfile; systemPrompt: string; tools: BusinessTool[];
+  /** Backend-owned, per-request system prompt projection; never derive it from conversation messages. */
+  currentSystemPrompt?(): string;
   clarification: ClarificationPort; storage?: SessionStorage;
   assertActive(): void;
   beforeRequest(purpose: 'conversation' | 'compaction', profile: SessionProfile): void;

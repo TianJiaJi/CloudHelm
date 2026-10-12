@@ -173,6 +173,19 @@ it.each([false, true])('distinguishes launch failure after an earlier action (pr
 it('reports a preflight failure as confirmed no dispatch, never an unknown business outcome', async () => {
   const f = fixture();
   f.prepareCommandProgram.mockRejectedValueOnce(new Error('missing python'));
-  await expect(f.terminal.execute('touch /tmp/business-file', '/', () => true)).rejects.toMatchObject({ name: 'CommandNotStartedError' });
+  let error: Error | undefined;
+  try { await f.terminal.execute('touch /tmp/business-file', '/', () => true); } catch (thrown) { error = thrown as Error; }
+  expect(error).toMatchObject({ name: 'CommandNotStartedError' });
+  expect(error?.message).toContain('missing python');
+  expect(error?.message).toContain('Python 3');
   expect(f.openPipe).not.toHaveBeenCalled();
+});
+
+it('redacts recognizable secrets from the surfaced preflight cause', async () => {
+  const f = fixture();
+  f.prepareCommandProgram.mockRejectedValueOnce(new Error('upload failed: password=cleartext'));
+  let error: Error | undefined;
+  try { await f.terminal.execute('touch /tmp/business-file', '/', () => true); } catch (thrown) { error = thrown as Error; }
+  expect(error?.message).not.toContain('cleartext');
+  expect(error?.message).toContain('命令未发送');
 });

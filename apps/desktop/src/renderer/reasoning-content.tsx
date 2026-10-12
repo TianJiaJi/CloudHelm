@@ -4,7 +4,7 @@ import { MarkdownMessage } from './markdown-message.js';
 import styles from './reasoning-content.module.css';
 
 export function ReasoningContent({ value }: { value?: ReasoningView }): React.JSX.Element | null {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const body = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   useEffect(() => {

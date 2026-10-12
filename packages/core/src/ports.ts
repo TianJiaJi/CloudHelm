@@ -10,7 +10,8 @@ export interface ScriptInspector {
 }
 
 export interface RiskEvaluator {
-  evaluate(operation: ProposedOperation, analysis: CommandAnalysis | undefined): Promise<RiskAssessment | RiskAssessment['verdict']>;
+  evaluate(operation: ProposedOperation, analysis: CommandAnalysis | undefined,
+    context?: { classification: SafetyDecision; inspectedScriptSha256?: string }): Promise<RiskAssessment | RiskAssessment['verdict']>;
 }
 
 export interface RiskAssessment {

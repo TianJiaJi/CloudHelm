@@ -22,6 +22,34 @@ it('does not treat a classified read-only unknown as a pending remote write', ()
 });
 
 describe('remote result analysis', () => {
+  it('does not turn a failed sudo file inspection into an unresolved host mutation', async () => {
+    let requests = 0;
+    const fixture = await openAiFixture(async () => {
+      requests++;
+      return requests === 1 ? { calls: [{ id: 'inspect', name: 'run_remote', arguments: {
+        hostId: 'fixture', command: 'sudo stat /root/test/test.py'
+      } }] } : { text: '无权限读取目标，结果未核验。' };
+    });
+    const host: RuntimeHost = { id: 'fixture', label: '本地测试', address: '192.0.2.1', port: 22, username: 'ubuntu',
+      auth: 'agent', status: 'connected', defaultMode: 'permissive', protectedPaths: [], policyRevision: 1 };
+    const task: TaskView = { id: 'failed-inspection', goal: '检查文件', hostIds: [host.id], localScopes: [],
+      modelId: 'fixture', status: 'draft', requestCount: 0, requestLimit: 5, createdAt: 1, updatedAt: 1 };
+    const terminal = new TerminalManager({ data: () => {}, state: () => {} });
+    const terminalId = terminal.open(host.id, { write: () => {}, resize: () => {}, close: () => {}, onData: () => {}, onClose: () => {} }, task.id, '/home/ubuntu');
+    const execute = vi.fn(async (operation: ProposedOperation) => ({ operationId: operation.id, status: 'failed' as const,
+      effects: 'possible' as const, failureKind: 'permission-denied' as const, exitCode: 1, stdoutTail: 'Permission denied' }));
+    const events: Parameters<TaskSignals['event']>[0][] = [];
+    const runner = new TaskRunner(task, [host], { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'dummy', baseUrl: fixture.baseUrl },
+      [], terminal, { execute }, async () => terminalId,
+      { event: (event) => events.push(structuredClone(event)), requestApproval: async () => false, cancelApproval: () => {} });
+    try {
+      await runner.start();
+      expect(fixture.errors).toEqual([]);
+      expect(requests).toBe(2);
+      expect(events.filter((event) => event.type === 'operation').at(-1)).toMatchObject({ value: { readOnly: true, status: 'failed' } });
+      expect(events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered' });
+    } finally { await fixture.close(); }
+  });
   it('keeps the Agent running after a pre-dispatch host lock and permits read-only verification', async () => {
     let requests = 0;
     const fixture = await openAiFixture(async (request) => {

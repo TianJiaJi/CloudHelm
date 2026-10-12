@@ -44,7 +44,7 @@ describe('Pi clarification model loop', () => {
       expect(f.fixture.requests).toHaveLength(2);
       const tool = f.fixture.requests[1]!.messages.find((message) => message.tool_call_id === 'question');
       expect(tool && fixtureMessageText(tool)).toContain('"value":"test"');
-      expect(f.fixture.requests[0]!.messages.some((message) => fixtureMessageText(message).includes('Investigate available context first'))).toBe(true);
+      expect(f.fixture.requests[0]!.messages.some((message) => fixtureMessageText(message).includes('Use available context to resolve routine details'))).toBe(true);
       expect(f.open).not.toHaveBeenCalled();
       expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered' });
       expect(f.fixture.errors).toEqual([]);

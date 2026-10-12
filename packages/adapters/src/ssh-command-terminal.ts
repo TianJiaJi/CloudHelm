@@ -1,6 +1,6 @@
 import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.js';
 import { StringDecoder } from 'node:string_decoder';
-import { CommandNotStartedError, isSudo, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
+import { CommandNotStartedError, isSudo, redactOutput, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
@@ -65,8 +65,10 @@ export class SshCommandTerminal implements RawTerminal {
     current();
     try {
       if (!this.program) this.program = await this.ssh.prepareCommandProgram(this.hostId, remoteCommandProgram, current);
-    } catch {
-      throw new CommandNotStartedError('命令未发送：请确认远端提供 Python 3（POSIX、pty 支持），且 /tmp 可写；修复后再继续。');
+    } catch (error) {
+      // Keep the concrete transport cause visible; the generic checklist alone hides what to fix.
+      const cause = redactOutput(error instanceof Error ? error.message : String(error)).trim().slice(0, 300);
+      throw new CommandNotStartedError(`命令未发送：${cause || '远端执行通道准备失败'}。请确认远端提供 Python 3（POSIX、pty 支持）、/tmp 可写且 SFTP 可用；修复后再继续。`);
     }
     current();
     this.busy = true;
