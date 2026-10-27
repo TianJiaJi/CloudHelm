@@ -93,7 +93,7 @@ export function UserMessage({ message, canEdit, report }: {
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send(); }
         }} />}
       <small>修改后将作为新消息发送，原记录保留。</small>
-      {locked && message.document && <small role="status">{editDraft?.compressing ? '正在压缩…' : '正在准备发送…'} <button type="button" onClick={() => {
+      {locked && message.document && <small role="status">{editDraft?.compressing ? '正在压缩…' : '正在准备发送…'} {editDraft?.summaryRequests && `摘要请求 ${editDraft.summaryRequests.used}/${editDraft.summaryRequests.limit} `}<button type="button" onClick={() => {
         const id = draftFor(editorKey).request?.id; if (id) void window.cloudhelm.cancelMessage(id).catch((error: unknown) => report(String(error)));
       }}>取消发送</button></small>}
       <div className={styles.editorActions}><button type="button" disabled={busy || locked} onClick={cancel}>取消</button>

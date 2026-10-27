@@ -66,7 +66,9 @@ describe('verification evidence', () => {
     const withCheck = setup([changed(), accepted, verification()]);
     expect((await withCheck.call('submit_verification', report())).isError).not.toBe(true);
     expect((await withCheck.call('record_reconciled_result', {
-      operationId: 'risk', evidenceOperationIds: ['verification'], outcome: 'succeeded', explanation: '结果后续得到了确认' })).isError).toBe(true);
+      operationId: 'risk', evidenceOperationIds: [], outcome: 'succeeded', explanation: '结果后续已通过新观察得到确认' })))
+      .toMatchObject({ isError: false, details: { code: 'already-resolved', reconciliation: { kind: 'risk-accepted' } } });
+    expect(withCheck.reconcile).not.toHaveBeenCalled();
   });
 
   it('does not require reconciliation for a previously classified read-only query', async () => {
@@ -170,10 +172,12 @@ describe('operation log access', () => {
     expect((await test.call('read_operation_log', { operationId: 'missing' })).isError).toBe(true);
     expect((await test.call('read_operation_log', { operationId: 'foreign' })).isError).toBe(true);
     expect(test.readLog).not.toHaveBeenCalled();
-    const result = await test.call('read_operation_log', { operationId: 'own', cursor: 4096 });
+    const result = await test.call('read_operation_log', { operationId: 'own', cursor: 12 });
     expect(result.isError).not.toBe(true);
-    expect(test.readLog).toHaveBeenCalledExactlyOnceWith('own', 4096);
-    expect(result.content).toEqual([{ type: 'text', text: JSON.stringify({ text: 'service is healthy', nextCursor: 18, more: false }) }]);
+    expect(test.readLog).toHaveBeenCalledExactlyOnceWith('own', 12);
+    expect(result.details).toMatchObject({ operationId: 'own', cursor: 12, nextCursor: 18, more: false,
+      availability: 'available', completeness: 'unknown', sourceReadOnly: 'unclassified' });
+    expect(result.content[0]?.text).toContain('service is healthy');
   });
 });
 
@@ -194,7 +198,7 @@ describe('reconciling unknown remote outcomes', () => {
     explanation: '已重新检查容器状态和健康端点，确认上一次部署命令成功完成。'
   });
   const unknownOperation = () => ({ ...operation('unknown-deployment', 'unknown'), createdAt: 20 });
-  const freshEvidence = () => ({ ...operation('fresh-check'), createdAt: 30 });
+  const freshEvidence = () => ({ ...verification('fresh-check'), createdAt: 30 });
 
   it.each([
     ['missing', undefined],

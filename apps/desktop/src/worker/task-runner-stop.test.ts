@@ -5,7 +5,7 @@ import type { ExecutionOptions, ProposedOperation } from '@cloudhelm/core';
 import type { TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { OperationInputBridge } from './operation-input-bridge.js';
-import { TaskRunner, type TaskSignals } from './task-runner.js';
+import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { openAiFixture } from './openai-sse-fixture.js';
 
 describe('backend enforcement of stopped remote work', () => {

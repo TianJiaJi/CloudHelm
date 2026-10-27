@@ -3,8 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
-import { OutputRedactor, isReadOnlyQuery, type CommandAnalyzer } from '@cloudhelm/core';
-import { HostDraftSchema, isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
+import { OutputRedactor, type CommandAnalyzer } from '@cloudhelm/core';
+import { HISTORICAL_QUERY_REPAIR, planHistoricalQueryRepair } from './historical-query-repair.js';
+import { RequestBudgetAuthority } from './request-budget-authority.js';
+import { createRequestBudget } from '@cloudhelm/core';
+import { createBudgetRequestHandler } from './request-budget-broker.js';
+import { HostDraftSchema, TaskIntentStateSchema, isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
 
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number; credentialRevision?: string }
@@ -27,6 +31,8 @@ function validBindings(input: unknown): Record<string, string> {
 }
 
 export class AppState {
+  readonly requestBudgets: RequestBudgetAuthority;
+  private budgetPreparationActive: (requestId: string, taskId?: string) => boolean = () => false;
   private readonly hosts = new Map<string, HostView>();
   private readonly terminals = new Map<string, TerminalViewState>();
   private readonly tasks = new Map<string, TaskView>();
@@ -45,6 +51,7 @@ export class AppState {
   private readonly retentionTimer: ReturnType<typeof setInterval>;
   private profile: ProfileRecord;
   private closed = false;
+  private revalidatePreparations?: () => void;
 
   constructor(private readonly store: SqliteStore, private readonly emit: (event: AppEvent) => void) {
     for (const host of store.list<HostView>('hosts')) this.hosts.set(host.id, { ...host, status: 'disconnected',
@@ -70,8 +77,49 @@ export class AppState {
       remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown' && !op.reconciledAt) ? 'unknown' : 'idle' };
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));
     this.profile = store.get<ProfileRecord>('settings', 'model-profile') ?? { provider: 'vercel-ai-gateway', modelId: 'anthropic/claude-sonnet-4.5' };
+    this.requestBudgets = new RequestBudgetAuthority(store, { task: (id) => this.getTask(id),
+      replace: (task) => { this.tasks.set(task.id, task); this.publish(); },
+      completion: (id) => {
+        const task = this.getTask(id); const execution = this.execution[id];
+        const operations = [...this.operations.values()].filter((operation) => operation.taskId === id);
+        return { answered: task.status === 'answered' && !task.resumeReason,
+          unresolved: operations.some((operation) => operationNeedsVerification(operation)
+            || (['proposed', 'approved', 'running', 'unknown'].includes(operation.status) && !operation.reconciledAt)),
+          reportPending: task.resumeReason === 'report' || (task.verificationState?.status === 'unverified' && !task.report),
+          modelIdle: execution?.model === 'idle', remoteIdle: execution?.remote === 'idle' };
+      } });
     store.cleanupLogs();
     this.retentionTimer = setInterval(() => store.cleanupLogs(), 24 * 60 * 60_000);
+  }
+
+  /** Use the existing sending coordinator's live job map, not a second queue. */
+  setBudgetPreparationAuthority(active: (requestId: string, taskId?: string) => boolean, revalidate?: () => void): void {
+    this.budgetPreparationActive = active; this.revalidatePreparations = revalidate;
+  }
+
+  requestBudget(input: unknown): import('@cloudhelm/contracts').BudgetOutcome {
+    if (this.closed) return { error: 'budget-unavailable' };
+    return createBudgetRequestHandler(this.requestBudgets, (command) => {
+      if (command.kind === 'summary') {
+        const receipt = this.store.get<{ state: string; conversationId?: string }>('message-receipts', command.requestId);
+        if (!this.budgetPreparationActive(command.requestId) || receipt?.state !== 'preparing') throw new Error('Preparation unavailable');
+        if (receipt.conversationId) this.getTask(receipt.conversationId);
+      } else {
+        const task = this.getTask(command.taskId);
+        if (command.kind === 'reserve' && command.preparationId !== undefined) {
+          const receipt = this.store.get<{ state: string; conversationId?: string }>('message-receipts', command.preparationId);
+          const execution = this.execution[task.id];
+          if (command.attempt.purpose !== 'compaction' || !this.budgetPreparationActive(command.preparationId, task.id)
+            || receipt?.state !== 'preparing' || receipt.conversationId !== task.id
+            || execution?.remote !== 'idle' || execution.stopping) throw new Error('Compaction preparation unavailable');
+        }
+        if (command.kind === 'review') {
+          const operation = this.operations.get(command.operationId);
+          if (!['running', 'waiting-review'].includes(task.status) || operation?.taskId !== task.id
+            || operation.status !== 'proposed' || operation.reconciledAt) throw new Error('Review scope unavailable');
+        }
+      }
+    })(input);
   }
 
   snapshot(): AppSnapshot {
@@ -146,25 +194,22 @@ export class AppState {
   }
 
   /** Conversations with live work stay until the user finishes them first. */
-  /**
-   * Older completed queries can lack the read-only capability, even though
-   * their exact recorded command is a deterministic query. Reclassify only
-   * failed commands with a known exit code and an unredacted, fully parsed
-   * command; never infer an unknown write outcome from output or a preview.
-   */
+  /** Runs before restoring host locks. No in-memory capability changes until
+   * operation patches, affected tasks and repair receipts commit together. */
   async normalizeHistoricalQueries(analyzer: CommandAnalyzer): Promise<void> {
-    for (const operation of this.operations.values()) {
-      if (operation.kind !== 'command' || operation.readOnly || operation.reconciledAt
-        || operation.status !== 'failed' || operation.exitCode === undefined
-        || operation.preview.includes('[REDACTED]')) continue;
-      let safe = false;
-      try { safe = isReadOnlyQuery(await analyzer.analyze(operation.preview)); }
-      catch { continue; } // Missing parser never grants a capability.
-      if (!safe) continue;
-      const updated = { ...operation, readOnly: true };
-      this.store.put('operations', operation.id, updated);
-      this.operations.set(operation.id, updated);
-    }
+    const current = () => ({ operations: [...this.operations.values()], tasks: [...this.tasks.values()], hosts: [...this.hosts.values()] });
+    const before = structuredClone(current());
+    const baselines = ['operations', 'tasks', 'hosts'].map((bucket) => ({ bucket, values: this.store.list(bucket) }));
+    const repair = await planHistoricalQueryRepair(before, analyzer);
+    if (!repair.operations.length) return;
+    if (JSON.stringify(current()) !== JSON.stringify(before)) throw new Error('历史修复期间状态发生变化，请重新读取后重试');
+    this.store.commitDataRepair({ ...HISTORICAL_QUERY_REPAIR, baselines,
+      recordIds: repair.operations.map((operation) => operation.id), changes: [
+        ...repair.operations.map((value) => ({ bucket: 'operations', id: value.id, value })),
+        ...repair.tasks.map((value) => ({ bucket: 'tasks', id: value.id, value }))
+      ] });
+    for (const operation of repair.operations) this.operations.set(operation.id, operation);
+    for (const task of repair.tasks) this.tasks.set(task.id, task);
   }
 
   assertDeletable(id: string): TaskView {
@@ -448,11 +493,11 @@ export class AppState {
    * this only records that the user took over the risk so the write lock can be
    * released. Callers re-arm the write lock when this throws.
    */
-  acceptOperationRisk(operationId: string, explanation: string, at: number, sourceTaskId?: string, evidenceOperationIds?: string[]): void {
+  acceptOperationRisk(operationId: string, explanation: string, at: number, sourceTaskId?: string, evidenceOperationIds?: string[]): OperationView {
     const operation = this.operations.get(operationId);
     if (!operation) throw new Error('未找到该操作');
     if (operation.reconciledAt) {
-      if (operation.reconciliation?.kind === 'risk-accepted' && operation.reconciliation.at === at) return;
+      if (operation.reconciliation?.kind === 'risk-accepted' && operation.reconciliation.at === at) return structuredClone(operation);
       throw new Error('该操作已经核验或确认，不能重复解除');
     }
     if (!operationOutcomeResolvable(operation)) throw new Error('该操作没有可确认的未知结果');
@@ -461,6 +506,7 @@ export class AppState {
     this.store.put('operations', operationId, updated);
     this.operations.set(operationId, updated);
     this.publish();
+    return structuredClone(updated);
   }
 
   createTask(goal: string, hostIds: string[], modelId: string, localScopes: LocalScope[]): TaskView {
@@ -471,7 +517,7 @@ export class AppState {
       id: randomUUID(), goal: goal.trim(), hostIds: authorized,
       reviewModesByHost: Object.fromEntries(authorized.map((id) => [id, this.getHost(id).defaultMode])), reviewRevision: 1,
       localScopes, status: 'draft', modelId, provider: this.profile.provider, baseUrl: this.profile.baseUrl,
-      requestCount: 0, requestLimit: 100, createdAt: now, updatedAt: now
+      requestCount: 0, requestLimit: 100, budget: createRequestBudget(randomUUID()), createdAt: now, updatedAt: now
     };
     task.session = { version: 1, id: task.id };
     this.tasks.set(task.id, task);
@@ -512,18 +558,20 @@ export class AppState {
     | { type: 'host-status'; hostId: string; status: HostView['status'] }): void {
     if (this.closed) return;
     switch (event.type) {
-      case 'operation':
-        if (event.value.logRef && ['succeeded', 'failed'].includes(event.value.status)) {
-          const id = event.value.logRef;
+      case 'operation': {
+        const operation = retainOperationResolution(this.operations.get(event.value.id), event.value);
+        if (operation.logRef && ['succeeded', 'failed'].includes(operation.status)) {
+          const id = operation.logRef;
           const tail = this.redactors.get(id)?.finish() ?? '';
           this.redactors.delete(id);
           this.logBuffer.set(id, (this.logBuffer.get(id) ?? '') + tail);
-          const key = `operation:${event.value.id}`;
+          const key = `operation:${operation.id}`;
           this.logBuffer.set(key, (this.logBuffer.get(key) ?? '') + tail);
         }
-        this.operations.set(event.value.id, event.value);
-        this.store.put('operations', event.value.id, event.value);
+        this.store.put('operations', operation.id, operation);
+        this.operations.set(operation.id, operation);
         break;
+      }
       case 'clarification':
         this.clarifications.set(event.value.id, event.value);
         this.store.put('clarifications', event.value.id, event.value);
@@ -536,15 +584,33 @@ export class AppState {
       case 'task-status': {
         const task = this.tasks.get(event.taskId);
         if (task) {
-          Object.assign(task, { status: event.status, updatedAt: Date.now(), summary: event.summary ?? (['running', 'answered'].includes(event.status) ? undefined : task.summary), resumeReason: event.resumeReason, requestCount: event.requestCount ?? task.requestCount });
+          Object.assign(task, { status: event.status, updatedAt: Date.now(), summary: event.summary ?? (['running', 'answered'].includes(event.status) ? undefined : task.summary), resumeReason: event.resumeReason, requestCount: task.budget?.totalUsed ?? task.requestCount });
           this.store.put('tasks', task.id, task);
         }
         break;
       }
+      case 'task-intent': {
+        if (!Value.Check(TaskIntentStateSchema, event.value)) throw new Error('任务意图记录无效');
+        const task = this.getTask(event.taskId);
+        if (task.intent && event.value.revision < task.intent.revision) return;
+        if (task.intent && event.value.revision === task.intent.revision) {
+          if (JSON.stringify(task.intent) !== JSON.stringify(event.value)) throw new Error('任务意图版本冲突');
+          return;
+        }
+        const updated = { ...task, intent: structuredClone(event.value) };
+        this.store.put('tasks', task.id, updated);
+        this.tasks.set(task.id, updated);
+        break;
+      }
       case 'task-message': {
         const existing = event.entryId ? this.messages.find((message) => message.taskId === event.taskId && message.entryId === event.entryId) : undefined;
-        if (existing && (!event.reasoning || JSON.stringify(existing.reasoning) === JSON.stringify(event.reasoning))) return;
-        const message = { document: event.document, entryId: event.entryId, taskId: event.taskId, role: event.role, text: event.text, reasoning: event.reasoning, createdAt: event.createdAt, model: event.model, interruption: event.interruption };
+        const source = event.source ?? existing?.source;
+        const clarificationToolCallId = event.clarificationToolCallId ?? existing?.clarificationToolCallId;
+        if (existing && (!event.reasoning || JSON.stringify(existing.reasoning) === JSON.stringify(event.reasoning))
+          && existing.source === source && existing.clarificationToolCallId === clarificationToolCallId) return;
+        const message = { document: event.document ?? existing?.document, entryId: event.entryId, taskId: event.taskId,
+          role: event.role, source, clarificationToolCallId, text: event.text, reasoning: event.reasoning ?? existing?.reasoning,
+          createdAt: event.createdAt, model: event.model, interruption: event.interruption };
         if (existing) Object.assign(existing, message); else this.messages.push(message);
         if (event.role === 'agent') delete this.reasoningProgress[event.taskId];
         this.store.put('messages', event.entryId ? `${event.taskId}:${event.entryId}` : `${event.createdAt}:${randomUUID()}`, message);
@@ -622,7 +688,13 @@ export class AppState {
     if (event.type === 'message-preparation' || event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'terminal-replaced' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
   }
 
-  publish(): void { if (!this.closed) this.emit({ type: 'snapshot', value: this.snapshot() }); }
+  publish(): void {
+    if (this.closed) return;
+    // Revoke preparing capabilities before publishing a changed configuration or
+    // returning a pending budget acknowledgment; no additional job registry.
+    this.revalidatePreparations?.();
+    this.emit({ type: 'snapshot', value: this.snapshot() });
+  }
 
   runtimeStopped(): void {
     for (const value of Object.values(this.reasoningProgress)) value.reasoning = { ...value.reasoning, status: 'interrupted' };

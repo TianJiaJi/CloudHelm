@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
-import type { SessionEvent, SessionProfile } from '@cloudhelm/core';
+import { RequestBudgetError, type SessionEvent, type SessionProfile } from '@cloudhelm/core';
 import { createConversationSession } from './pi-session.js';
 import { openAiFixture, type FixtureResponse } from './pi-session-fixture.js';
 
@@ -55,8 +55,9 @@ describe('native semantic compaction', () => {
   });
 
   it('counts summary requests against the budget and fails without a conversation fallback', async () => {
-    const f = await setup(async () => ({ text: 'never' }), (purpose) => { expect(purpose).toBe('compaction'); throw new Error('budget reached'); });
-    await expect(f.session.prompt('continue')).rejects.toThrow('budget');
+    const refusal = new RequestBudgetError('budget-exhausted');
+    const f = await setup(async () => ({ text: 'never' }), (purpose) => { expect(purpose).toBe('compaction'); throw refusal; });
+    await expect(f.session.prompt('continue')).rejects.toBe(refusal);
     expect(f.fixture.requests).toHaveLength(0);
     expect(f.events.some((event) => event.type === 'compaction' && event.status === 'failed')).toBe(true);
   });

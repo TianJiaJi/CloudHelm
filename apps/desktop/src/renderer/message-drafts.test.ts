@@ -1,5 +1,13 @@
 import { expect, it } from 'vitest';
 import { draftFor, insertTerminalReference, longPaste, replaceParts, useMessageDrafts } from './message-drafts.js';
+it('keeps authoritative summary counts for retries but clears them for a different send request', () => {
+  const drafts = useMessageDrafts.getState();
+  drafts.set('budget-progress', { request: { id: 'first', revision: '1' }, summaryRequests: { used: 32, limit: 32 } });
+  drafts.set('budget-progress', { request: { id: 'first', revision: '1' }, locked: true });
+  expect(draftFor('budget-progress').summaryRequests?.used).toBe(32);
+  drafts.set('budget-progress', { request: { id: 'second', revision: '2' } });
+  expect(draftFor('budget-progress').summaryRequests).toBeUndefined();
+});
 it('folds pastes only above the agreed thresholds including Unicode characters', () => {
   expect(longPaste('中'.repeat(1000))).toBe(false); expect(longPaste('中'.repeat(1001))).toBe(true);
   expect(longPaste('😀'.repeat(1000))).toBe(false);

@@ -9,6 +9,7 @@ const server = new WorkerServer((message) => parent.postMessage(message));
 parent.on('message', (event) => {
   const message = event.data as RuntimeMessage;
   if ('logResult' in message) { server.resolveLog(message.logResult); return; }
+  if ('budgetResult' in message) { server.resolveBudget(message.budgetResult); return; }
   if (!('call' in message)) return;
   void server.dispatch(message.call).then(
     (result) => parent.postMessage({ id: message.id, result }),

@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { AppState } from './app-state.js';
+import type { OperationView } from '@cloudhelm/contracts';
 import type { RuntimeBridge } from './runtime-bridge.js';
 import { registerRecoveryIpc } from './recovery-ipc.js';
 
@@ -9,10 +10,16 @@ const invoke = (...args: unknown[]) => handlers.get('cloudhelm:accept-operation-
 beforeEach(() => handlers.clear());
 
 function setup() {
-  const original = { id: 'old', taskId: 'source', hostId: 'host', kind: 'command', status: 'unknown', createdAt: 1 };
-  const snapshot = { operations: [original, { id: 'check', taskId: 'current', hostId: 'host', status: 'succeeded', readOnly: true, createdAt: 2 }],
-    conversations: [{ id: 'current', hostIds: ['host'] }] };
-  const acceptOperationRisk = vi.fn((_id: string, _reason: string, _at: number, _task?: string, _evidence?: string[]) => undefined);
+  const original: OperationView = { id: 'old', taskId: 'source', hostId: 'host', kind: 'command', preview: 'old write', status: 'unknown', createdAt: 1 };
+  const operations: OperationView[] = [original, { ...original, id: 'check', taskId: 'current', status: 'succeeded', readOnly: true, createdAt: 2 }];
+  const snapshot = { operations, conversations: [{ id: 'current', hostIds: ['host'] }] };
+  const acceptOperationRisk = vi.fn((id: string, explanation: string, at: number, sourceTaskId?: string, evidenceOperationIds?: string[]) => {
+    const index = operations.findIndex((operation) => operation.id === id);
+    const accepted: OperationView = { ...operations[index]!, reconciledAt: at,
+      reconciliation: { kind: 'risk-accepted', explanation, at, sourceTaskId, evidenceOperationIds } };
+    operations[index] = accepted;
+    return structuredClone(accepted);
+  });
   const readOperationLog = vi.fn((_task: string, _id: string, _cursor: number) => ({ text: 'redacted output', nextCursor: 15, more: false }));
   const call = vi.fn(async (_request: unknown) => undefined);
   registerRecoveryIpc({ snapshot: () => snapshot, acceptOperationRisk, readOperationLog } as unknown as AppState,
@@ -34,7 +41,10 @@ it('records one host-bound risk acceptance with newer successful read-only evide
   await invoke('old', '已核验远端状态并明确接受未知结果风险', 'current', ['check']);
   expect(call.mock.calls[0]?.[0]).toMatchObject({ method: 'prepare-operation-risk', operationId: 'old', hostId: 'host' });
   expect(acceptOperationRisk).toHaveBeenCalledWith('old', '已核验远端状态并明确接受未知结果风险', expect.any(Number), 'current', ['check']);
-  expect(call.mock.calls[1]?.[0]).toMatchObject({ method: 'commit-operation-risk', operationId: 'old' });
+  expect(call.mock.calls[1]?.[0]).toMatchObject({ method: 'commit-operation-risk', operation: {
+    id: 'old', status: 'unknown', reconciledAt: expect.any(Number),
+    reconciliation: { kind: 'risk-accepted', sourceTaskId: 'current', evidenceOperationIds: ['check'] }
+  } });
 });
 
 it('refuses an in-flight operation, a foreign conversation or forged evidence without touching the worker', async () => {

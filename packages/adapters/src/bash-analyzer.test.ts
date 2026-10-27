@@ -184,7 +184,7 @@ describe('deterministic safety policy', () => {
     else expect(isEffectFreeQuery(analysis)).toBe(false);
   });
 
-  it.each(['docker run --rm alpine true', 'docker --host=tcp://other ps', 'docker ps --format "{{.Names}} {{.Image}}"',
+  it.each(['docker run --rm alpine true', 'docker --host=tcp://other ps', 'docker ps --format "{{.Names | printf}}"',
     'docker ps --format "{{.Names}}$(touch /tmp/changed)"', 'docker ps --format "{{.Names}}" --host=tcp://other',
     'docker network rm app', 'docker network ls --host=tcp://other', 'docker version && touch /tmp/changed',
     'sudo cat /root/test/test',

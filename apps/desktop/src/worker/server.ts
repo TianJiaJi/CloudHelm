@@ -1,10 +1,9 @@
-import { prepareMessage } from '@cloudhelm/application';
-import { contentModel } from '@cloudhelm/adapters';
+import { MessagePreparations } from './message-preparations.js';
 import { ShellMarkerParser } from '@cloudhelm/adapters';
 import { StringDecoder } from 'node:string_decoder';
 import { PrivilegedRuntime } from './privileged-runtime.js';
 import { safeDiagnostic } from '@cloudhelm/core';
-import { eventDiagnostic } from './diagnostic-events.js';
+import { eventDiagnostic, reservationDiagnostic } from './diagnostic-events.js';
 import { HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
@@ -13,17 +12,22 @@ import type { RawTerminal } from '@cloudhelm/core';
 import type { ApprovalView, InputRequestView } from '@cloudhelm/contracts';
 import type { LogPage, RuntimeCall, RuntimeHost, RuntimeMessage } from '@cloudhelm/contracts/runtime';
 import { TaskRunner } from './task-runner.js';
+import { assertCommittedRiskAcceptance } from './risk-acceptance.js';
 import { OperationInputBridge } from './operation-input-bridge.js';
 import { testModelConnection } from '@cloudhelm/adapters';
 import { FileOperationExecutor } from './file-operation-executor.js';
 import { testHostConnection } from './host-connection-test.js';
+import { RequestBudgetClient } from './request-budget-client.js';
 
 export class WorkerServer {
+  private readonly budget: RequestBudgetClient;
   private readonly deliveredMessages = new Set<string>();
-  private readonly preparations = new Map<string, AbortController>();
+  private readonly preparations: MessagePreparations;
   private readonly logRequests = new Map<string, { resolve(value: LogPage): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   private readonly ssh = new SshTransport((hostId) => {
-    for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(hostId)) runner.pause();
+    for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(hostId)) {
+      this.preparations.cancelTask(runner.task.id); runner.pause();
+    }
     this.terminal.closeHost(hostId);
     this.post({ event: { type: 'host-status', hostId, status: 'disconnected' } });
   });
@@ -38,6 +42,10 @@ export class WorkerServer {
   private readonly pendingInputs = new Map<string, { connectionId: string; expiresAt: number; resolve(answer: string | null): void; timeout: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly send: (message: RuntimeMessage) => void) {
+    this.budget = new RequestBudgetClient((message) => this.post(message), 30_000, (command, value) => {
+      const diagnostic = reservationDiagnostic(command, value); if (diagnostic) this.send({ diagnostic });
+    });
+    this.preparations = new MessagePreparations(this.budget, (event) => this.post({ event }));
     this.terminal = new TerminalManager({
       command: (terminalId, generation, event) => this.post({ event: { type: 'terminal-command', terminalId, generation, ...event } }),
       data: (terminalId, data, operationId) => this.post({ event: { type: 'terminal-data', terminalId, data, operationId } }),
@@ -77,26 +85,25 @@ export class WorkerServer {
     this.send(message);
   }
 
+  private invalidatePreparation(call: RuntimeCall): void {
+    if ('taskId' in call && call.taskId && ['set-conversation-thinking', 'set-conversation-model', 'stop-operation',
+      'update-conversation-review-mode', 'request-ai-denial-review', 'authorize-task', 'task-message', 'answer-clarification',
+      'cancel-clarification', 'pause-task', 'resume-task', 'delete-task'].includes(call.method)) this.preparations.cancelTask(call.taskId);
+    if (call.method === 'set-review-key') this.preparations.cancelAll();
+    if (call.method === 'commit-operation-risk') this.preparations.cancelTask(call.operation.taskId);
+    if (call.method === 'disconnect' || call.method === 'update-host-safety') {
+      for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(call.hostId)) this.preparations.cancelTask(runner.task.id);
+    }
+    if ('terminalId' in call && ['close-terminal', 'stop-terminal', 'terminal-input'].includes(call.method)) {
+      const taskId = this.terminal.taskOf(call.terminalId); if (taskId) this.preparations.cancelTask(taskId);
+    }
+  }
+
   async dispatch(call: RuntimeCall): Promise<unknown> {
+    this.invalidatePreparation(call);
     switch (call.method) {
-      case 'cancel-message': this.preparations.get(call.requestId)?.abort(); return;
-      case 'prepare-message': {
-        if (this.preparations.has(call.requestId)) throw new Error('消息正在准备');
-        const controller = new AbortController(); this.preparations.set(call.requestId, controller);
-        const timer = setTimeout(() => controller.abort(), 600_000);
-        const model = contentModel(call.profile);
-        const used = () => (call.taskId ? this.tasks.get(call.taskId)?.contextTokens() : undefined) ?? call.usedTokens;
-        try { const prepared = await prepareMessage(call.document, call.bodies, model, used(),
-          controller.signal, (id) => {
-            const part = call.document.parts.find((part) => part.type === 'reference' && part.reference.id === id);
-            this.post({ event: { type: 'message-preparation', requestId: call.requestId,
-              referenceId: part?.type === 'reference' ? part.instanceId ?? id : id, status: 'compressing' } });
-          });
-          if (model.estimate(prepared.text) + used() + model.reserveTokens > model.contextWindow) throw new Error('准备期间对话上下文已增长，请重新发送以核对容量');
-          return prepared;
-        }
-        finally { clearTimeout(timer); this.preparations.delete(call.requestId); }
-      }
+      case 'cancel-message': this.preparations.cancel(call.requestId); return;
+      case 'prepare-message': return this.preparations.prepare(call, call.taskId ? this.tasks.get(call.taskId) : undefined);
       case 'restore-operations': return this.executor.restore(call.operations);
       case 'prepare-operation-risk':
         for (const runner of this.tasks.values()) runner.assertResolvableOutcome(call.operationId);
@@ -104,16 +111,18 @@ export class WorkerServer {
           throw new Error('原远端操作仍在运行，请等待其退出或停止后重试');
         }
         return;
-      case 'commit-operation-risk':
-        if (!this.executor.reconcile(call.hostId, call.operationId)) throw new Error('远端进程尚未退出，无法解除写锁');
+      case 'commit-operation-risk': {
+        assertCommittedRiskAcceptance(call.operation);
+        if (!this.executor.reconcile(call.operation.hostId, call.operation.id)) throw new Error('远端进程尚未退出，无法解除写锁');
         // The durable acceptance already exists. A failed execution-status
         // notification must not turn this successful release into a rollback
         // of the authoritative record while the executor remains unlocked.
         for (const runner of this.tasks.values()) {
-          try { runner.recordRiskAcceptance(call.operationId, call.explanation, call.at); }
+          try { runner.recordRiskAcceptance(call.operation); }
           catch { console.warn('Could not publish risk acceptance execution status'); }
         }
         return;
+      }
       case 'has-task': return this.tasks.has(call.taskId);
       case 'set-review-key':
         for (const runner of this.tasks.values()) runner.setReviewKey(call.jevKey);
@@ -122,6 +131,7 @@ export class WorkerServer {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('对话运行已失效');
         if (runner.needsReviewProfile(call.reviewer)) {
+          this.preparations.cancelTask(call.taskId);
           for (const [id, pending] of this.pendingApprovals) if (pending.taskId === call.taskId) this.cancelApproval(id);
           runner.setReviewProfile(call.reviewer);
         }
@@ -193,10 +203,14 @@ export class WorkerServer {
       case 'list-remote': return this.ssh.list(call.hostId, call.path);
       case 'start-task': {
         if (!call.task.session || call.task.session.id !== call.task.id || !call.sessionDirectory) throw new Error('Native session binding required');
-        if (!call.restored) this.send({ diagnostic: safeDiagnostic({ event: 'chat', level: 'info', taskId: call.task.id, role: 'user', text: call.task.goal }) });
+        if (!call.restored) this.send({ diagnostic: safeDiagnostic({ event: 'chat', level: 'info', taskId: call.task.id, role: 'user', size: Buffer.byteLength(call.task.goal) }) });
         if (this.tasks.has(call.task.id)) throw new Error('Task is already active');
         const runner = new TaskRunner(call.task, call.hosts, call.profile, call.priorOperations ?? [], this.terminal, this.executor,
           (hostId, taskId) => this.openTerminal(hostId, taskId), {
+            budget: (command, signal) => {
+              if (!('taskId' in command) || command.taskId !== call.task.id) throw new Error('Budget conversation binding changed');
+              return this.budget.request(command, signal);
+            },
             clearCredentials: () => this.commands.clearTask(call.task.id),
             diagnostic: (diagnostic) => this.send({ diagnostic: safeDiagnostic(diagnostic) }),
             event: (event) => this.post({ event } as RuntimeMessage),
@@ -226,7 +240,7 @@ export class WorkerServer {
       case 'authorize-task': {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('Task runtime is unavailable; resume it before changing authorization');
-        runner.addAuthorization(call.hosts, call.localScopes);
+        runner.addAuthorization(call.hosts, call.localScopes, call.prepared);
         return;
       }
       case 'answer-clarification':
@@ -240,7 +254,7 @@ export class WorkerServer {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('请先恢复对话');
         if (call.document && this.deliveredMessages.has(call.document.requestId)) return;
-        runner.message(call.text, call.document, call.intent);
+        runner.message(call.text, call.document, call.intent, call.preparedRevision);
         if (call.document) this.deliveredMessages.add(call.document.requestId);
         return;
       }
@@ -279,6 +293,8 @@ export class WorkerServer {
       type: 'task-status', taskId: runner.task.id, status: 'failed', summary: error instanceof Error ? error.message : String(error)
     } }));
   }
+
+  resolveBudget(result: unknown): void { this.budget.resolve(result); }
 
   resolveLog(result: { id: string; value?: LogPage; error?: string }): void {
     const pending = this.logRequests.get(result.id);

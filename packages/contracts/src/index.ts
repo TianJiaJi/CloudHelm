@@ -1,4 +1,8 @@
 import { Type, type Static } from 'typebox';
+import type { VerificationReport, VerificationState } from './verification-report.js';
+export * from './verification-report.js';
+export * from './request-budget.js';
+export * from './request-budget-runtime.js';
 
 export const HostDraftSchema = Type.Object({
   label: Type.String({ minLength: 1, maxLength: 80 }),
@@ -35,7 +39,7 @@ export interface ClarificationRequest {
 
 export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'waiting-user' | 'human-control' | 'recovering' | 'paused' | 'answered' | 'failed';
 /** Only these backend-owned reasons permit a host-initiated continuation. */
-export type ResumeReason = 'verify' | 'report' | 'interrupted' | 'model';
+export type ResumeReason = 'verify' | 'report' | 'interrupted' | 'model' | 'budget-exhausted';
 
 /**
  * How an uncertain remote outcome was resolved. It never rewrites the recorded
@@ -64,7 +68,15 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 export interface ThinkingView { levels: ThinkingLevel[]; selected: ThinkingLevel; effective: ThinkingLevel; pending: boolean }
 
 export interface ModelChoice { provider: string; modelId: string }
+export interface ContextBudgetView {
+  pendingInputReserve?: number;
+  contextWindow: number; usedTokens: number; outputReserve: number; safetyMargin: number; availableInput: number;
+  source: 'provider' | 'estimate';
+}
+export interface ModelCapacityView { contextWindow: number; maxOutputTokens: number; source: 'catalog' | 'custom-settings' }
 export interface ContextUsageView {
+  capacity?: ModelCapacityView;
+  budget?: ContextBudgetView;
   model: ModelChoice;
   request: number;
   usedTokens: number | null;
@@ -74,9 +86,6 @@ export interface ContextUsageView {
 }
 export interface ModelProfileDraft extends ModelChoice { baseUrl?: string; apiKey?: string; contextWindow?: number; maxTokens?: number }
 export interface PlanStep { id: string; title: string; status: 'pending' | 'running' | 'done' | 'blocked' }
-export interface VerificationReport { summary: string; access: string[]; evidenceOperationIds: string[]; changes: string[]; recovery: string[] }
-/** Execution completed is not the same claim as the effect having been verified. */
-export interface VerificationState { status: 'verified' | 'unverified'; operationIds: string[]; reasonCode?: 'report-missing' }
 export type InterruptionSource = 'stop-button' | 'ctrl-c' | 'terminal-close';
 export interface UserInterruption { source: InterruptionSource; requestedAt: number; operationIds: string[] }
 export interface ReasoningView {
@@ -86,6 +95,8 @@ export interface ReasoningView {
 export interface ReasoningProgress { id: string; createdAt: number; model: { provider: string; modelId: string }; reasoning: ReasoningView }
 
 export interface ConversationMessage {
+  source?: 'input' | 'clarification' | 'assistant';
+  clarificationToolCallId?: string;
   document?: import('./message-content.js').MessageDocument;
   reasoning?: ReasoningView; entryId?: string; interruption?: UserInterruption; taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
 export interface TerminalViewState { id: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed'; replacementTerminalId?: string }
@@ -105,7 +116,19 @@ export interface HostView extends HostDraft {
   policyRevision: number;
 }
 
+export const TaskIntentStateSchema = Type.Object({
+  version: Type.Literal(1), revision: Type.Integer({ minimum: 0 }),
+  originalGoal: Type.String(), currentInput: Type.String(),
+  origin: Type.Union([Type.Literal('explicit'), Type.Literal('legacy')]),
+  lastInputId: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
+  // IDs already merged in this intent round; native UI replay never adds entries.
+  clarifications: Type.Array(Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }), text: Type.String() }))
+});
+export type TaskIntentState = Static<typeof TaskIntentStateSchema>;
+
 export interface TaskView {
+  budget?: import('./request-budget.js').RequestBudgetState;
+  intent?: TaskIntentState;
   thinking?: ThinkingView;
   session?: { version: 1; id: string };
   id: string;
@@ -140,6 +163,8 @@ export interface OperationView {
   reconciledAt?: number;
   reconciliation?: OperationReconciliation;
   intentKey?: string;
+  /** Directory captured with the full command fingerprint, never inferred from a display preview. */
+  commandSource?: { version: 1; cwd: string };
   serviceUnit?: string;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
@@ -158,6 +183,7 @@ export interface OperationView {
   exitCode?: number;
   logRef?: string;
   outputTail?: string;
+  outputCapture?: { totalChars: number; tailChars: number; truncated: boolean };
   model?: ModelChoice;
   createdAt: number;
 }
@@ -184,6 +210,22 @@ export function operationNeedsVerification(operation: OperationOutcomeState): bo
 export function operationOutcomeResolvable(operation: OperationOutcomeState): boolean {
   if (operation.readOnly || operation.reconciledAt) return false;
   return operation.status === 'unknown' || (operation.status === 'failed' && operation.effects !== 'none');
+}
+
+/** First persisted resolution wins; delayed snapshots can still add real observations. */
+export function retainOperationResolution(previous: OperationView | undefined, incoming: OperationView): OperationView {
+  if (!previous) return incoming;
+  if (previous.id !== incoming.id || previous.taskId !== incoming.taskId
+    || previous.hostId !== incoming.hostId || previous.kind !== incoming.kind) {
+    throw new Error('Operation identity changed while applying an observation');
+  }
+  if (!previous.reconciledAt) return incoming;
+  // Never erase an acceptance or replace it with a competing assessment, nor
+  // drop the full source/evidence audit metadata from the canonical record.
+  if (incoming.reconciledAt && (incoming.reconciledAt !== previous.reconciledAt
+    || incoming.reconciliation?.kind !== previous.reconciliation?.kind
+    || incoming.reconciliation?.outcome !== previous.reconciliation?.outcome)) return previous;
+  return { ...incoming, reconciledAt: previous.reconciledAt, reconciliation: previous.reconciliation };
 }
 
 export interface ApprovalView {
@@ -255,19 +297,21 @@ export interface ModelProviderSettings {
 
 export type AppEvent =
   | { type: 'terminal-command'; terminalId: string; generation: number; phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }
-  | { type: 'message-preparation'; requestId: string; referenceId?: string; status: 'compressing' | 'ready' }
+  | { type: 'message-preparation'; requestId: string; referenceId?: string; status: 'checking' | 'compressing' | 'ready'; context?: ContextUsageView; summaryRequests?: { used: number; limit: 32 } }
   | { type: 'reasoning-progress'; taskId: string; value: ReasoningProgress | null }
   | { type: 'thinking'; taskId: string; value: ThinkingView }
   | { type: 'execution'; taskId: string; value: ExecutionView }
   | { type: 'context-usage'; taskId: string; value: ContextUsageView }
   | { type: 'clarification'; value: ClarificationRequest }
+  | { type: 'task-intent'; taskId: string; value: TaskIntentState }
   | { type: 'snapshot'; value: AppSnapshot }
   | { type: 'terminal-data'; terminalId: string; data: string; operationId?: string }
   | { type: 'terminal-state'; terminalId: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed' }
   | { type: 'terminal-replaced'; previousTerminalId: string; terminalId: string }
   | ({ type: 'task-message' } & ConversationMessage)
   | { type: 'context-compaction'; taskId: string; status: 'running' | 'complete' | 'failed' }
-  | { type: 'model-request'; purpose?: 'conversation' | 'compaction'; taskId: string; model: ModelChoice; request: number; createdAt: number }
+  | { type: 'model-request'; purpose?: 'conversation' | 'compaction'; roundId?: string; logicalRequestId?: string; attempt?: number;
+      transport?: 'http' | 'opaque'; taskId: string; model: ModelChoice; request: number; createdAt: number }
   | { type: 'work-progress'; taskId: string; plan: PlanStep[] }
   | { type: 'work-report'; taskId: string; report?: VerificationReport }
   | { type: 'verification-state'; taskId: string; value?: VerificationState };
@@ -328,6 +372,7 @@ export interface DesktopAPI {
   cancelInput(requestId: string): Promise<void>;
   pauseConversation(taskId: string): Promise<void>;
   resumeConversation(taskId: string): Promise<void>;
+  extendRequestBudget(input: import('./request-budget.js').ExtendRequestBudget): Promise<import('./request-budget.js').BudgetExtensionResult>;
   listRemote(hostId: string, path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>>;
   readTerminalLog(terminalId: string): Promise<string>;
   /** Permanently removes a finished conversation with its records and terminal logs. */

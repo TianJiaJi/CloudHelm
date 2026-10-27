@@ -149,7 +149,7 @@ const api: DesktopAPI = {
     view.operations = view.operations.filter((item) => item.taskId !== id);
     sync();
   },
-  resumeConversation: unsupported, acceptConversation: unsupported,
+  resumeConversation: unsupported, extendRequestBudget: unsupported, acceptConversation: unsupported,
   answerClarification: unsupported, cancelClarification: unsupported,
   cancelInput: unsupported, addHost: unsupported, editHost: unsupported, updateHostSafety: unsupported,
   disconnectHost: unsupported, deleteHost: unsupported, trustHostKey: unsupported, setHostSecret: unsupported

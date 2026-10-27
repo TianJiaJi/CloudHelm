@@ -4,7 +4,7 @@ import { BashAnalyzer } from '@cloudhelm/adapters';
 import type { OperationExecutor } from '@cloudhelm/core';
 import type { TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
-import { TaskRunner, type TaskSignals } from './task-runner.js';
+import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
 import { inputPlan } from './operation-input-plan.js';
 
@@ -20,7 +20,12 @@ describe('remote authorization and working directories', () => {
       expect(instructions).toContain('"account":"ubuntu"');
       expect(instructions).toContain('"reviewMode":"permissive"');
       expect(instructions).not.toContain('synthetic-ssh-secret');
-      expect(instructions.length).toBeLessThan(9000);
+      expect(instructions.length, `serialized system on model request ${requests}`).toBeLessThan(9000);
+      expect(request.tools).toHaveLength(13);
+      const applicability = instructions.split('\n').find((line) => line.startsWith('{"version":1,"tools":'));
+      expect(applicability).toBeTruthy();
+      expect(JSON.parse(applicability!)).toMatchObject({ tools: { read_selected_text_file: false,
+        list_selected_directory: false, submit_verification: requests >= 2 && requests < 5 }, taskId: 'root-creation' });
       if (process.env.CLOUDHELM_PROMPT_BUDGET === '1' && requests === 1 && !protectedRoot) {
         const toolChars = JSON.stringify(request.tools ?? []).length;
         console.info('CloudHelm prompt budget:', JSON.stringify({ systemChars: instructions.length, toolSchemaChars: toolChars,

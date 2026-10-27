@@ -3,6 +3,7 @@ import type { ContextUsageView, HostView, ModelChoice, ReviewMode, TaskView } fr
 import { MenuSurface } from './menu-surface.js';
 import { capture, Icon, reviewLabel } from './ui-helpers.js';
 import styles from './composer-controls.module.css';
+import { contextUsagePresentation } from './context-usage.js';
 
 type ModelOption = ModelChoice & { name: string };
 export function useMenuAnchor() {
@@ -67,10 +68,7 @@ export function ComposerFooter({ host, conversation, legacy, usage, compaction, 
   const context = useMenuAnchor();
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
-  const known = usage?.usedTokens != null && usage.contextWindow != null && usage.contextWindow > 0;
-  const remaining = known ? Math.max(0, Math.min(100, Math.round(100 * (1 - usage.usedTokens! / usage.contextWindow!)))) : null;
-  const usageLabel = compaction === 'running' ? '正在整理上下文…' : remaining === null ? '上下文待统计' : `${usage?.source === 'estimate' ? '约剩余' : '剩余'} ${remaining}%`;
-  const details = known ? `已用 ${usage.usedTokens!.toLocaleString()} / ${usage.contextWindow!.toLocaleString()} tokens\n${usage.source === 'provider' ? '模型返回的用量' : 'Pi SDK 估算（包含可用的模型统计）'}\n更新于 ${new Date(usage.updatedAt).toLocaleTimeString()}` : '发送消息后统计上下文用量';
+  const { remaining, label: usageLabel, details } = contextUsagePresentation(usage, compaction);
   const selectedMode = host ? conversation?.reviewModesByHost?.[host.id] ?? host.defaultMode : undefined;
   async function choose(mode: ReviewMode): Promise<void> {
     if (!host || !conversation || savingRef.current || mode === selectedMode) return;
@@ -107,8 +105,8 @@ export function ComposerFooter({ host, conversation, legacy, usage, compaction, 
     </MenuSurface>}
     {context.anchor && <MenuSurface anchor={context.anchor} label="上下文用量" placement="above" className={styles.picker} close={context.close}>
       <div className={styles.contextDetails}><strong>上下文窗口</strong><p>{details}</p>
-        {usage && <small>{usage.model.modelId} · 请求 #{usage.request}</small>}
-        <small>当前上下文占用，不包含未发送草稿。自动整理上下文后，用量可能下降。</small>
+        {usage && <small>{usage.model.modelId} · {usage.request > 0 ? `请求 #${usage.request}` : '发送准备'}</small>}
+        <small>未扣除未发送草稿；输出预留和安全余量不可用于输入。整理完成也不保证释放空间，投递前仍需复核。</small>
       </div>
     </MenuSurface>}
   </>;

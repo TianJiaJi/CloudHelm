@@ -8,6 +8,8 @@ import {
 
 export interface GateOutcome {
   decision: SafetyDecision;
+  /** Attested by this gate from the complete operation, never a caller assertion. */
+  readOnly?: boolean;
   result?: OperationResult;
 }
 
@@ -47,7 +49,8 @@ export class SafetyGate {
           return { decision: safety };
         }
       }
-      await this.deps.audit.classified?.(operation.id, !!analysis && isEffectFreeQuery(analysis));
+      const readOnly = !!analysis && isEffectFreeQuery(analysis);
+      await this.deps.audit.classified?.(operation.id, readOnly);
 
       let settings: SafetySettings;
       try { settings = this.deps.settings(operation.scope.hostId); }
@@ -168,12 +171,16 @@ export class SafetyGate {
         return { decision: safety };
       }
       let result: OperationResult;
-      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly: !!analysis && isEffectFreeQuery(analysis), isAuthorized: stillCurrent }); }
+      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, isAuthorized: stillCurrent }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       }
+      // Query semantics establish absence of business mutation, not process exit.
+      // Keep unknown/handed-over outcomes and all authentication/control metadata.
+      if (readOnly && ['succeeded', 'failed'].includes(result.status)
+        && Number.isInteger(result.exitCode) && result.exitCode! >= 0) result = { ...result, effects: 'none' };
       await this.deps.audit.completed(result);
-      return { decision: safety, result };
+      return { decision: safety, readOnly, result };
     } finally {
       this.inFlight.delete(proposed.id);
     }

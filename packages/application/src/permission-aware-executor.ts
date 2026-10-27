@@ -1,4 +1,4 @@
-import type { CommandAnalysis, CommandAnalyzer, ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation } from '@cloudhelm/core';
+import { isDockerMetadataQuery, type CommandAnalysis, type CommandAnalyzer, type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 
 function defaultDockerDaemon(analysis: CommandAnalysis): boolean {
   if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || analysis.steps?.length !== 1) return false;
@@ -6,7 +6,7 @@ function defaultDockerDaemon(analysis: CommandAnalysis): boolean {
   if (!['docker', '/usr/bin/docker', '/usr/local/bin/docker'].includes(call.name)) return false;
   if (call.args.some((arg) => ['-H', '--host', '--context', '-c'].includes(arg) || /^(?:--host|--context)=/u.test(arg))) return false;
   const [verb, action] = call.args;
-  return ['ps', 'version', 'info', 'images', 'inspect', 'stats', 'logs'].includes(verb ?? '')
+  return isDockerMetadataQuery(call.args) || ['ps', 'version', 'info', 'images', 'inspect', 'stats', 'logs'].includes(verb ?? '')
     || (verb === 'network' && ['ls', 'inspect'].includes(action ?? ''))
     || (verb === 'compose' && ['ps', 'logs'].includes(action ?? ''));
 }

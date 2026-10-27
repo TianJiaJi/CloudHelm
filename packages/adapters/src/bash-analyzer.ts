@@ -59,9 +59,13 @@ function resolveGrammarPath(): string {
 }
 
 function isDynamic(node: SyntaxNode): boolean {
-  // Bash parses --format="..." as a concatenation even when both pieces are
-  // literal. Recognize only Docker's simple quoted field template here.
-  if (node.type === 'concatenation' && /^--format="(?:table )?\{\{\.[A-Za-z][A-Za-z0-9]*\}\}(?:(?:\\t|\t)\{\{\.[A-Za-z][A-Za-z0-9]*\}\})*"$/u.test(node.text)) return false;
+  // A --format= word followed by exactly one literal quoted value is not
+  // dynamic. Core owns formatter semantics; expansions still fail recursively.
+  if (node.type === 'concatenation' && node.namedChildren.length === 2) {
+    const [prefix, value] = node.namedChildren;
+    if (prefix?.type === 'word' && prefix.text === '--format=' && value
+      && ['string', 'raw_string'].includes(value.type) && !isDynamic(value)) return false;
+  }
   if (/expansion|substitution|glob|concatenation|arithmetic/u.test(node.type)) return true;
   return node.namedChildren.some(isDynamic);
 }

@@ -1,5 +1,12 @@
 export type ReviewMode = 'ask' | 'ai-review' | 'permissive';
 
+export interface OperationIntent {
+  originalGoal: string;
+  currentInput: string;
+  clarifications: Array<{ id: string; text: string }>;
+  origin: 'explicit' | 'legacy';
+}
+
 export interface OperationScope {
   taskId: string;
   hostId: string;
@@ -19,6 +26,8 @@ export interface OperationScope {
   protectedReadPaths?: string[];
   protectedWritePaths?: string[];
   goal: string;
+  /** Backend-maintained intent, never reconstructed from display text or remote output. */
+  intent?: OperationIntent;
 }
 
 export type ProposedOperation =
@@ -70,6 +79,8 @@ export interface OperationResult {
   failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'unknown';
   effects?: 'none' | 'possible';
   stdoutTail: string;
+  /** Redacted observation counts; not evidence of process exit or durable log retention. */
+  outputCapture?: { totalChars: number; tailChars: number; truncated: boolean };
   logRef?: string;
   cwd?: string;
   /** Authentication or an unsupported interaction requires an explicit user decision. */

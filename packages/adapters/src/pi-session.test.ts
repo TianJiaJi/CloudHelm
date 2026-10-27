@@ -145,6 +145,27 @@ describe('native Pi session compatibility', () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it('persists native provenance without mistaking a literal clarification prefix for a tool answer', async () => {
+    const root = await directory();
+    let count = 0;
+    const f = await setup(async () => ++count === 1 ? { calls: [{ id: 'clarification-call', name: 'ask_user',
+      arguments: { questions: [{ id: 'q', prompt: '选择环境' }] } }] } : { text: '已回答。' },
+    { storage: { directory: root, id: 'provenance-session', restore: false } });
+    await f.session.prompt('[需求澄清回答] 这是用户原文，不是卡片投影');
+    const users = f.events.filter((event) => event.type === 'text' && event.value.role === 'user');
+    expect(users).toMatchObject([
+      { value: { source: 'input', text: '[需求澄清回答] 这是用户原文，不是卡片投影' } },
+      { value: { source: 'clarification', clarificationToolCallId: 'clarification-call' } }
+    ]);
+    f.session.dispose();
+    const events: SessionEvent[] = [];
+    const restored = await createConversationSession({ ...f.options, event: (event) => events.push(event),
+      storage: { directory: root, id: 'provenance-session', restore: true } });
+    cleanup.push(() => restored.dispose());
+    expect(events.filter((event) => event.type === 'text' && event.value.role === 'user')).toEqual(users);
+    expect(count).toBe(2);
+  });
+
   it('uses Pi custom messages for host continuation without inventing a user message', async () => {
     const root = await directory();
     const f = await setup(async () => ({ text: '完成。' }), { storage: { directory: root, id: 'control-session', restore: false } });

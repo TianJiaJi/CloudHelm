@@ -7,8 +7,11 @@ export interface RuntimeReviewProfile { selection: ReviewSelection; provider: st
 export interface RuntimeProfile { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number;
   apiKey: string; credentialRevision?: string; jevKey?: string; reviewer?: RuntimeReviewProfile }
 
+/** Worker-issued context versions; never accepted from renderer message metadata. */
+export interface PreparedContext { beforeRevision: string; revision: string }
+
 export type RuntimeCall =
-  | { method: 'prepare-message'; taskId?: string; requestId: string; document: import('./message-content.js').MessageDocument; bodies: import('./message-content.js').ReferenceBody[]; profile: RuntimeProfile; usedTokens: number }
+  | { method: 'prepare-message'; taskId?: string; requestId: string; document: import('./message-content.js').MessageDocument; bodies: import('./message-content.js').ReferenceBody[]; profile: RuntimeProfile; usedTokens?: number; localScopes?: LocalScope[]; hosts?: HostView[] }
   | { method: 'cancel-message'; requestId: string }
 
   | { method: 'set-conversation-thinking'; taskId: string; level: import('./index.js').ThinkingLevel }
@@ -16,7 +19,7 @@ export type RuntimeCall =
   | { method: 'cancel-clarification'; taskId: string; requestId: string }
   | { method: 'restore-operations'; operations: Array<{ id: string; hostId: string }> }
   | { method: 'prepare-operation-risk'; operationId: string; hostId: string }
-  | { method: 'commit-operation-risk'; operationId: string; hostId: string; explanation: string; at: number }
+  | { method: 'commit-operation-risk'; operation: OperationView }
   | { method: 'connect'; host: RuntimeHost; jump?: RuntimeHost }
   | { method: 'test-host'; host: RuntimeHost; jump?: RuntimeHost }
   | { method: 'disconnect'; hostId: string }
@@ -36,8 +39,8 @@ export type RuntimeCall =
   | { method: 'resize'; terminalId: string; cols: number; rows: number }
   | { method: 'list-remote'; hostId: string; path: string }
   | { method: 'start-task'; intent?: string; document?: import('./message-content.js').MessageDocument; initialMessage?: string; thinkingLevel?: import('./index.js').ThinkingLevel; task: TaskView; hosts: RuntimeHost[]; profile: RuntimeProfile; priorOperations?: OperationView[]; sessionDirectory: string; restored?: boolean }
-  | { method: 'authorize-task'; taskId: string; hosts: RuntimeHost[]; localScopes: LocalScope[] }
-  | { method: 'task-message'; intent?: string; taskId: string; text: string; document?: import('./message-content.js').MessageDocument }
+  | { method: 'authorize-task'; taskId: string; hosts: RuntimeHost[]; localScopes: LocalScope[]; prepared?: PreparedContext & { text: string } }
+  | { method: 'task-message'; intent?: string; taskId: string; text: string; preparedRevision?: string; document?: import('./message-content.js').MessageDocument }
   | { method: 'decide-approval'; approvalId: string; approved: boolean }
   | { method: 'answer-input'; requestId: string; answer: string }
   | { method: 'cancel-input'; requestId: string }
@@ -47,6 +50,8 @@ export type RuntimeCall =
 export interface LogPage { text: string; nextCursor: number; more: boolean }
 
 export type RuntimeMessage =
+  | import('./request-budget-runtime.js').BudgetRequestMessage
+  | { budgetResult: import('./request-budget-runtime.js').BudgetResult }
   | { diagnostic: import('./diagnostics.js').DiagnosticRecord }
   | { readLog: { id: string; taskId: string; operationId: string; cursor: number } }
   | { logResult: { id: string; value?: LogPage; error?: string } }

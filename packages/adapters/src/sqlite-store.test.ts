@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -41,7 +41,7 @@ it('migrates old host protection and captures each existing conversation effecti
   expect(reopened.get('tasks', 'task')).toMatchObject({ reviewModesByHost: { old: 'permissive' } });
 });
 
-it('recovers only exact legacy read-only unknown previews', () => {
+it('preserves unknown legacy outcomes instead of granting capabilities from previews during upgrade', () => {
   const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-read-only-'));
   tempDirs.push(directory);
   const file = join(directory, 'records.sqlite');
@@ -57,12 +57,12 @@ it('recovers only exact legacy read-only unknown previews', () => {
   legacy.close();
   const migrated = new SqliteStore(file);
   stores.push(migrated);
-  expect(migrated.get<{ readOnly?: boolean }>('operations', 'query')?.readOnly).toBe(true);
+  expect(migrated.get<{ readOnly?: boolean }>('operations', 'query')?.readOnly).toBeUndefined();
   expect(migrated.get<{ readOnly?: boolean }>('operations', 'unsafe')?.readOnly).toBeUndefined();
   expect(migrated.get<{ readOnly?: boolean }>('operations', 'other')?.readOnly).toBeUndefined();
 });
 
-it('migrates completed legacy reviews and only provably answered read-only pauses', () => {
+it('migrates completed legacy reviews without inferring completion from old assistant text', () => {
   const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-completion-'));
   tempDirs.push(directory);
   const file = join(directory, 'records.sqlite');
@@ -77,7 +77,7 @@ it('migrates completed legacy reviews and only provably answered read-only pause
   put.run('operations', 'legacy-unsafe', JSON.stringify({ taskId: 'legacy-unsafe', readOnly: false, status: 'unknown' }));
   const summary = '已执行操作，但验证证据尚不完整。请继续核验后验收。';
   for (const id of ['read', 'unknown', 'interrupted', 'unanswered']) {
-    put.run('tasks', id, JSON.stringify({ status: 'paused', summary }));
+    put.run('tasks', id, JSON.stringify({ status: 'paused', summary, resumeReason: 'interrupted' }));
     put.run('operations', id, JSON.stringify({ taskId: id, readOnly: id !== 'unknown', status: 'succeeded',
       ...(id === 'interrupted' ? { interruption: { source: 'stop-button' } } : {}) }));
     if (id !== 'unanswered') put.run('messages', id, JSON.stringify({ taskId: id, role: 'agent', text: '查询完成', createdAt: 10 }));
@@ -89,12 +89,64 @@ it('migrates completed legacy reviews and only provably answered read-only pause
     .toMatchObject({ status: 'answered', report: { summary: '已验证' } });
   expect(migrated.get<{ status: string; resumeReason?: string }>('tasks', 'legacy-unsafe'))
     .toMatchObject({ status: 'paused', resumeReason: 'verify' });
-  expect(migrated.get<{ status: string }>('tasks', 'read')?.status).toBe('answered');
+  expect(migrated.get('tasks', 'read')).toMatchObject({ status: 'paused', resumeReason: 'interrupted', summary });
   for (const id of ['unknown', 'interrupted', 'unanswered']) expect(migrated.get<{ status: string }>('tasks', id)?.status).toBe('paused');
   migrated.close(); stores.pop();
   const reopened = new SqliteStore(file);
   stores.push(reopened);
-  expect(reopened.get<{ status: string }>('tasks', 'read')?.status).toBe('answered');
+  expect(reopened.get('tasks', 'read')).toMatchObject({ status: 'paused', resumeReason: 'interrupted', summary });
+});
+
+it('adds migration 9 without declaring unexamined historical records repaired', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-repair-schema-'));
+  tempDirs.push(directory);
+  const file = join(directory, 'records.sqlite');
+  const legacy = new Database(file);
+  legacy.exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+    CREATE TABLE records(bucket TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY(bucket, id));
+    INSERT INTO schema_migrations VALUES(4,1),(5,1),(6,1),(7,1),(8,1);`);
+  const original = { id: 'unknown', kind: 'command', status: 'unknown', preview: 'docker images' };
+  legacy.prepare('INSERT INTO records VALUES(?,?,?,1)').run('operations', 'unknown', JSON.stringify(original));
+  legacy.close();
+  const store = new SqliteStore(file);
+  stores.push(store);
+  expect(store.get('operations', 'unknown')).toEqual(original);
+  const inspection = new Database(file);
+  try {
+    expect(inspection.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()).toEqual({ version: 10 });
+    expect(inspection.prepare('SELECT * FROM data_repairs').all()).toEqual([]);
+  } finally { inspection.close(); }
+});
+
+it('commits repair receipts atomically and rejects changed or expanded read sets', () => {
+  const store = open();
+  store.put('operations', 'op', { readOnly: false });
+  store.put('tasks', 'task', { pending: true });
+  const repair = { name: 'fixture-query', version: 1, recordIds: ['op'],
+    baselines: ['operations', 'tasks'].map((bucket) => ({ bucket, values: store.list(bucket) })),
+    changes: [{ bucket: 'operations', id: 'op', value: { readOnly: true } },
+      { bucket: 'tasks', id: 'task', value: { pending: false } }] };
+  const put = store.put.bind(store);
+  const fail = vi.spyOn(store, 'put').mockImplementation((bucket, id, value) => {
+    if (bucket === 'tasks') throw new Error('disk failure');
+    put(bucket, id, value);
+  });
+  expect(() => store.commitDataRepair(repair)).toThrow('disk failure');
+  expect(store.get('operations', 'op')).toEqual({ readOnly: false });
+  expect(store.get('tasks', 'task')).toEqual({ pending: true });
+  fail.mockRestore();
+  store.put('operations', 'foreign', { status: 'unknown' });
+  expect(() => store.commitDataRepair(repair)).toThrow('source changed');
+  store.remove('operations', 'foreign');
+  store.commitDataRepair(repair); // The failed transaction did not consume its receipt.
+  expect(store.get('operations', 'op')).toEqual({ readOnly: true });
+  expect(store.get('tasks', 'task')).toEqual({ pending: false });
+  expect(() => store.commitDataRepair({ ...repair,
+    baselines: repair.baselines.map(({ bucket }) => ({ bucket, values: store.list(bucket) })),
+    changes: [{ bucket: 'operations', id: 'op', value: { readOnly: false } }]
+  })).toThrow(/UNIQUE/u);
+  expect(store.get('operations', 'op')).toEqual({ readOnly: true });
 });
 
 describe('record cleanup for deleted conversations', () => {

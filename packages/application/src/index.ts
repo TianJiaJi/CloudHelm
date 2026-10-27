@@ -7,3 +7,4 @@ export * from './privileged-sessions.js';
 export * from './permission-aware-executor.js';
 export * from './sudo-credential-cache.js';
 export * from './prepare-message.js';
+export * from './prepare-message-context.js';

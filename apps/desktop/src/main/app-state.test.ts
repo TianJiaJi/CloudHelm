@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BashAnalyzer, type SqliteStore } from '@cloudhelm/adapters';
-import type { AppEvent, ModelProfileDraft, TaskView } from '@cloudhelm/contracts';
+import type { AppEvent, ModelProfileDraft, TaskIntentState, TaskView } from '@cloudhelm/contracts';
 import { operationNeedsVerification } from '@cloudhelm/contracts';
 import { AppState } from './app-state.js';
 
@@ -86,6 +86,54 @@ it('persists an answered but unverified change separately from a verified report
   state.record({ type: 'task-status', taskId: task.id, status: 'answered' });
   expect(setup(store).state.getTask(task.id)).toMatchObject({ status: 'answered', verificationState: { status: 'verified' } });
   expect(state.getTask(task.id).resumeReason).toBeUndefined();
+});
+
+describe('persisted intent and message provenance', () => {
+  it('restores current intent and merged clarification IDs without deriving authority from reprojected text', () => {
+    const { state, store } = setup(); state.saveProfile(customProfile());
+    const task = conversation(state);
+    const intent: TaskIntentState = { version: 1, revision: 3, originalGoal: 'Deploy only in test',
+      currentInput: 'Do not restart production', origin: 'explicit', clarifications: [{ id: 'q', text: 'test environment only' }] };
+    state.record({ type: 'task-intent', taskId: task.id, value: intent });
+    state.record({ type: 'task-message', taskId: task.id, entryId: 'old-input', role: 'user', source: 'input', text: 'older goal', createdAt: 1 });
+    state.record({ type: 'task-message', taskId: task.id, entryId: 'answer', role: 'user', source: 'clarification',
+      clarificationToolCallId: 'q-tool', text: '[需求澄清回答] test', createdAt: 2 });
+    expect(state.getTask(task.id).intent).toEqual(intent);
+    expect(setup(store).state.getTask(task.id).intent).toEqual(intent);
+    const write = vi.spyOn(store, 'put');
+    state.record({ type: 'task-intent', taskId: task.id, value: structuredClone(intent) });
+    state.record({ type: 'task-intent', taskId: task.id, value: { ...intent, revision: 2 } });
+    expect(write).not.toHaveBeenCalled();
+    expect(() => state.record({ type: 'task-intent', taskId: task.id, value: { ...intent, currentInput: 'conflicting snapshot' } })).toThrow('版本冲突');
+    write.mockRestore();
+  });
+
+  it('fails closed on invalid intent and does not mutate memory if intent persistence fails', () => {
+    const { state, store } = setup(); state.saveProfile(customProfile()); const task = conversation(state);
+    const intent: TaskIntentState = { version: 1, revision: 1, originalGoal: 'goal', currentInput: 'latest', origin: 'explicit', clarifications: [] };
+    expect(() => state.record({ type: 'task-intent', taskId: task.id, value: { ...intent, revision: -1 } })).toThrow('无效');
+    const failure = vi.spyOn(store, 'put').mockImplementation(() => { throw new Error('disk full'); });
+    try {
+      expect(() => state.record({ type: 'task-intent', taskId: task.id, value: intent })).toThrow('disk full');
+      expect(state.getTask(task.id).intent).toBeUndefined();
+    } finally { failure.mockRestore(); }
+  });
+
+  it('enriches a legacy native message with provenance exactly once without adding a duplicate', () => {
+    const { state, store } = setup(); state.saveProfile(customProfile()); const task = conversation(state);
+    const message = { type: 'task-message' as const, taskId: task.id, entryId: 'native-answer', role: 'user' as const,
+      text: '[需求澄清回答] test', createdAt: 1 };
+    state.record(message);
+    const updated = { ...message, source: 'clarification' as const, clarificationToolCallId: 'tool' };
+    state.record(updated);
+    const write = vi.spyOn(store, 'put');
+    state.record(updated);
+    expect(write).not.toHaveBeenCalled();
+    write.mockRestore();
+    const messages = setup(store).state.snapshot().messages.filter((item) => item.taskId === task.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ source: 'clarification', clarificationToolCallId: 'tool' });
+  });
 });
 
 describe('conversation credential binding', () => {
@@ -416,7 +464,7 @@ it('rebuilds native message projections idempotently and clears compaction statu
   expect(rebuilt.snapshot().messages).toHaveLength(1);
 });
 
-it('reclassifies only exact completed historical read-only commands before restoring host write locks', async () => {
+it('does not infer complete historical source or identity from a plausible preview alone', async () => {
   const { state, store } = setup();
   const cases = [
     { id: 'query', preview: 'docker ps -a', status: 'failed', exitCode: 1 },
@@ -429,11 +477,11 @@ it('reclassifies only exact completed historical read-only commands before resto
     kind: 'command', effects: 'possible', createdAt: 1 } });
   await state.normalizeHistoricalQueries(new BashAnalyzer());
   expect(state.snapshot().operations.filter(operationNeedsVerification).map((item) => item.id))
-    .toEqual(['compound', 'unknown', 'redacted']);
+    .toEqual(['query', 'listing', 'compound', 'unknown', 'redacted']);
   const restored = setup(store).state.snapshot().operations;
-  expect(restored.filter(operationNeedsVerification).map((item) => item.id)).toEqual(['compound', 'unknown', 'redacted']);
+  expect(restored.filter(operationNeedsVerification).map((item) => item.id)).toEqual(['query', 'listing', 'compound', 'unknown', 'redacted']);
   expect(restored.find((item) => item.id === 'query')?.status).toBe('failed');
-  expect(restored.find((item) => item.id === 'query')?.readOnly).toBe(true);
+  expect(restored.find((item) => item.id === 'query')?.readOnly).toBeUndefined();
 });
 
 it('does not release a historical lock if query analysis fails', async () => {
@@ -451,7 +499,9 @@ it('keeps an unknown outcome truthful while persisting explicit risk acceptance 
   state.record({ type: 'operation', value: { id: 'uncertain', taskId: task.id, hostId: 'host', kind: 'command',
     preview: 'mkdir -p /home/tian/test', status: 'unknown', createdAt: 1 } });
   expect(operationNeedsVerification(state.snapshot().operations.at(-1)!)).toBe(true);
-  state.acceptOperationRisk('uncertain', '已检查实际状态，接受仍有未知变更的风险', 42, task.id, []);
+  const committed = state.acceptOperationRisk('uncertain', '已检查实际状态，接受仍有未知变更的风险', 42, task.id, []);
+  committed.status = 'succeeded'; // The returned IPC snapshot must not alias authoritative state.
+  expect(state.snapshot().operations.find((item) => item.id === 'uncertain')?.status).toBe('unknown');
   const saved = store.get<{ status: string; reconciledAt: number }>('operations', 'uncertain');
   expect(saved).toMatchObject({ status: 'unknown', reconciledAt: 42 });
   const restored = setup(store).state.snapshot().operations.find((item) => item.id === 'uncertain')!;
@@ -460,6 +510,45 @@ it('keeps an unknown outcome truthful while persisting explicit risk acceptance 
   expect(setup(store).state.snapshot().execution?.[task.id]?.remote).toBe('idle');
   expect(() => state.acceptOperationRisk('uncertain', '再次解除', 43)).toThrow();
   expect(() => state.assertDeletable(task.id)).not.toThrow();
+});
+
+it.each(['old-snapshot', 'competing-evidence', 'actual-exit'] as const)(
+  'preserves the first durable risk resolution across a late %s and restart', (kind) => {
+    const { state, store } = setup();
+    state.saveProfile(customProfile());
+    const task = conversation(state);
+    const original = { id: 'uncertain', taskId: task.id, hostId: 'host', kind: 'command' as const,
+      preview: 'old write', status: 'unknown' as const, effects: 'possible' as const, createdAt: 1 };
+    state.record({ type: 'operation', value: original });
+    state.acceptOperationRisk(original.id, '用户已明确接受不确定性，不代表操作成功', 42, task.id, []);
+    const accepted = state.snapshot().operations.find((item) => item.id === original.id)!;
+    const incoming = kind === 'competing-evidence' ? { ...original, status: 'succeeded' as const, reconciledAt: 43,
+      reconciliation: { kind: 'evidence' as const, at: 43, outcome: 'succeeded' as const,
+        evidenceOperationIds: ['check'], explanation: '竞争核验不能覆盖已落盘的风险确认' } }
+      : kind === 'actual-exit' ? { ...original, status: 'failed' as const, exitCode: 130, outputTail: 'late observed exit' } : original;
+    state.record({ type: 'operation', value: incoming });
+    for (const current of [state, setup(store).state]) {
+      const saved = current.snapshot().operations.find((item) => item.id === original.id)!;
+      expect(saved.reconciledAt).toBe(42);
+      expect(saved.reconciliation).toEqual(accepted.reconciliation);
+      expect(saved.status).toBe(kind === 'actual-exit' ? 'failed' : 'unknown');
+      if (kind === 'actual-exit') expect(saved).toMatchObject({ exitCode: 130, outputTail: 'late observed exit' });
+      expect(operationNeedsVerification(saved)).toBe(false);
+    }
+  });
+
+it('keeps canonical operation memory unchanged when a late observation cannot be persisted', () => {
+  const { state, store } = setup();
+  state.saveProfile(customProfile());
+  const task = conversation(state);
+  state.record({ type: 'operation', value: { id: 'old', taskId: task.id, hostId: 'host', kind: 'command',
+    preview: 'old write', status: 'unknown', createdAt: 1 } });
+  const accepted = state.acceptOperationRisk('old', '用户接受原操作的不确定风险', 42);
+  const failure = vi.spyOn(store, 'put').mockImplementation(() => { throw new Error('disk full'); });
+  try {
+    expect(() => state.record({ type: 'operation', value: { ...accepted, status: 'failed', exitCode: 130 } })).toThrow('disk full');
+    expect(state.snapshot().operations.find((item) => item.id === 'old')).toEqual(accepted);
+  } finally { failure.mockRestore(); }
 });
 
 it('does not mutate authoritative state when persisting a risk acceptance fails', () => {

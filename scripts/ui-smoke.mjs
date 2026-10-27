@@ -1,4 +1,7 @@
 import { checkMessageReferences } from './check-message-references.mjs';
+import { checkRequestBudget } from './check-request-budget.mjs';
+import { checkBudgetSwitching } from './check-budget-switching.mjs';
+import { checkVerificationChecks } from './check-verification-checks.mjs';
 import { checkReasoningContent } from './check-reasoning-content.mjs';
 import { checkExecutionThinking } from './check-execution-thinking.mjs';
 import { checkComposer } from './check-composer.mjs';
@@ -315,6 +318,7 @@ try {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
+  await checkBudgetSwitching(page, screenshot);
   await exerciseHostControls();
   await exerciseErrors();
   await exerciseConversation();
@@ -342,6 +346,8 @@ try {
   await checkTerminalControl(page, screenshot);
   await checkMiddleClick(page, screenshot);
   await checkClarification(page, screenshot);
+  await checkVerificationChecks(page, screenshot);
+  await checkRequestBudget(page, screenshot);
   assert.deepEqual(errors, []);
   console.log(`UI smoke passed. Fake SSH/models only; screenshots: ${output}`);
 } catch (error) {

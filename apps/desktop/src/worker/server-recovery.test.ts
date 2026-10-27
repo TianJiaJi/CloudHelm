@@ -1,5 +1,10 @@
 import { expect, it, vi } from 'vitest';
 import { WorkerServer } from './server.js';
+import type { OperationView } from '@cloudhelm/contracts';
+
+const accepted: OperationView = { id: 'old', taskId: 'source', hostId: 'host', kind: 'command', preview: 'old write',
+  status: 'unknown', createdAt: 1, reconciledAt: 42,
+  reconciliation: { kind: 'risk-accepted', explanation: '人工检查并承担未知结果风险', at: 42, sourceTaskId: 'recovery' } };
 
 function setup() {
   const server = new WorkerServer(() => undefined);
@@ -25,17 +30,23 @@ it('does not turn a released write lock into an ambiguous failure if status publ
   runner.recordRiskAcceptance.mockImplementation(() => { throw new Error('event disconnected'); });
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   try {
-    await expect(server.dispatch({ method: 'commit-operation-risk', operationId: 'old', hostId: 'host',
-      explanation: '人工检查并承担未知结果风险', at: 42 })).resolves.toBeUndefined();
+    await expect(server.dispatch({ method: 'commit-operation-risk', operation: accepted })).resolves.toBeUndefined();
     expect(executor.reconcile).toHaveBeenCalledWith('host', 'old');
-    expect(runner.recordRiskAcceptance).toHaveBeenCalledOnce();
+    expect(runner.recordRiskAcceptance).toHaveBeenCalledExactlyOnceWith(accepted);
   } finally { warning.mockRestore(); }
+});
+
+it('rejects an invalid commit snapshot before releasing any lock', async () => {
+  const { server, executor, runner } = setup();
+  await expect(server.dispatch({ method: 'commit-operation-risk', operation: { ...accepted, status: 'running' } }))
+    .rejects.toThrow('无效');
+  expect(executor.reconcile).not.toHaveBeenCalled();
+  expect(runner.recordRiskAcceptance).not.toHaveBeenCalled();
 });
 
 it('does not publish an acceptance if the tracked remote process is still live', async () => {
   const { server, executor, runner } = setup();
   executor.reconcile.mockReturnValue(false);
-  await expect(server.dispatch({ method: 'commit-operation-risk', operationId: 'old', hostId: 'host',
-    explanation: '人工检查并承担未知结果风险', at: 42 })).rejects.toThrow('尚未退出');
+  await expect(server.dispatch({ method: 'commit-operation-risk', operation: accepted })).rejects.toThrow('尚未退出');
   expect(runner.recordRiskAcceptance).not.toHaveBeenCalled();
 });

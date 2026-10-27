@@ -1,4 +1,5 @@
 import { MessageContent } from './message-content.js';
+import { VerificationChecks } from './verification-checks.js';
 import { ReasoningContent } from './reasoning-content.js';
 import { useEffect, useState } from 'react';
 import type { OperationView, TaskView } from '@cloudhelm/contracts';
@@ -91,17 +92,20 @@ export function VerificationCard({ conversation, report }: { conversation: TaskV
   const verified = conversation.status === 'answered' && conversation.verificationState?.status === 'verified' && !!conversation.report?.evidenceOperationIds.length;
   const unverified = conversation.status === 'answered' && conversation.verificationState?.status === 'unverified';
   const failure = conversation.status === 'failed' ? presentError(conversation.summary) : null;
-  const warning = `${conversation.summary && unverified ? conversation.summary : '远端操作已返回成功，但效果尚未核验。'} 不能仅凭退出码断言目标已完成；可查看已有检查或继续核验，切勿重放已成功的变更。`;
-  const conclusion = failure?.description ?? (unverified ? warning : conversation.report?.summary ?? conversation.summary ?? '');
+  const structured = conversation.report?.version === 2;
+  const warning = structured ? `${conversation.summary ?? '检查存在失败、无法确定或未验证项。'} 请按已登记观察说明限制，不要为凑通过重放变更。`
+    : `${conversation.summary && unverified ? conversation.summary : '远端操作已返回成功，但效果尚未核验。'} 不能仅凭退出码断言目标已完成；可查看已有检查或继续核验，切勿重放已成功的变更。`;
+  const conclusion = failure?.description ?? (unverified ? `${conversation.report?.summary ?? ''}\n${warning}`.trim() : conversation.report?.summary ?? conversation.summary ?? '');
   return <section className={`${styles.reviewCard} ${styles.verificationCard} ${unverified ? styles.verificationWarning : ''}`}
     role={unverified ? 'alert' : undefined}
     onContextMenu={(event) => openContextMenu(event, copyEntries('复制结论', conclusion, report), '验证结论')}>
-    <div className={styles.cardTitle}><Icon name={verified ? 'check' : 'shield'} /><strong>{unverified ? '已执行 · 未核验' : failure?.title ?? statusLabel[conversation.status]}</strong></div>
-    <p>{failure?.description ?? (unverified ? warning : conversation.report?.summary ?? conversation.summary ?? '还需要补充验证证据，请查看对话中的说明。')}</p>
+    <div className={styles.cardTitle}><Icon name={verified ? 'check' : 'shield'} /><strong>{unverified ? structured ? '已登记 · 有未验证项' : '已执行 · 未核验' : failure?.title ?? statusLabel[conversation.status]}</strong></div>
+    <p>{conclusion || '还需要补充验证证据，请查看对话中的说明。'}</p>
+    <VerificationChecks value={conversation.report} />
     {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
       : conversation.report?.access.map((address) => <code className={styles.access} key={address}>{address}</code>)}
     <div className={styles.cardActions}>
-      {unverified && conversation.session && conversation.status === 'answered' && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}>继续核验</button>}
+      {unverified && (!conversation.report || conversation.resumeReason === 'report') && conversation.session && conversation.status === 'answered' && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}>继续核验</button>}
       <button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
     </div>
   </section>;

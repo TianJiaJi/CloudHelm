@@ -6,5 +6,9 @@ export interface DiagnosticRecord {
   text?: string; command?: string; cwd?: string; path?: string; role?: string;
   tool?: string; status?: string; ruleId?: string; runAs?: string; loginAs?: string;
   sessionId?: string; sha256?: string; model?: string; provider?: string;
+  roundId?: string; logicalRequestId?: string; purpose?: string; transport?: string; resumeReason?: string;
+  reconciliationKind?: string; classification?: string; errorCode?: string;
+  attempt?: number; policyRevision?: number; readOnly?: boolean; responseAttributed?: boolean;
+  evidenceOperationIds?: string[]; evidenceOmitted?: number;
   durationMs?: number; request?: number; exitCode?: number; size?: number;
 }

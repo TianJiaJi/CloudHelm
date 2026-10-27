@@ -8,6 +8,7 @@ import { useUi } from './store.js';
 import { ApprovalCard, InputCard } from './interaction-cards.js';
 import { OperationCard, VerificationCard } from './workspace-pages.js';
 import { RecoveryCard } from './recovery-card.js';
+import { RequestBudgetCard } from './request-budget-card.js';
 import { MarkdownMessage } from './markdown-message.js';
 import { ClarificationCard } from './clarification-card.js';
 import { UserMessage } from './user-message.js';
@@ -36,7 +37,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
   const messages = snapshot.messages.filter((message) => message.taskId === conversation?.id);
   const operations = snapshot.operations.filter((operation) => operation.taskId === conversation?.id);
   const clarifications = (snapshot.clarifications ?? []).filter((request) => request.taskId === conversation?.id);
-  const timeline = conversationTimeline(messages.filter((message) => !message.text.startsWith('[需求澄清回答]')), operations.slice(-6), clarifications);
+  const timeline = conversationTimeline(messages, operations.slice(-6), clarifications);
   const approvals = snapshot.approvals.filter((approval) => approval.taskId === conversation?.id);
   const inputs = snapshot.inputs.filter((input) => input.taskId === conversation?.id);
   const terminal = useUi((state) => {
@@ -84,10 +85,11 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       <small>{host ? <><Icon name="shield" size={12} />{reviewLabel[conversation?.reviewModesByHost?.[host.id] ?? host.defaultMode]}</> : '未授权远端操作'}</small></div>
     {conversation && <div className={styles.agentActions}>
       <span className={styles.status}>{statusLabel[conversation.status]}</span>
-      {conversation.session && !running && conversation.resumeReason && (['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status)
+      {conversation.session && !running && conversation.resumeReason && (!conversation.budget || conversation.budget.roundUsed < conversation.budget.roundLimit) && (['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status)
         || (conversation.status === 'answered' && conversation.verificationState?.status === 'unverified'))
         && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />{conversation.status === 'answered' ? '继续核验' : '继续 AI'}</button>}
     </div>}
+    {conversation && <RequestBudgetCard key={`budget:${conversation.id}`} task={conversation} execution={snapshot.execution?.[conversation.id]} report={report} />}
     {conversation?.status === 'paused' && conversation.resumeReason === 'verify' && host
       && snapshot.operations.some((item) => item.taskId === conversation.id && item.hostId === host.id && item.reconciliation?.kind === 'risk-accepted')
       && !snapshot.operations.some((item) => item.hostId === host.id && operationNeedsVerification(item))
@@ -127,7 +129,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       {terminal && <button className={styles.agentTerminalLink} onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 专用终端<Icon name="chevron" size={12} /></button>}
       {conversation && (conversation.report || conversation.status === 'answered' && conversation.verificationState?.status === 'unverified' || conversation.status === 'failed') && <VerificationCard conversation={conversation} report={report} />}
     </div>
-    <Composer key={conversation?.id ?? `draft:${host?.id ?? 'chat'}`} execution={conversation ? snapshot.execution?.[conversation.id] : undefined} hostId={host?.id ?? null} conversation={conversation} host={host} compaction={conversation ? snapshot.contextCompaction?.[conversation.id] : undefined} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} report={report} />
+    <Composer key={`composer:${conversation?.id ?? `draft:${host?.id ?? 'chat'}`}`} execution={conversation ? snapshot.execution?.[conversation.id] : undefined} hostId={host?.id ?? null} conversation={conversation} host={host} compaction={conversation ? snapshot.contextCompaction?.[conversation.id] : undefined} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} report={report} />
   </>;
 }
 
@@ -188,7 +190,7 @@ function Composer({ execution, hostId, host, usage, compaction, conversation, pr
     const parts = draftFor(draftKey).parts;
     const revision = JSON.stringify([parts, model, draftLevel, attachments]);
     if (request.current?.revision !== revision) request.current = { id: crypto.randomUUID(), revision };
-    useMessageDrafts.getState().set(draftKey, { locked: true, request: request.current, compressing: false, compressingReference: undefined });
+    useMessageDrafts.getState().set(draftKey, { locked: true, request: request.current, compressing: false, compressingReference: undefined, preparationContext: undefined });
     try {
       const result = await window.cloudhelm.sendStructured({ document: { requestId: request.current!.id, parts },
         conversationId: conversation?.id, hostId, model, thinkingLevel: levels.length ? draftLevel : undefined,
@@ -200,7 +202,7 @@ function Composer({ execution, hostId, host, usage, compaction, conversation, pr
         if (!conversation) useUi.getState().selectConversation(result.conversationId);
       }
     } catch (cause) { report(cause instanceof Error ? cause.message : String(cause)); }
-    finally { sendLock.current = false; setBusy(false); setPreparing(false); setCompressing(false); useMessageDrafts.getState().set(draftKey, { locked: false, compressing: false, compressingReference: undefined }); }
+    finally { sendLock.current = false; setBusy(false); setPreparing(false); setCompressing(false); useMessageDrafts.getState().set(draftKey, { locked: false, compressing: false, compressingReference: undefined, preparationContext: undefined }); }
   }
   function attachmentMenuEntries(item: LocalAttachment): ContextMenuEntry[] {
     return [
@@ -217,7 +219,7 @@ function Composer({ execution, hostId, host, usage, compaction, conversation, pr
         onContextMenu={(event) => openContextMenu(event, attachmentMenuEntries(item), '附件操作')}>
         <Icon name={item.scope.kind === 'directory' ? 'folder' : 'file'} size={12} />{item.scope.path.split(/[\\/]/u).at(-1)}<button type="button" aria-label={`移除 ${item.scope.path}`} onClick={() => setAttachments((items) => items.filter((attachment) => attachment.token !== item.token))}><Icon name="close" size={11} /></button></span>)}</div>}
       <MessageEditor draftKey={draftKey} disabled={legacy || waiting || busy || locked} placeholder={waiting ? '请先回答上方问题，或停止本轮对话' : hostId ? '描述你的目标，或补充下一步…' : '问点什么…'} send={() => void send()} />
-      {(preparing || locked) && <p className={styles.note} role="status">{(compressing || draftState?.compressing) ? '正在压缩超出上下文容量的内容…' : '正在准备发送…'} <button type="button" onClick={() => { const id = draftFor(draftKey).request?.id; if (id) void capture(() => window.cloudhelm.cancelMessage(id), report); }}>取消发送</button></p>}
+      {(preparing || locked) && <p className={styles.note} role="status">{(compressing || draftState?.compressing) ? '正在压缩超出上下文容量的内容…' : '正在准备发送…'} {draftState?.summaryRequests && `摘要请求 ${draftState.summaryRequests.used}/${draftState.summaryRequests.limit} `}<button type="button" onClick={() => { const id = draftFor(draftKey).request?.id; if (id) void capture(() => window.cloudhelm.cancelMessage(id), report); }}>取消发送</button></p>}
       <div className={styles.composerTools}><div className={styles.attachControl}>
         <button type="button" aria-label="添加本地资料" title="添加本地资料" disabled={legacy || waiting || busy || locked}
           aria-haspopup="menu" aria-expanded={!!attachmentMenu.anchor} {...attachmentMenu.trigger}><Icon name="plus" size={18} /></button>
@@ -237,6 +239,6 @@ function Composer({ execution, hostId, host, usage, compaction, conversation, pr
       </div>
     </form>
     {execution && <p className={styles.note} role="status">{stopping ? `正在停止…${execution.model === 'idle' ? '模型已停；' : ''}${execution.remote === 'running' ? '等待远端命令退出' : ''}` : execution.remote === 'unknown' ? `${execution.model === 'idle' ? '模型已停；' : ''}远端结果待核验，请勿重复执行` : canStop ? 'Enter 发送补充消息 · 点击 ■ 停止执行' : ''}</p>}
-    <ComposerFooter compaction={compaction} host={host} conversation={conversation} legacy={legacy} usage={usage} pendingModel={pendingModel ? model.modelId : undefined} report={report} />
+    <ComposerFooter compaction={compaction} host={host} conversation={conversation} legacy={legacy} usage={locked ? draftState?.preparationContext ?? usage : usage} pendingModel={pendingModel ? model.modelId : undefined} report={report} />
   </div>;
 }

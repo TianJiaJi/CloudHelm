@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TerminalManager } from '@cloudhelm/application';
 import type { ClarificationRequest, TaskView } from '@cloudhelm/contracts';
-import { TaskRunner, type TaskSignals } from './task-runner.js';
+import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
 
 async function setup(mixed = false, reverse = false) {

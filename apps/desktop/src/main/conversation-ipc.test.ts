@@ -4,6 +4,7 @@ import type { RuntimeCall, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 import type { AppState } from './app-state.js';
 import type { RuntimeBridge } from './runtime-bridge.js';
 import { registerConversationIpc } from './conversation-ipc.js';
+import { legacyRequestBudget } from '@cloudhelm/core';
 
 const ipc = vi.hoisted(() => ({ handlers: new Map<string, (...args: any[]) => unknown>() }));
 vi.mock('electron', () => ({ ipcMain: { handle: (channel: string, listener: (...args: any[]) => unknown) => ipc.handlers.set(channel, listener) } }));
@@ -39,6 +40,9 @@ function setup(task = makeConversation(), running = false) {
   const messages: AppSnapshot['messages'] = [];
   const selections = new Map([['selected-token', localScope]]);
   const state = {
+    requestBudgets: { input: vi.fn(), complete: vi.fn(),
+      current: vi.fn(() => task.budget ?? legacyRequestBudget('fixture-round', task.requestCount, task.requestLimit)),
+      reopen: vi.fn(() => task.budget ?? legacyRequestBudget('fixture-round', task.requestCount, task.requestLimit)) },
     runtimeProfile: vi.fn(() => ({ ...profile })),
     conversationProfile: vi.fn(() => ({ ...profile })),
     runtimeReviewerForLiveTask: vi.fn((current: TaskView) => ({ selection: { kind: 'current' as const },
@@ -77,6 +81,18 @@ function setup(task = makeConversation(), running = false) {
 beforeEach(() => ipc.handlers.clear());
 
 describe('conversation IPC authorization boundary', () => {
+  it('rejects an exhausted ordinary continuation before SSH restoration or worker dispatch', async () => {
+    const task = makeConversation(); task.requestCount = task.requestLimit;
+    const fixture = setup(task);
+    await expect(invoke('resume-task', task.id)).rejects.toThrow('budget-exhausted');
+    expect(fixture.connectHost).not.toHaveBeenCalled(); expect(fixture.call).not.toHaveBeenCalled();
+    expect(fixture.state.requestBudgets.reopen).not.toHaveBeenCalled();
+  });
+  it('rejects malformed extension payloads before restoration', async () => {
+    const fixture = setup();
+    await expect(invoke('extend-request-budget', { taskId: 'conversation-one', amount: 1000 })).rejects.toThrow('budget-invalid');
+    expect(fixture.call).not.toHaveBeenCalled(); expect(fixture.connectHost).not.toHaveBeenCalled();
+  });
   it.each(['host-a', null])('starts a conversation with only the explicit host or no remote authorization: %s', async (hostId) => {
     const fixture = setup();
     const input: ConversationStart & { hostIds: string[] } = {

@@ -53,17 +53,20 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
           scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
       }
     };
-    const listLocalParameters = Type.Object({ path: Type.String() });
+    const listLocalParameters = Type.Object({ path: Type.String({ minLength: 1, maxLength: 4096 }), cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })) });
     const listLocalTool: BusinessTool<Static<typeof listLocalParameters>> = {
       name: 'list_selected_directory', label: 'List a selected local directory',
-      description: 'List at most 200 entries inside a directory explicitly selected by the user. Use absolute paths.',
+      description: 'Page a user-selected absolute local directory in stable name order. At most 200 entries and 50 KiB per response; a bounded metadata scan supports up to 10000 entries. Pass nextCursor unchanged as cursor for the same path. Changed directories or expired cursors require listing again. Every page rechecks authorization. File sizes are actual bytes; null means unknown/not a regular file, never zero. Symlink targets are not traversed.',
       parameters: listLocalParameters, replay: 'never',
-      execute: async (_id, params) => {
-        try { return { content: [{ type: 'text', text: JSON.stringify(await deps.localFiles.list(params.path)) }], details: undefined }; }
-        catch (error) { return { content: [{ type: 'text', text: String(error) }], details: undefined, isError: true }; }
+      execute: async (_id, params, signal) => {
+        try {
+          const { entries, ...metadata } = await deps.localFiles.list(params.path, params.cursor, signal);
+          const details = { ...metadata, entriesReturned: entries.length };
+          return { content: [{ type: 'text', text: `[Selected directory page ${JSON.stringify(details)}]\n${JSON.stringify(entries)}` }], details };
+        } catch (error) { return { content: [{ type: 'text', text: String(error) }], details: undefined, isError: true }; }
       }
     };
-    const readLocalTool = createSelectedReadTool((path) => deps.localFiles.read(path));
+    const readLocalTool = createSelectedReadTool((path, signal) => deps.localFiles.read(path, signal));
     const uploadParameters = Type.Object({ hostId: Type.String(), localPath: Type.String(), remotePath: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) });
     const uploadTool: BusinessTool<Static<typeof uploadParameters>> = {
       name: 'upload_selected_file', label: 'Upload an audited selected file',
@@ -74,7 +77,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
         if (!host) return outOfScope();
         const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
         try {
-          const { data, scope } = await deps.localFiles.read(params.localPath);
+          const { data, scope } = await deps.localFiles.read(params.localPath, signal);
           return deps.runOperation(gate, { id: randomUUID(), kind: 'upload', localPath: params.localPath,
             localRoot: scope.path, remotePath: params.remotePath, size: data.length,
             contentSha256: createHash('sha256').update(data).digest('hex'),

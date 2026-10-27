@@ -34,9 +34,9 @@ export function registerRecoveryIpc(state: AppState, runtime: RuntimeBridge): vo
     // releasing the host lock. Persist before dispatching the release: failed
     // storage never opens a write window for another task.
     await runtime.call({ method: 'prepare-operation-risk', operationId, hostId: operation.hostId });
-    state.acceptOperationRisk(operationId, reason, at, sourceTaskId, evidenceOperationIds);
+    const accepted = state.acceptOperationRisk(operationId, reason, at, sourceTaskId, evidenceOperationIds);
     try {
-      await runtime.call({ method: 'commit-operation-risk', operationId, hostId: operation.hostId, explanation: reason, at });
+      await runtime.call({ method: 'commit-operation-risk', operation: accepted });
     } catch (error) {
       // An RPC error cannot prove whether the worker released the lock before
       // its response was lost. The durable explicit acceptance is still valid;

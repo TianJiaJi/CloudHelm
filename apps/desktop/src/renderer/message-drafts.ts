@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { MessagePart, ReferenceInfo } from '@cloudhelm/contracts';
-export interface MessageDraft { parts: MessagePart[]; caret: number; revision: number; locked: boolean; request?: { id: string; revision: string }; compressing?: boolean; compressingReference?: string }
+import type { ContextUsageView, MessagePart, ReferenceInfo } from '@cloudhelm/contracts';
+export interface MessageDraft { parts: MessagePart[]; caret: number; revision: number; locked: boolean; request?: { id: string; revision: string }; compressing?: boolean; compressingReference?: string; summaryRequests?: { used: number; limit: 32 }; preparationContext?: ContextUsageView }
 const empty = (): MessageDraft => ({ parts: [], caret: 0, revision: 0, locked: false });
 export function partLength(part: MessagePart): number { return part.type === 'text' ? part.text.length : 1; }
 export function normalizeParts(parts: MessagePart[]): MessagePart[] {
@@ -31,7 +31,11 @@ export function replaceParts(parts: MessagePart[], start: number, end: number, i
 export function longPaste(text: string): boolean { return text.replace(/\r\n?/gu, '\n').split('\n').length > 10 || [...text].length > 1000; }
 export const useMessageDrafts = create<{ drafts: Record<string, MessageDraft>; set(key: string, value: Partial<MessageDraft>): void; clear(key: string): void }>((set) => ({
   drafts: {},
-  set: (key, value) => set((state) => ({ drafts: { ...state.drafts, [key]: { ...(state.drafts[key] ?? empty()), ...value } } })),
+  set: (key, value) => set((state) => {
+    const previous = state.drafts[key] ?? empty();
+    const newRequest = value.request && value.request.id !== previous.request?.id;
+    return { drafts: { ...state.drafts, [key]: { ...previous, ...(newRequest ? { summaryRequests: undefined, preparationContext: undefined } : {}), ...value } } };
+  }),
   clear: (key) => set((state) => ({ drafts: { ...state.drafts, [key]: empty() } }))
 }));
 export function draftFor(key: string): MessageDraft { return useMessageDrafts.getState().drafts[key] ?? empty(); }

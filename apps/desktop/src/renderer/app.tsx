@@ -83,7 +83,10 @@ export function App(): React.JSX.Element {
       if (event.type === 'message-preparation') {
         for (const [key, draft] of Object.entries(useMessageDrafts.getState().drafts)) {
           if (draft.request?.id === event.requestId) useMessageDrafts.getState().set(key, {
-            compressing: event.status === 'compressing', compressingReference: event.referenceId
+            compressing: event.status === 'compressing',
+            compressingReference: event.referenceId ?? draft.compressingReference,
+            summaryRequests: event.summaryRequests ?? draft.summaryRequests,
+            preparationContext: draft.locked ? event.context ?? draft.preparationContext : undefined
           });
         }
       }

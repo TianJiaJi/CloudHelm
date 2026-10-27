@@ -27,6 +27,29 @@ describe('shared Docker permission prerequisite', () => {
     for (const command of ['docker ps', 'docker compose version', 'docker --context other ps', 'docker -H tcp://other ps', 'docker compose build']) await executor.execute(operation(command), 'hash');
     expect(execute).toHaveBeenCalledTimes(5);
   });
+  it.each(['docker images', 'docker image ls', 'docker container ls'])('shares the known default-daemon failure with %s', async (command) => {
+    const execute = vi.fn(async (op: ProposedOperation) => ({ operationId: op.id, status: 'failed' as const, exitCode: 1,
+      effects: 'possible' as const, stdoutTail: 'Docker daemon socket: permission denied' }));
+    const executor = new PermissionAwareExecutor({ execute }, analyzer);
+    const first = await executor.execute(operation('docker ps'), 'hash');
+    expect(first.effects).toBe('possible'); // Only the gate can attest that the first operation was effect-free.
+    const blocked = await executor.execute(operation(command), 'hash');
+    expect(blocked).toMatchObject({ status: 'failed', failureKind: 'permission-denied', effects: 'none' });
+    expect(execute).toHaveBeenCalledOnce();
+    const root = operation(command); root.scope.runAs = 'root';
+    await executor.execute(root, 'root-review');
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse the observation for endpoint changes or a mutating image subcommand', async () => {
+    const execute = vi.fn(async (op: ProposedOperation) => ({ operationId: op.id, status: 'failed' as const,
+      stdoutTail: 'Docker daemon socket: permission denied' }));
+    const executor = new PermissionAwareExecutor({ execute }, analyzer);
+    for (const command of ['docker images', 'docker image rm alpine', 'docker --context other image ls',
+      'docker -Htcp://other image ls', 'docker images --host=tcp://other']) await executor.execute(operation(command), 'hash');
+    expect(execute).toHaveBeenCalledTimes(5);
+  });
+
   it('expires observations and isolates identity, terminal and connection changes', async () => {
     let now = 0;
     const execute = vi.fn(async (op: ProposedOperation) => ({ operationId: op.id, status: 'failed' as const, stdoutTail: 'Docker daemon socket: permission denied' }));

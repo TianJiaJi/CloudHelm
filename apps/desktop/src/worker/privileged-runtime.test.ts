@@ -58,6 +58,22 @@ function setup(mode: 'ssh' | 'su' = 'ssh') {
 }
 
 describe('confirmed isolated root sessions', () => {
+  it('projects only confirmed, owned, current-generation sessions without credentials or cross-task references', async () => {
+    const f = setup();
+    expect(f.access.confirmed?.()).toEqual([]);
+    const session = await f.request();
+    const projection = f.access.confirmed?.();
+    expect(projection).toEqual([{ sessionId: session.sessionId, hostId: host.id, method: 'ssh', runAs: 'root' }]);
+    expect(JSON.stringify(projection)).not.toContain('secret');
+    expect(f.runtime.forTask('other').confirmed?.()).toEqual([]);
+    state.gen++;
+    expect(f.access.confirmed?.()).toEqual([]);
+    state.gen--;
+    f.terminal.takeOver(f.access.terminal(session.sessionId, host.id));
+    expect(f.access.confirmed?.()).toEqual([]);
+    f.access.close();
+  });
+
   it.each(['ssh', 'su'] as const)('authenticates %s, verifies UID, and reviews subsequent operations', async (mode) => {
     const f = setup(mode); const session = await f.request();
     expect(state.commands).toEqual(['id -u']);

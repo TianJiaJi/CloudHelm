@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createModelCatalog, listModelProviders } from './model-catalog.js';
+import { createModelCatalog, listModelProviders, modelCapacity, modelThinking } from './model-catalog.js';
 
 describe('Pi model catalog settings', () => {
   it('uses explicit custom capacity and rejects invalid or fabricated limits', () => {
@@ -13,6 +13,15 @@ describe('Pi model catalog settings', () => {
     }
   });
 
+  it('reports real capacity provenance without inferring custom reasoning support from its name', () => {
+    const selection = { provider: 'cloudhelm-custom', modelId: 'deep-reasoning-pro', baseUrl: 'https://example.com/v1' };
+    expect(modelCapacity(selection)).toEqual({ contextWindow: 32000, maxOutputTokens: 8192, source: 'custom-settings' });
+    expect(modelCapacity({ ...selection, contextWindow: 64000, maxTokens: 16000 })).toEqual({ contextWindow: 64000, maxOutputTokens: 16000, source: 'custom-settings' });
+    expect(modelThinking(selection, 'high').levels).toEqual([]);
+    const provider = listModelProviders().find((item) => item.id === 'deepseek')!;
+    const builtin = modelCapacity({ provider: provider.id, modelId: provider.models[0]!.id });
+    expect(builtin.source).toBe('catalog'); expect(builtin.contextWindow).toBeGreaterThan(0); expect(builtin.maxOutputTokens).toBeGreaterThan(0);
+  });
   it('provides a prefilled URL and uses a provider-specific override for model requests', () => {
     const provider = listModelProviders().find((item) => item.id === 'deepseek');
     expect(provider?.defaultBaseUrl).toBe('https://api.deepseek.com');

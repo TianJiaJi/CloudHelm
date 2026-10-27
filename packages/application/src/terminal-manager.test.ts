@@ -28,6 +28,20 @@ function operation(id: string, generation: number): ProposedOperation {
 }
 
 describe('real PTY ownership', () => {
+  it.each(['hello', `${'🙂'.repeat(40000)}\n`])('reports authoritative redacted-output truncation without split surrogate pairs', async (output) => {
+    const channel = new FakeTerminal();
+    const manager = new TerminalManager({ data() {}, state() {} });
+    const id = manager.open('host', channel, 'task');
+    const proposed = operation('capture', manager.currentGeneration(id)); proposed.scope.terminalId = id;
+    const pending = manager.execute(proposed, operationFingerprint(proposed));
+    channel.emit(output); channel.complete();
+    const result = await pending;
+    expect(result).toMatchObject({ outputCapture: { totalChars: output.length,
+      tailChars: result.stdoutTail.length, truncated: output.length > result.stdoutTail.length } });
+    expect(result.stdoutTail.length).toBeLessThanOrEqual(16384);
+    expect(Buffer.from(result.stdoutTail, 'utf8').toString('utf8')).toBe(result.stdoutTail);
+  });
+
   it('blocks typing until the backend releases the idle session and invalidates old grants', async () => {
     const channel = new FakeTerminal();
     const manager = new TerminalManager({ data() {}, state() {} });

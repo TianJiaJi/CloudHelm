@@ -1,7 +1,9 @@
-import type { MessageDocument } from '@cloudhelm/core';
+import type { IdleCompactionLease, MessageDocument, ModelRequestAttempt } from '@cloudhelm/core';
+import { sessionContextSnapshot } from './pi-context-budget.js';
 import { PiReasoningStream, reasoningView } from './pi-reasoning.js';
-import { modelThinking } from './model-catalog.js';
+import { modelCapacity, modelThinking } from './model-catalog.js';
 import { conversationOutputTokens } from './model-capacity.js';
+import { meterModelRequest } from './model-request-meter.js';
 import type { ThinkingLevel, ThinkingView } from '@cloudhelm/core';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,6 +17,10 @@ import { description, guidelines } from './pi-extensions/ask-user/prompts.js';
 import askUser, { ASK_CHANNEL, type AskBridgeEvent } from './pi-extensions/ask-user/index.js';
 
 const conversationSystemPrompt = (prompt: string) => [prompt, description, ...guidelines].join('\n');
+interface ActiveCompaction {
+  lease: IdleCompactionLease; controller: AbortController; selected: SessionProfile;
+  generation: string | undefined; contextRevision: string;
+}
 
 /** One native Pi session, with CloudHelm's explicit tools, credentials and lifecycle limits. */
 export async function createConversationSession(options: SessionOptions): Promise<ConversationSession> {
@@ -34,13 +40,14 @@ export async function createConversationSession(options: SessionOptions): Promis
       const event = data as AskBridgeEvent;
       event.response = options.clarification.ask(event.toolCallId, event.questions, event.signal);
     });
+    let assertCompactionActive = () => options.assertActive();
     const loader = new DefaultResourceLoader({ cwd, agentDir: cwd, settingsManager: settings, eventBus: bus,
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       systemPrompt: conversationSystemPrompt(options.systemPrompt),
       extensionFactories: [{ name: '@cloudhelm/pi-ask-user', factory: askUser }, {
         name: '@cloudhelm/lifecycle', factory: (pi) => {
           pi.on('session_before_compact', (event) => {
-            options.assertActive();
+            assertCompactionActive();
             // A retry can repeat operations with uncertain effects; only explicit user continuation may do so.
             if (event.willRetry) return { cancel: true };
             return undefined;
@@ -60,6 +67,7 @@ export async function createConversationSession(options: SessionOptions): Promis
       configureWindow(model);
       await session.setModel(model);
     });
+    assertCompactionActive = () => adapter.assertCompactionActive();
     if (options.thinkingLevel !== undefined) adapter.setThinking(options.thinkingLevel);
     adapter.project();
     adapter.publishThinking();
@@ -80,6 +88,11 @@ class PiConversationSession implements ConversationSession {
   private failure?: Error;
   private answered = false;
   private running?: Promise<void>;
+  private compacting?: Promise<void>;
+  private idleCompaction?: ActiveCompaction;
+  private previousFrameTokens?: number;
+  private controlRevision = 0;
+  private responseAttempt?: ModelRequestAttempt;
 
   constructor(private readonly session: AgentSession, private readonly options: SessionOptions,
     private readonly cwd: string, private readonly applyModel: (profile: SessionProfile) => Promise<void>) {
@@ -120,10 +133,18 @@ class PiConversationSession implements ConversationSession {
       return beforeTool?.(call, signal);
     };
     const stream = agent.streamFunction;
-    agent.streamFunction = (model, context, streamOptions) => {
-      options.assertActive();
-      if (this.failure) throw this.failure;
+    agent.streamFunction = async (model, context, streamOptions) => {
+      streamOptions?.signal?.throwIfAborted();
       const purpose = streamOptions?.sessionId === session.sessionManager.getSessionId() ? 'conversation' : 'compaction';
+      const preparation = purpose === 'compaction' ? this.idleCompaction : undefined;
+      const assertRequest = () => {
+        if (preparation) {
+          this.assertIdleLease(preparation);
+          if (this.contextSnapshot().revision !== preparation.contextRevision) throw new Error('准备期间活动上下文已变化');
+        } else options.assertActive();
+      };
+      assertRequest();
+      if (this.failure) throw this.failure;
       let requestContext = context;
       if (purpose === 'conversation' && options.currentSystemPrompt) {
         const leading = context.messages[0];
@@ -137,9 +158,24 @@ class PiConversationSession implements ConversationSession {
           && typeof message.sections?.preamble === 'string'
           ? { ...message, sections: { ...message.sections, preamble: current } } : message) };
       }
-      options.beforeRequest(purpose, this.active);
-      if (purpose === 'conversation') { this.usageReady = true; this.publishUsage(); }
-      return stream(model, requestContext, { ...streamOptions, apiKey: this.active.apiKey, env: {}, maxRetries: 0,
+      const profile = this.active;
+      const selected = this.selected;
+      const generation = this.generation();
+      const meter = meterModelRequest({ api: model.api, purpose, transport: streamOptions?.transport,
+        signal: preparation ? AbortSignal.any([preparation.controller.signal, ...(streamOptions?.signal ? [streamOptions.signal] : [])]) : streamOptions?.signal,
+        fetch: streamOptions?.fetch, assertActive: () => {
+          assertRequest();
+          if (selected !== this.selected || generation !== this.generation()) throw new Error('模型或任务策略已变更，已停止请求重试。');
+        },
+        failed: (error) => { this.failure ??= error instanceof Error ? error : new Error('Model request reservation failed'); },
+        reserve: async (attempt, signal) => {
+          if (preparation) await preparation.lease.reserve(profile, attempt, signal);
+          else await options.beforeRequest(purpose, profile, attempt, signal);
+          if (purpose === 'conversation') { this.responseAttempt = { ...attempt }; this.previousFrameTokens = this.contextSnapshot().frameTokens; this.usageReady = true; this.publishUsage(); }
+        } });
+      await meter.beforeStream();
+      return stream(model, requestContext, { ...streamOptions, ...(meter.fetch ? { fetch: meter.fetch } : {}),
+        apiKey: profile.apiKey, env: {}, maxRetries: 0,
         maxTokens: purpose === 'conversation' ? conversationOutputTokens(model) : streamOptions?.maxTokens });
     };
     // This listener runs after Pi's persistence listener. Public message_end runs before persistence.
@@ -158,7 +194,8 @@ class PiConversationSession implements ConversationSession {
           } else if (message.stopReason === 'length') {
             this.failure ??= new Error('模型输出达到长度上限，尚未给出完整操作或结论。请缩小问题、降低思考档位或切换模型后继续。');
           } else if (this.active === this.selected && message.provider === this.active.provider && message.model === this.active.modelId) this.switched = false;
-          options.event({ type: 'response' });
+          const attempt = this.responseAttempt; this.responseAttempt = undefined;
+          if (attempt) options.event({ type: 'response', attempt, status: message.stopReason });
         }
         this.project();
         if (event.message.role === 'assistant') this.reasoningStream.clear();
@@ -169,6 +206,7 @@ class PiConversationSession implements ConversationSession {
     session.subscribe((event) => {
       if (event.type === 'compaction_start') {
         this.usageReady = false;
+        this.previousFrameTokens = undefined;
         this.publishUsage();
         options.event({ type: 'compaction', status: 'running' });
       }
@@ -176,7 +214,7 @@ class PiConversationSession implements ConversationSession {
         this.usageReady = !!event.result;
         this.publishUsage();
         if (!event.result) {
-          this.failure = new Error(event.errorMessage ?? '上下文压缩已停止，请检查后明确继续');
+          this.failure ??= new Error(event.errorMessage ?? '上下文压缩已停止，请检查后明确继续');
           // Never await abort from inside an active hook/listener.
           void session.abort();
         }
@@ -185,11 +223,14 @@ class PiConversationSession implements ConversationSession {
     });
   }
 
-  get isStreaming(): boolean { return !!this.running || !this.session.isIdle; }
+  get isStreaming(): boolean { return !!this.running || !!this.compacting || !!this.idleCompaction || !this.session.isIdle; }
   get lastTurnAnswered(): boolean { return this.answered; }
   get profile(): SessionProfile { return this.active; }
   select(profile: SessionProfile): void {
     resolveSessionModel(profile);
+    this.controlRevision++;
+    this.invalidateCompaction();
+    this.previousFrameTokens = undefined;
     this.selected = { ...profile };
     this.switched = true;
     this.usageReady = false;
@@ -198,6 +239,8 @@ class PiConversationSession implements ConversationSession {
   }
   setThinking(level: ThinkingLevel): void {
     if (!modelThinking(this.selected).levels.includes(level)) throw new Error('当前模型不支持此思考档位');
+    this.controlRevision++;
+    this.invalidateCompaction();
     this.session.sessionManager.appendCustomEntry('cloudhelm-thinking', level);
     this.preferred = level;
     if (!this.isStreaming && this.selected === this.active) this.session.setThinkingLevel(level);
@@ -210,6 +253,8 @@ class PiConversationSession implements ConversationSession {
     this.options.event({ type: 'thinking', value });
   }
   setReviewKey(jevKey?: string): void {
+    this.controlRevision++;
+    this.invalidateCompaction();
     const sameSelection = this.selected === this.active;
     this.active = { ...this.active, jevKey };
     this.selected = sameSelection ? this.active : { ...this.selected, jevKey };
@@ -223,8 +268,57 @@ class PiConversationSession implements ConversationSession {
     this.session.setThinkingLevel(this.preferred);
     this.publishThinking();
   }
-  contextTokens(): number {
-    return this.session.getContextUsage()?.tokens ?? Math.ceil(Buffer.byteLength(JSON.stringify(this.session.messages), 'utf8') / 2) + 4096;
+  private generation(): string { return JSON.stringify([this.controlRevision, this.options.requestGeneration?.()]); }
+  contextSnapshot(systemPrompt?: string) {
+    return sessionContextSnapshot(this.session, this.selected, conversationSystemPrompt(this.options.systemPrompt),
+      conversationSystemPrompt(systemPrompt ?? this.options.currentSystemPrompt?.() ?? this.options.systemPrompt), !this.switched,
+      this.previousFrameTokens, this.generation());
+  }
+  contextTokens(): number { return this.contextSnapshot().budget.usedTokens; }
+
+  /** Called by the lifecycle hook, which cannot grant normal conversation/tool access. */
+  assertCompactionActive(): void {
+    if (this.idleCompaction) this.assertIdleLease(this.idleCompaction);
+    else this.options.assertActive();
+  }
+  private assertIdleLease(active: ActiveCompaction): void {
+    active.controller.signal.throwIfAborted(); active.lease.signal.throwIfAborted(); active.lease.assertValid();
+    if (this.idleCompaction !== active || this.selected !== active.selected || this.generation() !== active.generation)
+      throw new Error('发送准备租约已失效');
+  }
+  private invalidateCompaction(): void {
+    if (this.idleCompaction) { this.idleCompaction.controller.abort(); this.session.abortCompaction(); }
+  }
+  async compactIdle(lease: IdleCompactionLease): Promise<void> {
+    if (this.isStreaming) return Promise.reject(new Error('会话尚未空闲，不能整理上下文'));
+    lease.signal.throwIfAborted(); lease.assertValid();
+    const active: ActiveCompaction = { lease, controller: new AbortController(), selected: this.selected,
+      generation: this.generation(), contextRevision: this.contextSnapshot().revision };
+    this.idleCompaction = active;
+    const abort = () => { active.controller.abort(); this.session.abortCompaction(); };
+    lease.signal.addEventListener('abort', abort, { once: true });
+    const run = this.runIdleCompaction(active).finally(() => {
+      lease.signal.removeEventListener('abort', abort);
+      if (this.idleCompaction === active) this.idleCompaction = undefined;
+      if (this.compacting === run) this.compacting = undefined;
+      this.options.event({ type: 'activity' });
+    });
+    this.compacting = run; this.options.event({ type: 'activity' });
+    return run;
+  }
+  private async runIdleCompaction(active: ActiveCompaction): Promise<void> {
+    this.failure = undefined;
+    try {
+      await this.prepareModel(); this.assertIdleLease(active);
+      // Native compact starts by aborting the agent: check again after every
+      // asynchronous preparation and hold exclusive access until it settles.
+      if (this.running || !this.session.isIdle || this.contextSnapshot().revision !== active.contextRevision)
+        throw new Error('活动上下文已变化，不能整理');
+      await this.session.compact();
+      this.assertIdleLease(active);
+      if (this.failure) throw this.failure;
+      this.publishUsage();
+    } catch (error) { throw this.failure ?? error; }
   }
   prompt(text: string, document?: MessageDocument): Promise<void> {
     return this.runTurn(async () => {
@@ -236,7 +330,8 @@ class PiConversationSession implements ConversationSession {
     return this.runTurn(() => this.session.sendCustomMessage({ customType: 'cloudhelm-control', content: text, display: false }, { triggerTurn: true }));
   }
   private runTurn(start: () => Promise<void>): Promise<void> {
-    if (this.running) return Promise.reject(new Error('会话正在处理，请等待当前请求结束'));
+    if (this.isStreaming) return Promise.reject(new Error('会话正在处理，请等待当前请求结束'));
+    this.controlRevision++;
     const run = this.executeTurn(start).finally(() => {
       if (this.running === run) this.running = undefined;
       this.reasoningStream.clear();
@@ -247,28 +342,43 @@ class PiConversationSession implements ConversationSession {
     return run;
   }
   private async executeTurn(start: () => Promise<void>): Promise<void> {
+    this.responseAttempt = undefined;
     this.failure = undefined;
     this.answered = false;
     this.options.assertActive();
     await this.prepareModel();
     this.options.assertActive();
-    await start();
-    await this.session.waitForIdle();
+    try {
+      await start();
+      await this.session.waitForIdle();
+    } catch (error) {
+      // Provider/compaction wrappers may replace a rejected reservation with a
+      // generic connection error. Preserve the earlier authoritative failure.
+      throw this.failure ?? error;
+    }
     this.project();
     this.publishUsage();
     if (this.failure) throw this.failure;
   }
-  async steer(text: string, document?: MessageDocument): Promise<void> { this.pendingDocuments.push(document); await this.session.steer(text); }
+  async steer(text: string, document?: MessageDocument): Promise<void> {
+    this.controlRevision++;
+    if (this.idleCompaction) { this.invalidateCompaction(); throw new Error('上下文正在整理，消息未投递，请重新发送'); }
+    this.pendingDocuments.push(document); await this.session.steer(text);
+  }
   async context(text: string): Promise<void> {
+    this.controlRevision++;
+    if (this.idleCompaction) { this.invalidateCompaction(); throw new Error('整理期间上下文发生变化'); }
     await this.session.sendCustomMessage({ customType: 'cloudhelm-control', content: text, display: false }, { triggerTurn: false });
   }
-  abort(): Promise<void> { return this.session.abort(); }
+  abort(): Promise<void> { this.responseAttempt = undefined; this.controlRevision++; this.invalidateCompaction(); return this.session.abort(); }
   async waitForIdle(): Promise<void> {
+    await this.compacting?.catch(() => {});
     await this.running?.catch(() => {});
     await this.session.waitForIdle();
   }
-  clearQueue(): void { this.session.clearQueue(); this.pendingDocuments.length = 0; }
+  clearQueue(): void { this.controlRevision++; this.invalidateCompaction(); this.session.clearQueue(); this.pendingDocuments.length = 0; }
   dispose(): void {
+    this.invalidateCompaction();
     this.reasoningStream.clear();
     this.session.dispose();
     void rm(this.cwd, { recursive: true, force: true });
@@ -281,8 +391,8 @@ class PiConversationSession implements ConversationSession {
       const message = entry.message;
       if (message.role === 'toolResult' && message.toolName === 'ask_user' && !message.isError) {
         const answer = message.content.filter((part) => part.type === 'text').map((part) => part.text).join('');
-        this.options.event({ type: 'text', value: { entryId: entry.id, role: 'user',
-          text: `[需求澄清回答]\n${answer}`, createdAt: message.timestamp } });
+        this.options.event({ type: 'text', value: { entryId: entry.id, role: 'user', source: 'clarification',
+          clarificationToolCallId: message.toolCallId, text: `[需求澄清回答]\n${answer}`, createdAt: message.timestamp } });
       }
       if (message.role !== 'user' && message.role !== 'assistant') continue;
       if (message.role === 'user' && !this.documents.has(entry.id) && this.pendingDocuments.length) {
@@ -297,7 +407,7 @@ class PiConversationSession implements ConversationSession {
         : message.content.filter((part) => part.type === 'text').map((part) => part.text).join('').trim();
       const reasoning = message.role === 'assistant' ? reasoningView(message) : undefined;
       if (text || reasoning) this.options.event({ type: 'text', value: { entryId: entry.id, reasoning, document,
-        role: message.role === 'assistant' ? 'agent' : 'user', text: document ? document.parts.map((part) => part.type === 'text' ? part.text : part.reference.kind === 'terminal' ? '[Terminal]' : '[粘贴文本]').join('') : text, createdAt: message.timestamp,
+        role: message.role === 'assistant' ? 'agent' : 'user', source: message.role === 'assistant' ? 'assistant' : 'input', text: document ? document.parts.map((part) => part.type === 'text' ? part.text : part.reference.kind === 'terminal' ? '[Terminal]' : '[粘贴文本]').join('') : text, createdAt: message.timestamp,
         model: message.role === 'assistant' ? { provider: message.provider, modelId: message.model } : undefined } });
     }
   }
@@ -307,6 +417,7 @@ class PiConversationSession implements ConversationSession {
     const provider = last?.role === 'assistant' && !['error', 'aborted'].includes(last.stopReason)
       && last.usage.input + last.usage.output + last.usage.cacheRead + last.usage.cacheWrite > 0;
     this.options.event({ type: 'usage', value: {
+      budget: this.contextSnapshot().budget, capacity: modelCapacity(this.selected),
       model: { provider: this.selected.provider, modelId: this.selected.modelId },
       usedTokens: usage?.tokens ?? null, contextWindow: usage?.contextWindow ?? null,
       source: usage?.tokens == null ? 'unknown' : provider ? 'provider' : 'estimate', updatedAt: Date.now()

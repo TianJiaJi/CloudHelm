@@ -100,6 +100,18 @@ export async function checkComposer(page, screenshot) {
     } });
   });
   await page.getByRole('button', { name: '上下文用量，剩余 75%' }).waitFor();
+  await page.evaluate(async () => {
+    const task = (await window.cloudhelm.snapshot()).conversations[0];
+    window.fixture.inject({ type: 'context-usage', taskId: task.id, value: {
+      model: { provider: task.provider, modelId: task.modelId }, usedTokens: 32000, contextWindow: 128000,
+      request: 3, source: 'provider', updatedAt: Date.now(),
+      budget: { contextWindow: 128000, usedTokens: 32000, outputReserve: 16000, safetyMargin: 2048, availableInput: 77952, source: 'provider' }
+    } });
+  });
+  await page.getByRole('button', { name: '上下文用量，可输入 61%' }).click();
+  await page.getByRole('menu', { name: '上下文用量', exact: true }).getByText(/输出预留 16,000 · 安全余量 2,048/u).waitFor();
+  await screenshot('composer-input-budget.png');
+  await page.keyboard.press('Escape');
 
   const panel = page.locator('[class*="agentPanel"]').first();
   const resizer = page.getByRole('separator', { name: '调整 AI 助手宽度' });

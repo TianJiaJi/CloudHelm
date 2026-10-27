@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PrivilegedSessions, type SafetyGate, type TerminalManager } from '@cloudhelm/application';
 import { SshCommandTerminal, SshTransport, SuSession } from '@cloudhelm/adapters';
-import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation, RawTerminal } from '@cloudhelm/core';
+import type { ExecutionOptions, OperationExecutor, OperationResult, OperationIntent, ProposedOperation, RawTerminal } from '@cloudhelm/core';
 import type { InputRequestView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
@@ -59,7 +59,7 @@ export class PrivilegedRuntime implements OperationExecutor {
 
   forTask(taskId: string): PrivilegedTaskAccess {
     return {
-      request: (host, command, cwd, reason, goal, gate, signal) => this.request(taskId, host, command, cwd, reason, goal, gate, signal),
+      request: (host, command, cwd, reason, goal, gate, signal, intent) => this.request(taskId, host, command, cwd, reason, goal, gate, signal, intent),
       terminal: (id, hostId) => { this.grants.get(id, taskId, hostId); return this.entries.get(id)!.terminalId; },
       scope: (terminalId) => {
         const entry = [...this.entries.values()].find((e) => e.taskId === taskId && e.terminalId === terminalId);
@@ -68,12 +68,20 @@ export class PrivilegedRuntime implements OperationExecutor {
         return { sessionId: entry.id, loginAs: entry.mode === 'ssh' ? 'root' : entry.host.username, runAs: 'root', connectionGeneration: 1 };
       },
       owns: (terminalId) => [...this.entries.values()].some((e) => e.taskId === taskId && e.terminalId === terminalId),
+      confirmed: () => [...this.entries.values()].flatMap((entry) => {
+        try {
+          this.grants.get(entry.id, taskId, entry.host.id);
+          if (!this.deps.terminal.isAgentOwner(entry.terminalId)
+            || entry.sourceGeneration !== this.deps.ssh.connectionGeneration(entry.host.id)) return [];
+          return [{ sessionId: entry.id, hostId: entry.host.id, method: entry.mode, runAs: 'root' as const }];
+        } catch { return []; } // Projection never grants/revives a session on inspection failure.
+      }),
       close: () => this.closeTask(taskId)
     };
   }
 
   private async request(taskId: string, host: RuntimeHost, command: string, cwd: string, reason: string, goal: string,
-    gate: SafetyGate, signal?: AbortSignal): Promise<{ sessionId: string; method: 'ssh' | 'su'; runAs: 'root' }> {
+    gate: SafetyGate, signal?: AbortSignal, intent?: OperationIntent): Promise<{ sessionId: string; method: 'ssh' | 'su'; runAs: 'root' }> {
     if (this.requesting.has(taskId)) throw new Error('Root session request already pending');
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -103,7 +111,7 @@ export class PrivilegedRuntime implements OperationExecutor {
           cwd, runAs: 'root', loginAs: entry.mode === 'ssh' ? 'root' : host.username, sessionId: entry.id, connectionGeneration: 1,
           policyRevision: host.policyRevision, allowedWorkingRoots: ['/'], protectedPaths: [...host.protectedPaths],
           protectedReadPaths: [...(host.protectedReadPaths ?? host.protectedPaths)],
-          protectedWritePaths: [...(host.protectedWritePaths ?? host.protectedPaths)], goal
+          protectedWritePaths: [...(host.protectedWritePaths ?? host.protectedPaths)], goal, intent
         } }, controller.signal);
         if (outcome.result?.status !== 'succeeded' || outcome.result.stdoutTail.trim() !== '0') throw new Error('Root identity could not be verified; session closed');
         this.grants.activate(entry.id, taskId, host.id);

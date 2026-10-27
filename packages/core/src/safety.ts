@@ -1,4 +1,6 @@
 import { isServiceQuery } from './service-observation.js';
+import { isDockerMetadataQuery } from './docker-query-policy.js';
+import { isBoundedDiagnosticCall } from './diagnostic-query-policy.js';
 import path from 'node:path';
 import type { CommandAnalysis, CommandCall, ProposedOperation, SafetyDecision, SafetySettings } from './model.js';
 
@@ -180,24 +182,7 @@ function isQuery(call: CommandCall): boolean {
   const name = path.posix.basename(call.name);
   if (![name, `/bin/${name}`, `/usr/bin/${name}`].includes(call.name)) return false;
   if (isServiceQuery(name, call.args)) return true;
-  // Exact Docker metadata/listing subcommands cannot change the daemon. Keep
-  // the grammar narrow: a global -H/--host, context switch or mutation option
-  // is never enough to mint the read-only capability.
-  if (name === 'docker') {
-    if (call.args.length === 1 && call.args[0] === 'version') return true;
-    const flags = call.args[0] === 'ps' ? call.args.slice(1)
-      : call.args[0] === 'container' && call.args[1] === 'ls' ? call.args.slice(2)
-        : call.args[0] === 'network' && call.args[1] === 'ls' ? call.args.slice(2) : undefined;
-    if (!flags) return false;
-    for (let index = 0; index < flags.length; index++) {
-      const flag = flags[index]!;
-      if (['-a', '--all', '--no-trunc', '-q', '--quiet', '-s', '--size'].includes(flag)) continue;
-      if (flag !== '--format' && !flag.startsWith('--format=')) return false;
-      const format = flag === '--format' ? flags[++index] : flag.slice('--format='.length);
-      if (!format || !/^(?:table )?\{\{\.[A-Za-z][A-Za-z0-9]*\}\}(?:(?:\\t|\t)\{\{\.[A-Za-z][A-Za-z0-9]*\}\})*$/u.test(format)) return false;
-    }
-    return true;
-  }
+  if (name === 'docker') return isDockerMetadataQuery(call.args);
   if ((BAD_DISK_TOOLS.has(name) || name.startsWith('mkfs.')) && call.args.length === 1
     && ['--help', '--version', '-h', '-V'].includes(call.args[0]!)) return true;
   if (name === 'fdisk') return ['-l', '--list'].includes(call.args[0] ?? '')
@@ -252,14 +237,16 @@ export function isReadOnlyQuery(analysis: CommandAnalysis): boolean {
 function literalReadList(analysis: CommandAnalysis): boolean {
   return !analysis.hasError && !analysis.hasExpansion && !analysis.hasPipeline && !analysis.hasRedirection
     && !!analysis.steps && analysis.steps.length > 1 && analysis.calls.length === analysis.steps.length
-    && analysis.steps.every(({ call }, index) => !call.dynamic && !call.redirects && isQuery(call)
+    && analysis.steps.every(({ call }, index) => !call.dynamic && !call.redirects && (isQuery(call) || isBoundedDiagnosticCall(call))
       && analysis.calls[index]?.name === call.name && analysis.calls[index]?.args.length === call.args.length
       && call.args.every((arg, argIndex) => analysis.calls[index]?.args[argIndex] === arg));
 }
 
 /** Effect-free capability: privileged file inspection still takes its normal review path. */
 export function isEffectFreeQuery(analysis: CommandAnalysis): boolean {
-  return isReadOnlyQuery(analysis) || literalReadList(analysis) || plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true);
+  const diagnostic = !analysis.hasError && !analysis.hasExpansion && !analysis.hasPipeline && !analysis.hasRedirection
+    && !analysis.hasCompound && analysis.calls.length === 1 && isBoundedDiagnosticCall(analysis.calls[0]!);
+  return isReadOnlyQuery(analysis) || diagnostic || literalReadList(analysis) || plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true);
 }
 
 function isLowRiskCommand(analysis: CommandAnalysis, operation: ProposedOperation): boolean {

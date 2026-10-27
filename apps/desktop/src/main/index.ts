@@ -224,7 +224,7 @@ void app.whenReady().then(async () => {
       && (event.type === 'approval-open' || event.type === 'input-open')) {
       new Notification({ title: 'CloudHelm', body: 'AI 需要你处理一项请求。' }).show();
     }
-  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event));
+  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event), (command) => state.requestBudget(command));
   // Reclassify only provably read-only completed legacy commands before the
   // worker restores host locks. Ambiguous commands remain blocked.
   await state.normalizeHistoricalQueries(new BashAnalyzer());

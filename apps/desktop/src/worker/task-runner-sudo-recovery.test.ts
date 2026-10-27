@@ -5,7 +5,7 @@ import type { InputRequest, OperationExecutor, RawTerminal } from '@cloudhelm/co
 import type { TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { OperationInputBridge } from './operation-input-bridge.js';
-import { TaskRunner, type TaskSignals } from './task-runner.js';
+import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
 
 class SudoTerminal implements RawTerminal {

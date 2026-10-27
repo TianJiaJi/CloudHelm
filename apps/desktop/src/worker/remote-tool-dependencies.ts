@@ -9,5 +9,5 @@ export interface RemoteToolDependencies {
   ensureTerminal(hostId: string, sessionId?: string): Promise<string>;
   requestRoot?(host: RuntimeHost, command: string, cwd: string, reason: string, signal?: AbortSignal): Promise<unknown>;
   scope(host: RuntimeHost, terminalId: string, cwd?: string): OperationScope;
-  runOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string): Promise<{ result?: import('@cloudhelm/core').OperationResult; content: Array<{ type: 'text'; text: string }>; details: undefined; isError: boolean }>;
+  runOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string): Promise<{ result?: import('@cloudhelm/core').OperationResult; readOnly?: boolean; content: Array<{ type: 'text'; text: string }>; details: unknown; isError: boolean }>;
 }

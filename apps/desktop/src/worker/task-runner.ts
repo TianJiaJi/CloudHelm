@@ -1,29 +1,36 @@
-import { operationFeedback } from './operation-feedback.js';
+import { blockedOperationFeedback, operationToolResult } from './operation-feedback.js';
+import { decideTaskCompletion, reportRequiredOperations } from './task-completion.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { ClarificationCoordinator, SafetyGate, type TerminalManager } from '@cloudhelm/application';
 import { AiRiskEvaluator, BashAnalyzer, createConversationSession } from '@cloudhelm/adapters';
-import { operationIntentKey, isEffectFreeQuery, isReadOnlyQuery, isSudoStatusProbe, safeDiagnostic, serialCall, type ConversationSession, type SessionStorage, type DiagnosticEvent, sudoTarget, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
-import type { AppEvent, ApprovalView, OperationView, InterruptionSource, UserInterruption, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
-import { isActiveTaskStatus, operationOutcomeResolvable } from '@cloudhelm/contracts';
+import { createTaskReviewer, resolveTaskReviewer } from './task-review-client.js';
+import { taskSessionEvents } from './task-session-events.js';
+import type { TaskSignals } from './task-signals.js';
+export type { TaskSignals } from './task-signals.js';
+import { TaskRequestBudget } from './task-request-budget.js';
+import { taskPreparation, assertPreparedInput, type PreparationSnapshot } from './task-preparation.js';
+import { authorizeTaskInput } from './task-input-authorization.js';
+import { interruptionContext } from './task-input-context.js';
+import { taskContextSnapshot } from './task-context.js';
+import { TaskProgress } from './task-progress.js';
+import { observeProgressTools } from './task-progress-observer.js';
+import { RequestBudgetError } from '@cloudhelm/core';
+import { operationIntentKey, isReadOnlyQuery, isSudoStatusProbe, safeDiagnostic, serialCall, type ConversationSession, type SessionStorage, type DiagnosticEvent, sudoTarget, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
+import type { ApprovalView, OperationView, InterruptionSource, UserInterruption, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
+import { isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
 import type { LocalScope } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
-import { hasUnresolvedOperation, recoveryContextMessage } from './recovery-context.js';
+import { recoveryContextMessage } from './recovery-context.js';
+import { mergeOperationViews } from './runtime-facts.js';
+import { applyCommittedRiskAcceptance } from './risk-acceptance.js';
+import { deriveInputIntent, TaskIntent } from './task-intent.js';
 import { createRemoteTools } from './remote-tools.js';
-import { agentPrompt } from './agent-prompt.js';
+import { createTaskPrompt } from './task-prompt.js';
 import { approvalPresentation } from './approval-presentation.js';
 import { inputPlan } from './operation-input-plan.js';
 import { WorkJournal } from './work-journal.js';
 import { LocalFileAccess } from './local-file-access.js';
-
-export interface TaskSignals {
-  clearCredentials?(): void;
-  diagnostic?(event: DiagnosticEvent): void;
-  event(event: AppEvent | { type: 'approval-open'; value: ApprovalView } | { type: 'approval-close'; id: string }
-    | { type: 'operation'; value: OperationView } | { type: 'task-status'; taskId: string; status: TaskStatus; summary?: string; resumeReason?: ResumeReason; requestCount?: number }): void;
-  requestApproval(view: ApprovalView): Promise<boolean>;
-  cancelApproval(id: string): void;
-}
 
 export class TaskRunner {
   private readonly clarification: ClarificationCoordinator;
@@ -33,17 +40,16 @@ export class TaskRunner {
   private verificationStartCount = 0;
   private controlVersion = 0;
   private resuming?: { version: number; promise: Promise<void> };
-  private currentGoal: string;
+  private readonly intent: TaskIntent;
   private readonly localFiles: LocalFileAccess;
   private readonly analyzer = new BashAnalyzer();
   private agent?: ConversationSession;
+  private readonly budget: TaskRequestBudget;
   private requestCount = 0;
   private requestStarted = 0;
-  private noProgress = 0;
+  private readonly progress = new TaskProgress();
   private needsRecovery = false;
   private pendingInterruption?: UserInterruption;
-  private lastOperationCount = 0;
-  private operationCount = 0;
   private lastFailureKey = '';
   private sameFailureCount = 0;
   private consecutiveAiDenials = 0;
@@ -77,35 +83,34 @@ export class TaskRunner {
     private readonly storage?: SessionStorage,
     private readonly scripts?: ScriptInspector
   ) {
-    this.currentGoal = task.goal;
-    this.resumeReason = task.resumeReason ?? (task.verificationState?.status === 'unverified' ? 'report' : undefined);
-    const firstUnverified = priorOperations.findIndex((operation) => task.verificationState?.operationIds.includes(operation.id));
-    this.verificationStartCount = firstUnverified >= 0 ? firstUnverified : task.resumeReason === 'report' ? 0 : priorOperations.length;
+    this.intent = new TaskIntent(task, (value) => signals.event({ type: 'task-intent', taskId: task.id, value }));
+    const pendingReport = task.resumeReason === 'report' || (task.verificationState?.status === 'unverified' && !task.report);
+    this.resumeReason = task.resumeReason ?? (pendingReport ? 'report' : undefined);
+    const initialOperations = this.operationViews();
+    const firstUnverified = initialOperations.findIndex((operation) => operationNeedsVerification(operation)
+      || (pendingReport && task.verificationState?.operationIds.includes(operation.id)));
+    this.verificationStartCount = firstUnverified >= 0 ? firstUnverified : task.resumeReason === 'report' ? 0 : initialOperations.length;
     for (const operation of priorOperations) this.replayProtected.add(operation.id);
     this.clarification = new ClarificationCoordinator(task.id, (request) => {
+      if (request.status === 'answered') { this.intent.clarify(request); this.progress.observe('clarification', request.id); }
       this.signals.event({ type: 'clarification', value: request });
       if (request.status === 'pending') this.setStatus('waiting-user');
-      if (request.status === 'answered') {
-        this.currentGoal += `\n用户需求澄清：${JSON.stringify({ questions: request.questions, answers: request.answers })}`;
-        this.setStatus('running');
-      }
+      if (request.status === 'answered') this.setStatus('running');
     }, () => { this.setStatus('paused', '需求澄清已停止，AI 不会猜测回答或自动继续。'); this.agent?.abort(); });
     this.profile = profile;
     this.requestCount = task.requestCount;
-    this.journal = new WorkJournal(task.id, () => [...this.priorOperations, ...this.operations.values()], signals.event, this.readLog, (operation) => {
-      if (this.executor.reconcile && !this.executor.reconcile(operation.hostId, operation.id)) return false;
-      return true;
-    }, (operation) => {
+    this.budget = new TaskRequestBudget(task.id, signals.budget);
+    this.journal = new WorkJournal(task.id, () => this.operationViews(), signals.event, this.readLog,
+      (operation) => this.executor.reconcile?.(operation.hostId, operation.id) ?? false, (operation) => {
       this.operations.set(operation.id, operation);
+      this.progress.observe('resolution', JSON.stringify([operation.id, operation.reconciliation?.kind]));
       this.signals.event({ type: 'operation', value: operation });
       this.publishExecution();
     }, () => this.verificationOperations());
     this.localFiles = new LocalFileAccess(task.localScopes ?? []);
   }
 
-  async start(restored = false, thinkingLevel?: import('@cloudhelm/core').ThinkingLevel, document?: import('@cloudhelm/core').MessageDocument, initialMessage?: string, intent?: string): Promise<void> {
-    const version = this.controlVersion;
-    if (!restored) this.setStatus('running');
+  private async initializeSession(thinkingLevel?: import('@cloudhelm/core').ThinkingLevel): Promise<void> {
     const gate = this.createGate();
     const remoteTools = createRemoteTools({ hosts: this.hosts, localFiles: this.localFiles,
       ensureTerminal: async (id, sessionId) => {
@@ -119,71 +124,65 @@ export class TaskRunner {
       requestRoot: async (host, command, cwd, reason, signal) => {
         this.assertRemoteActive();
         if (!this.privileged) throw new Error('Root sessions unavailable');
-        try { return await this.privileged.request(host, command, cwd, reason, this.currentGoal, gate, signal); }
+        try { return await this.privileged.request(host, command, cwd, reason, this.intent.goal(), gate, signal, this.intent.snapshot()); }
         catch (error) { this.blockRemote('Root 会话未建立或已失效，请处理后明确继续。'); throw error; }
       }, scope: (host, id, cwd) => this.scope(host, id, cwd),
       runOperation: (gate, operation, signal, label) => this.runOperation(gate, operation, signal, label) }, gate);
+    const currentSystemPrompt = createTaskPrompt(this.task, this.hosts, () => this.operationViews(), () => this.verificationOperations(), this.privileged, () => this.journal.hasReport(), () => this.intent.snapshot());
     this.agent = await createConversationSession({
       thinkingLevel, profile: this.profile, storage: this.storage,
-      systemPrompt: agentPrompt(this.hosts, this.task.localScopes ?? [], '', this.task.reviewModesByHost),
-      currentSystemPrompt: () => agentPrompt(this.hosts, this.task.localScopes ?? [], '', this.task.reviewModesByHost),
-      tools: [...remoteTools, ...this.journal.tools()],
+      systemPrompt: currentSystemPrompt(), currentSystemPrompt,
+      tools: observeProgressTools([...remoteTools, ...this.journal.tools()], this.progress, () => this.operationViews()),
       clarification: { ask: (id, questions, signal) => {
         this.assertRemoteActive();
         return this.clarification.ask(id, questions, signal);
       } },
       assertActive: () => this.assertRemoteActive(),
-      beforeRequest: (purpose, profile) => {
+      requestGeneration: () => this.requestGeneration(),
+      beforeRequest: async (purpose, profile, attempt, signal) => {
         this.assertRemoteActive();
-        if (this.requestCount >= this.task.requestLimit || this.noProgress >= 10) {
-          this.setStatus('paused', '已达到请求上限或连续无进展次数，请检查后继续。');
-          throw new Error('Conversation request budget reached');
+        if (this.progress.stalled) {
+          this.setStatus('paused', '连续无进展，请检查后继续。');
+          throw new Error('Conversation progress limit reached');
         }
+        let roundId: string;
+        try { const budget = await this.budget.reserve(attempt, signal); this.requestCount = budget.totalUsed; roundId = budget.roundId; }
+        catch (error) {
+          if (error instanceof RequestBudgetError && error.code === 'budget-exhausted' && this.status === 'running')
+            this.setStatus('paused', '本轮请求预算已用尽，请显式追加100次后继续。', 'budget-exhausted');
+          throw error;
+        }
+        this.assertRemoteActive(); signal?.throwIfAborted();
         // Pi's session profile may still carry an older extra reviewer object.
         // Reviewer policy is worker-owned and updated independently of model selection.
         this.profile = { ...this.profile, ...profile, reviewer: this.profile.reviewer };
-        this.requestCount++;
         this.requestStarted = Date.now();
         this.signals.event({ type: 'model-request', taskId: this.task.id,
-          model: { provider: profile.provider, modelId: profile.modelId }, purpose, request: this.requestCount, createdAt: Date.now() });
+          model: { provider: profile.provider, modelId: profile.modelId }, purpose, roundId, logicalRequestId: attempt.logicalRequestId, attempt: attempt.attempt, transport: attempt.transport, request: this.requestCount, createdAt: Date.now() });
         this.signals.event({ type: 'task-status', taskId: this.task.id, status: this.status, requestCount: this.requestCount });
       },
-      event: (event) => {
-        if (event.type === 'reasoning-progress') this.signals.event({ type: 'reasoning-progress', taskId: this.task.id, value: event.value });
-        if (event.type === 'thinking') this.signals.event({ type: 'thinking', taskId: this.task.id, value: event.value });
-        if (event.type === 'activity') this.publishExecution();
-        if (event.type === 'text') {
-          if (event.value.role === 'user' && !event.value.document) this.currentGoal = event.value.text;
-          this.signals.event({ type: 'task-message', taskId: this.task.id, ...event.value });
-        }
-        if (event.type === 'usage') this.signals.event({ type: 'context-usage', taskId: this.task.id,
-          value: { ...event.value, request: this.requestCount } });
-        if (event.type === 'compaction') {
-          this.signals.event({ type: 'context-compaction', taskId: this.task.id, status: event.status });
-          if (event.status === 'failed') this.setStatus('paused', event.error);
-        }
-        if (event.type === 'tool-start') {
-          const args = event.args as Record<string, unknown>;
-          const string = (key: string) => typeof args?.[key] === 'string' ? args[key] as string : undefined;
-          this.diagnostic({ event: 'tool.start', requestId: event.id, tool: event.name,
-            hostId: string('hostId'), command: string('command'), cwd: string('cwd'), path: string('path'),
-            size: typeof args?.content === 'string' ? Buffer.byteLength(args.content) : undefined,
-            sha256: typeof args?.content === 'string' ? createHash('sha256').update(args.content).digest('hex') : undefined });
-        }
-        if (event.type === 'tool-end') this.diagnostic({ event: 'tool.end', requestId: event.id,
-          tool: event.name, status: event.isError ? 'failed' : 'succeeded' });
-        if (event.type === 'response') this.diagnostic({ event: 'model.response', request: this.requestCount, durationMs: Date.now() - this.requestStarted });
-        if (event.type === 'turn-end') {
-          this.noProgress = this.operationCount === this.lastOperationCount ? this.noProgress + 1 : 0;
-          this.lastOperationCount = this.operationCount;
-        }
-      }
+      event: taskSessionEvents(this.task.id, { event: (event) => this.signals.event(event), usageBudget: () => this.agent ? this.preparationSnapshot().budget : undefined,
+        request: () => ({ count: this.requestCount, started: this.requestStarted }), activity: () => this.publishExecution(),
+        compactionFailed: (error) => { if (this.status === 'running') this.setStatus('paused', error); },
+        diagnostic: (event) => this.diagnostic(event), turnEnd: () => this.progress.endTurn() })
     });
+  }
+
+  /** In-memory session/frame only; no prompt, tools, ordinary budget or task status transition. */
+  async previewContext() {
+    await this.initializeSession();
+    return this.preparationSnapshot();
+  }
+  async start(restored = false, thinkingLevel?: import('@cloudhelm/core').ThinkingLevel, document?: import('@cloudhelm/core').MessageDocument, initialMessage?: string, intent?: string): Promise<void> {
+    const version = this.controlVersion;
+    if (!restored) this.setStatus('running');
+    await this.initializeSession(thinkingLevel);
+    if (!this.agent) throw new Error('对话初始化未完成');
     const interrupted = version !== this.controlVersion;
     if (restored || interrupted) { this.needsRecovery = true; this.setStatus('paused', undefined, this.resumeReason); return; }
     this.setStatus('running');
     try {
-      this.currentGoal = intent ?? (document ? this.task.goal : initialMessage ?? this.task.goal);
+      this.intent.begin(deriveInputIntent(initialMessage ?? this.task.goal, document, intent), document?.requestId);
       await this.agent.prompt(initialMessage ?? this.task.goal, document);
       if (this.status === 'running') this.finishRun();
     } catch (error) {
@@ -194,29 +193,50 @@ export class TaskRunner {
   answerClarification(id: string, answers: unknown): void { this.clarification.answer(id, answers); }
   cancelClarification(id: string): void { this.clarification.cancel(id); }
 
-  contextTokens(): number | undefined { return this.agent?.contextTokens?.(); }
+  preparationSnapshot(scopes: LocalScope[] = [], pendingIntent?: import('@cloudhelm/contracts').TaskIntentState): PreparationSnapshot {
+    return taskContextSnapshot({ agent: this.agent, task: this.task, hosts: this.hosts, scopes,
+      operations: this.operationViews(), round: this.verificationOperations(), intent: this.intent.snapshot(), pendingIntent, privileged: this.privileged,
+      hasReport: this.journal.hasReport(), needsRecovery: this.needsRecovery || ['paused', 'failed', 'recovering', 'human-control'].includes(this.status),
+      interruption: this.pendingInterruption, modelIdle: !this.agent?.isStreaming && !this.isRunning() && !this.stopping,
+      remoteIdle: !this.terminal.pendingOperations(this.task.id).length && !this.operationViews().some((op) =>
+        ['proposed', 'approved', 'running', 'unknown'].includes(op.status) && !op.reconciledAt) });
+  }
+  preparationContext(requestId: string, profile: RuntimeProfile, signal: AbortSignal, scopes: LocalScope[] = []) {
+    return taskPreparation({ agent: this.agent, expectedProfile: profile, signal, profile: () => this.profile,
+      generation: () => this.requestGeneration(), snapshot: () => this.preparationSnapshot(scopes),
+      reserve: (attempt, requestSignal) => this.budget.reserve(attempt, requestSignal, requestId), charged: (model, budget, attempt) => {
+        this.requestCount = budget.totalUsed; this.requestStarted = Date.now();
+        this.signals.event({ type: 'model-request', taskId: this.task.id, purpose: 'compaction', request: this.requestCount,
+          model: { provider: model.provider, modelId: model.modelId }, roundId: budget.roundId, logicalRequestId: attempt.logicalRequestId, attempt: attempt.attempt, transport: attempt.transport, createdAt: this.requestStarted });
+      } });
+  }
 
-  message(text: string, document?: import('@cloudhelm/core').MessageDocument, intent?: string): void {
+  message(text: string, document?: import('@cloudhelm/core').MessageDocument, intent?: string, preparedRevision?: string): void {
     if (this.status === 'waiting-user') throw new Error('请先回答需求澄清，或停止本轮对话');
     if (!this.agent) throw new Error('Task has not started');
     if (this.agent.isStreaming && !['running', 'waiting-review'].includes(this.status)) throw new Error('AI 正在暂停，请稍后再发送消息。');
-    this.controlVersion++;
     const continueUnfinished = ['paused', 'failed', 'recovering', 'human-control'].includes(this.status)
-      && this.verificationOperations().some((operation) => operation.status === 'succeeded' && operation.readOnly !== true);
+      && this.verificationOperations().some((operation) => operationNeedsVerification(operation)
+        || (operation.status === 'succeeded' && operation.readOnly !== true));
     // A fresh user message after a clean completion may intentionally request the same action again.
-    if (!this.needsRecovery && !this.remoteBlocked && !this.agent.isStreaming
-      && this.status === 'answered' && this.resumeReason !== 'report') this.replayProtected.clear();
+    const newRound = !this.needsRecovery && !this.remoteBlocked && !this.agent.isStreaming
+      && this.status === 'answered' && this.resumeReason !== 'report';
+    const nextIntent = this.intent.previewInput(deriveInputIntent(text, document, intent), newRound, document?.requestId);
+    const snapshot = this.preparationSnapshot([], preparedRevision ? undefined : nextIntent);
+    assertPreparedInput(snapshot, preparedRevision ?? snapshot.revision, text);
+    this.controlVersion++;
+    if (newRound) this.replayProtected.clear();
     if (['paused', 'failed', 'recovering', 'human-control'].includes(this.status)) this.needsRecovery = true;
     this.remoteBlocked = undefined;
-    this.currentGoal = intent ?? (document ? document.parts.filter((part) => part.type === 'text').map((part) => part.text).join('') || '请分析这段终端输出' : text);
+    this.intent.input(deriveInputIntent(text, document, intent), newRound, document?.requestId);
     this.journal.resetReport();
     this.signals.event({ type: 'verification-state', taskId: this.task.id });
     if (this.agent.isStreaming) {
       void this.agent.steer(text, document).catch((error: unknown) => this.blockRemote(String(error)));
       return;
     }
-    this.noProgress = 0;
-    if (!continueUnfinished) this.verificationStartCount = this.priorOperations.length + this.operations.size;
+    this.progress.reset();
+    if (!continueUnfinished) this.verificationStartCount = this.operationViews().length;
     this.journal.resetReport();
     this.setStatus('running');
     void this.continueWithMessage(this.agent, text, document);
@@ -225,7 +245,7 @@ export class TaskRunner {
   private async continueWithMessage(agent: ConversationSession, text: string, document?: import('@cloudhelm/core').MessageDocument): Promise<void> {
     try {
       if (this.needsRecovery) {
-        await agent.context(recoveryContextMessage([...this.priorOperations, ...this.operations.values()]));
+        await agent.context(recoveryContextMessage(this.operationViews()));
         this.needsRecovery = false;
       }
       await this.appendInterruptionContext(agent);
@@ -238,7 +258,7 @@ export class TaskRunner {
 
   pause(): void {
     this.controlVersion++;
-    if (!['running', 'waiting-review', 'waiting-user', 'human-control'].includes(this.status)) return;
+    if (!['running', 'waiting-review', 'waiting-user', 'human-control'].includes(this.status)) { void this.agent?.abort(); return; }
     this.setStatus('paused', undefined, 'interrupted');
     this.clarification.cancel();
     this.agent?.abort();
@@ -254,7 +274,9 @@ export class TaskRunner {
     const reason = this.resumeReason;
     const version = ++this.controlVersion;
     const promise = this.resumeOnce(version, reason).catch((error: unknown) => {
-      if (version !== this.controlVersion || this.status === 'paused' || this.status === 'human-control') return;
+      if (version !== this.controlVersion) return;
+      if (error instanceof RequestBudgetError) throw error;
+      if (this.status === 'paused' || this.status === 'human-control') return;
       // User stop or a SafetyGate block already published the authoritative pause; ignore Pi's late abort error.
       if (this.status === 'running') this.setStatus('failed', error instanceof Error ? error.message : String(error), 'model');
       throw error;
@@ -268,6 +290,8 @@ export class TaskRunner {
   private async resumeOnce(version: number, reason: ResumeReason): Promise<void> {
     if (!this.agent) return;
     await this.agent.waitForIdle();
+    if (version !== this.controlVersion) return;
+    await this.budget.assertAvailable();
     if (version !== this.controlVersion) return;
     this.setStatus('running');
     for (const [hostId, previous] of this.terminalByHost) {
@@ -285,13 +309,13 @@ export class TaskRunner {
         return;
       }
     }
-    this.noProgress = 0;
+    this.progress.reset();
     this.journal.resetReport();
     this.remoteBlocked = undefined;
     this.setStatus('running');
     await this.appendInterruptionContext(this.agent);
     this.needsRecovery = false;
-    const operations = [...this.priorOperations, ...this.operations.values()];
+    const operations = this.operationViews();
     await this.agent.resumeWithContext(recoveryContextMessage(operations, reason));
     if (this.status === 'running') this.finishRun();
   }
@@ -312,19 +336,12 @@ export class TaskRunner {
     this.agent?.dispose();
     this.signals.clearCredentials?.();
     this.privileged?.close();
-    for (const terminalId of this.terminalByHost.values()) this.terminal.close(terminalId);
+    for (const terminalId of this.terminalByHost.values()) if (this.terminal.taskOf(terminalId) === this.task.id) this.terminal.close(terminalId);
     this.terminalByHost.clear();
   }
 
-  addAuthorization(hosts: RuntimeHost[], localScopes: LocalScope[]): void {
-    for (const host of hosts) if (!this.hosts.some((candidate) => candidate.id === host.id)) {
-      this.hosts.push(host);
-      this.task.hostIds.push(host.id);
-    }
-    this.task.localScopes.push(...localScopes);
-    this.signals.event({ type: 'task-message', taskId: this.task.id, role: 'system',
-      text: `授权范围已更新：${hosts.map((host) => host.label).join('、') || '主机不变'}；新增本地资料 ${localScopes.length} 项。`, createdAt: Date.now() });
-    // The next model request projects current backend authorization into its leading system message.
+  addAuthorization(hosts: RuntimeHost[], scopes: LocalScope[], prepared?: import('@cloudhelm/contracts/runtime').PreparedContext & { text: string }): void {
+    authorizeTaskInput(this.task, this.hosts, hosts, scopes, (next) => this.preparationSnapshot(next), (event) => this.signals.event(event), prepared);
   }
 
   private async ensureTerminal(hostId: string): Promise<string> {
@@ -373,7 +390,7 @@ export class TaskRunner {
       reviewerRevision: this.profile.reviewer?.revision ?? 1,
       allowedWorkingRoots: ['/srv', '/opt', `/home/${host.username}`, '/root'],
       protectedPaths: [...host.protectedPaths], protectedReadPaths: [...(host.protectedReadPaths ?? host.protectedPaths)],
-      protectedWritePaths: [...(host.protectedWritePaths ?? host.protectedPaths)], goal: this.currentGoal
+      protectedWritePaths: [...(host.protectedWritePaths ?? host.protectedPaths)], goal: this.intent.goal(), intent: this.intent.snapshot()
     };
   }
 
@@ -392,26 +409,25 @@ export class TaskRunner {
     const analysis = operation.kind === 'command' ? await this.analyzer.analyze(operation.command).catch(() => undefined) : undefined;
     if (!analysis || !isReadOnlyQuery(analysis)) {
       const key = operationIntentKey(operation);
-      const denied = !manualReview && [...this.priorOperations, ...this.operations.values()].find((item) =>
+      const denied = !manualReview && this.operationViews().find((item) =>
         item.intentKey === key && item.status === 'denied' && item.ruleId === 'ai-review-deny');
-      if (denied) return { content: [{ type: 'text' as const,
-        text: `Not executed; effects: none. Independent AI review already denied the same operation (${denied.id}). Do not retry it under a new ID or wrapper. Propose a substantively safer action or let the user request exact manual review.` }],
-      details: undefined, isError: true };
-      const previous = [...this.priorOperations, ...this.operations.values()].find((item) => item.intentKey === key
+      if (denied) return blockedOperationFeedback(operation.id, 'prior-review-denied',
+        `Not executed; effects: none. Independent AI review already denied the same operation (${denied.id}). Do not retry it under a new ID or wrapper. Propose a substantively safer action or let the user request exact manual review.`, denied.id);
+      const previous = this.operationViews().find((item) => item.intentKey === key
         && (['running', 'proposed', 'approved', 'unknown'].includes(item.status) || (item.status === 'succeeded' && this.replayProtected.has(item.id))));
-      if (previous) return { content: [{ type: 'text' as const, text: `Not executed: operation ${previous.id} already records this action (${previous.status}). Read its log and inspect the actual result; do not replay it. A new operation ID does not make a retry safe.` }], details: undefined, isError: true };
+      if (previous) return blockedOperationFeedback(operation.id, 'replay-protected', `Not executed: operation ${previous.id} already records this action (${previous.status}). Read its log and inspect the actual result; do not replay it. A new operation ID does not make a retry safe.`, previous.id);
     }
     // Refuse sudo capability probes before review: they deserve no approval card and no pause.
-    if (analysis && isSudoStatusProbe(analysis)) return { content: [{ type: 'text' as const,
-      text: 'No command sent; effects: none. sudo 状态/权限探测（sudo -n true、sudo -l、sudo -v 等）不被支持，也不能证明下一条 sudo 命令可用。请直接提交实际的有界 sudo 命令，私有认证通道会在需要时提示输入。' }], details: undefined, isError: true };
+    if (analysis && isSudoStatusProbe(analysis)) return blockedOperationFeedback(operation.id, 'unsupported-probe',
+      'No command sent; effects: none. sudo 状态/权限探测（sudo -n true、sudo -l、sudo -v 等）不被支持，也不能证明下一条 sudo 命令可用。请直接提交实际的有界 sudo 命令，私有认证通道会在需要时提示输入。');
     // The authentication bridge cannot execute these forms. Refuse them before showing
     // an approval card; an approval cannot make an unsupported transport safe to run.
     if (analysis && operation.kind === 'command' && !operation.scope.sessionId && !inputPlan(analysis)
-      && analysis.calls.some((call) => /(?:^|\/)(?:sudo|su)$/u.test(call.name))) return { content: [{ type: 'text' as const,
-        text: 'No command sent; effects: none. This sudo/su command form is unsupported by the private authentication channel (including sudo pipelines and redirections). Do not wrap or switch tools to bypass this limit. Submit the actual bounded sudo operation as one reviewed command, or explain that manual handling is required.' }], details: undefined, isError: true };
+      && analysis.calls.some((call) => /(?:^|\/)(?:sudo|su)$/u.test(call.name))) return blockedOperationFeedback(operation.id, 'unsupported-authentication-form',
+        'No command sent; effects: none. This sudo/su command form is unsupported by the private authentication channel (including sudo pipelines and redirections). Do not wrap or switch tools to bypass this limit. Submit the actual bounded sudo operation as one reviewed command, or explain that manual handling is required.');
     const outcome = await gate.execute(operation, signal, manualReview);
-    if (!outcome.result) return { content: [{ type: 'text' as const, text: `Operation ID: ${operation.id}\nExecuted: false; effects: none. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}` }],
-      details: undefined, isError: true };
+    if (!outcome.result) return blockedOperationFeedback(operation.id, outcome.decision.ruleId,
+      `Executed: false; effects: none. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}`, undefined, outcome.readOnly);
     const result = outcome.result;
     if (result.requiresUserAction) {
       this.blockRemote('认证未通过或当前认证形式需要人工接管，已暂停。请处理后手动继续，AI 不会自动改换方式重试。');
@@ -421,7 +437,7 @@ export class TaskRunner {
       this.blockRemote('远端操作结果未知，已暂停。请先核验，避免重复执行。', false, 'verify');
     } else if (!this.terminal.isAgentOwner(operation.scope.terminalId)) {
       this.blockRemote('远端终端已暂停或被接管，请核验后手动继续。');
-    } else if (result.status === 'failed' && result.effects === 'possible' && (!analysis || !isEffectFreeQuery(analysis))) {
+    } else if (result.status === 'failed' && result.effects === 'possible' && outcome.readOnly !== true) {
       this.blockRemote('操作失败且可能已产生部分变更。已暂停，请先核验原结果，再决定后续操作。', false, 'verify');
     } else if (result.status === 'failed') {
       const key = `${operation.scope.hostId}:${this.preview(operation)}:${result.exitCode ?? 'unknown'}`;
@@ -432,13 +448,11 @@ export class TaskRunner {
         this.agent?.abort();
       }
     } else if (result.status === 'succeeded') {
+      this.progress.observe('operation', JSON.stringify([operationIntentKey(operation), result.stdoutTail, result.exitCode, result.effects]));
       this.sameFailureCount = 0;
       this.lastFailureKey = '';
     }
-    return {
-      content: [{ type: 'text' as const, text: operationFeedback(result, hostLabel) }],
-      result, details: undefined, isError: result.status !== 'succeeded'
-    };
+    return operationToolResult(result, hostLabel, outcome.readOnly);
   }
 
   private diagnostic(event: DiagnosticEvent): void {
@@ -469,8 +483,7 @@ export class TaskRunner {
     const audit: OperationAudit = {
       proposed: async (operation) => {
         this.diagnostic({ event: 'operation.proposed', hostId: operation.scope.hostId, operationId: operation.id,
-          runAs: operation.scope.runAs, loginAs: operation.scope.loginAs, sessionId: operation.scope.sessionId, cwd: operation.scope.cwd });
-        this.operationCount++;
+          runAs: operation.scope.runAs, loginAs: operation.scope.loginAs, sessionId: operation.scope.sessionId, cwd: operation.scope.cwd, policyRevision: operation.scope.policyRevision });
         this.proposedOperations.set(operation.id, operation);
         this.updateOperation(operation, 'proposed');
       },
@@ -481,7 +494,7 @@ export class TaskRunner {
         this.signals.event({ type: 'operation', value: view });
       },
       decided: async (id, decision) => {
-        this.diagnostic({ event: 'review.result', operationId: id, status: decision.verdict, ruleId: decision.ruleId, text: decision.reason });
+        this.diagnostic({ event: 'review.result', operationId: id, status: decision.verdict, ruleId: decision.ruleId });
         this.updateDecision(id, decision);
         if (decision.ruleId === 'ai-review-deny') {
           const proposed = this.proposedOperations.get(id);
@@ -519,8 +532,8 @@ export class TaskRunner {
         apiKey: this.profile.reviewer.apiKey, baseUrl: this.profile.reviewer.baseUrl,
         kind: this.profile.reviewer.selection.kind
       } : { provider: this.profile.provider, modelId: this.profile.modelId, apiKey: this.profile.apiKey,
-        baseUrl: this.profile.baseUrl, kind: 'current' }, undefined,
-      () => [...this.priorOperations, ...this.operations.values()].slice(-5).map((item) => `${item.kind} ${item.status}: ${item.kind === 'command' ? redactOutput(item.preview).slice(0, 400) : item.preview.split('\n')[0]}`)),
+        baseUrl: this.profile.baseUrl, kind: 'current' }, createTaskReviewer(this.task.id, this.signals.budget, () => this.assertRemoteActive(), () => this.requestGeneration()),
+      () => this.operationViews().slice(-5).map((item) => `${item.kind} ${item.status}: ${item.kind === 'command' ? redactOutput(item.preview).slice(0, 400) : item.preview.split('\n')[0]}`)),
       approvals: { requestApproval: async (request) => {
         this.setStatus('waiting-review');
         const presentation = approvalPresentation(request);
@@ -554,6 +567,8 @@ export class TaskRunner {
   private updateOperation(operation: ProposedOperation, status: OperationView['status']): void {
     const view: OperationView = {
       serviceUnit: operation.kind === 'command' ? operation.serviceUnit : undefined,
+      commandSource: operation.kind === 'command' && redactOutput(operation.scope.cwd) === operation.scope.cwd
+        ? { version: 1, cwd: operation.scope.cwd } : undefined,
       intentKey: operationIntentKey(operation), id: operation.id, taskId: this.task.id, hostId: operation.scope.hostId, kind: operation.kind,
       preview: this.preview(operation), status, runAs: operation.scope.runAs, loginAs: operation.scope.loginAs, logRef: operation.scope.terminalId,
       model: { provider: this.profile.provider, modelId: this.profile.modelId }, createdAt: Date.now()
@@ -581,6 +596,7 @@ export class TaskRunner {
     operation.authentication = result.authentication; operation.authenticationAttempts = result.authenticationAttempts;
     operation.failureKind = result.failureKind; operation.effects = result.effects;
     operation.outputTail = redactOutput(result.stdoutTail);
+    operation.outputCapture = result.outputCapture;
     operation.logRef = result.logRef;
     this.signals.event({ type: 'operation', value: operation });
     this.recordPendingVerification(operation);
@@ -590,23 +606,28 @@ export class TaskRunner {
 
   /** Cross-conversation recovery resolves outcomes this task may have created earlier. */
   assertResolvableOutcome(operationId: string): void {
-    const operation = [...this.priorOperations, ...this.operations.values()].find((item) => item.id === operationId);
+    const operation = this.operationViews().find((item) => item.id === operationId);
     if (operation && !operationOutcomeResolvable(operation)) throw new Error('该操作仍在执行或已核验，不能重复确认风险');
   }
 
   /** Applies a user risk acceptance without ever claiming an observed outcome. */
-  recordRiskAcceptance(operationId: string, explanation: string, at: number): void {
-    const operation = [...this.priorOperations, ...this.operations.values()].find((item) => item.id === operationId);
-    if (!operation || !operationOutcomeResolvable(operation)) return;
-    operation.reconciledAt = at;
-    operation.reconciliation = { kind: 'risk-accepted', explanation, at };
+  recordRiskAcceptance(accepted: OperationView): void {
+    if (accepted.taskId !== this.task.id) return;
+    const operation = this.operationViews().find((item) => item.id === accepted.id);
+    if (!operation) return;
+    this.operations.set(operation.id, applyCommittedRiskAcceptance(operation, accepted));
+    this.progress.observe('resolution', JSON.stringify([operation.id, accepted.reconciliation?.kind]));
+    if (operation.reconciliation?.kind === 'evidence') {
+      this.journal.resetReport();
+      if (this.status === 'answered') this.finishRun();
+    }
     this.publishExecution();
   }
 
   setReviewKey(jevKey?: string): void { this.profile = { ...this.profile, jevKey }; this.agent?.setReviewKey(jevKey); }
 
   needsReviewProfile(reviewer: NonNullable<RuntimeProfile['reviewer']>): boolean {
-    reviewer = this.resolveReviewer(reviewer);
+    reviewer = resolveTaskReviewer(this.profile, reviewer);
     const current = this.profile.reviewer;
     return !current || reviewer.revision > current.revision
       || current.provider !== reviewer.provider || current.modelId !== reviewer.modelId
@@ -615,15 +636,10 @@ export class TaskRunner {
   }
 
   setReviewProfile(reviewer: NonNullable<RuntimeProfile['reviewer']>): void {
-    reviewer = this.resolveReviewer(reviewer);
+    reviewer = resolveTaskReviewer(this.profile, reviewer);
     if (!this.needsReviewProfile(reviewer)) return;
     this.profile = { ...this.profile, reviewer: { ...reviewer,
       revision: Math.max(reviewer.revision, (this.profile.reviewer?.revision ?? 0) + 1) } };
-  }
-
-  private resolveReviewer(reviewer: NonNullable<RuntimeProfile['reviewer']>): NonNullable<RuntimeProfile['reviewer']> {
-    return reviewer.selection.kind === 'current' ? { ...reviewer, provider: this.profile.provider,
-      modelId: this.profile.modelId, apiKey: this.profile.apiKey, baseUrl: this.profile.baseUrl } : reviewer;
   }
 
   async requestAiDenialReview(operationId: string): Promise<void> {
@@ -659,7 +675,7 @@ export class TaskRunner {
       const reviewed: ProposedOperation = { ...operation, id: randomUUID(), scope: {
         ...this.scope(host, terminalId, operation.scope.cwd),
         runAs: operation.scope.runAs,
-        goal: operation.scope.goal
+        goal: operation.scope.goal, intent: operation.scope.intent
       } };
       const view = this.operations.get(operationId)!;
       view.manualReviewAvailable = false;
@@ -731,57 +747,39 @@ export class TaskRunner {
     if (!this.pendingInterruption) return;
     const interruption = this.pendingInterruption;
     this.pendingInterruption = undefined;
-    const operations = interruption.operationIds.map((id) => {
-      const op = this.operations.get(id);
-      return { id, hostId: op?.hostId, status: op?.status ?? 'unknown', exitCode: op?.exitCode };
-    });
-    await agent.context(`CloudHelm user interruption: the user deliberately stopped execution (${interruption.source}). This is not an autonomous tool failure. Do not automatically retry or replay the interrupted operation. First verify actual remote state; a stop request does not prove exit. Authoritative operation observations: ${JSON.stringify(operations)}`);
+    await agent.context(interruptionContext(interruption, this.operationViews()));
+  }
+
+  private operationViews(): OperationView[] {
+    return mergeOperationViews([...this.priorOperations, ...this.operations.values()]);
   }
 
   private verificationOperations(): OperationView[] {
-    return [...this.priorOperations, ...this.operations.values()].slice(this.verificationStartCount);
+    return this.operationViews().slice(this.verificationStartCount);
   }
 
   /** Persist the pending round before model completion so a crash cannot erase its changes. */
   private recordPendingVerification(operation: OperationView): void {
     if (operation.status !== 'succeeded' || operation.readOnly === true) return;
-    const operationIds = this.verificationOperations().filter((item) => item.status === 'succeeded' && item.readOnly !== true)
-      .map((item) => item.id);
+    const operationIds = reportRequiredOperations(this.verificationOperations()).map((item) => item.id);
     this.signals.event({ type: 'verification-state', taskId: this.task.id,
       value: { status: 'unverified', operationIds, reasonCode: 'report-missing' } });
   }
 
   private finishRun(): void {
-    const operations = [...this.priorOperations, ...this.operations.values()];
-    if (hasUnresolvedOperation(operations)) {
-      this.setStatus('paused', '远端变更的结果尚未确定，请先核验原操作，禁止直接重试。', 'verify');
-      return;
-    }
-    if (!this.agent?.lastTurnAnswered) {
-      this.setStatus('failed', '模型未给出完整答复，请根据已取得的结果继续。', 'model');
-      return;
-    }
-    const changed = this.verificationOperations().filter((operation) => operation.readOnly !== true && operation.status === 'succeeded');
-    if (changed.length) {
-      const verified = this.journal.hasReport();
-      this.signals.event({ type: 'verification-state', taskId: this.task.id, value: {
-        status: verified ? 'verified' : 'unverified', operationIds: changed.map((operation) => operation.id),
-        ...verified ? {} : { reasonCode: 'report-missing' as const }
-      } });
-      if (!verified) {
-        const issue = this.journal.lastReportIssue();
-        this.setStatus('answered', `远端操作已返回成功，但效果尚未完成核验。${issue?.guidance ?? '请查看已有检查或继续核验。'}`, 'report');
-        return;
-      }
-    }
-    this.setStatus('answered');
+    const completion = decideTaskCompletion({ operations: this.operationViews(),
+      roundOperations: this.verificationOperations(), answered: this.agent?.lastTurnAnswered ?? false,
+      hasReport: this.journal.hasReport(), reportIssue: this.journal.lastReportIssue(), ...this.journal.completionReport() });
+    if (completion.verificationState !== undefined) this.signals.event({ type: 'verification-state',
+      taskId: this.task.id, value: completion.verificationState ?? undefined });
+    this.setStatus(completion.status, completion.summary, completion.resumeReason);
   }
 
+  private requestGeneration(): string { return JSON.stringify([this.controlVersion, this.task.reviewRevision, this.profile.reviewer?.revision, this.hosts.map((host) => [host.id, host.policyRevision])]); }
   private publishExecution(): void {
     const model = this.agent?.isStreaming || this.isRunning() ? 'running' : 'idle';
     const pending = this.terminal.pendingOperations(this.task.id).length > 0;
-    const merged = new Map([...this.priorOperations, ...this.operations.values()].map((op) => [op.id, op]));
-    const remote = pending ? 'running' : [...merged.values()].some((op) => op.status === 'unknown' && !op.reconciledAt) ? 'unknown' : 'idle';
+    const remote = pending ? 'running' : this.operationViews().some((op) => op.status === 'unknown' && !op.reconciledAt) ? 'unknown' : 'idle';
     if (model === 'idle' && !pending) this.stopping = false;
     this.signals.event({ type: 'execution', taskId: this.task.id, value: {
       model, remote, stopping: this.stopping, canStop: model === 'running' || pending

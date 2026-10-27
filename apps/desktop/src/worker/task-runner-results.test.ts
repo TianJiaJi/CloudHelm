@@ -5,7 +5,7 @@ import { isReadOnlyQuery } from '@cloudhelm/core';
 import type { ProposedOperation } from '@cloudhelm/core';
 import type { TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
-import { TaskRunner, type TaskSignals } from './task-runner.js';
+import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
 import { hasUnresolvedOperation } from './recovery-context.js';
 
@@ -117,7 +117,10 @@ describe('remote result analysis', () => {
       await runner.start();
       runner.message('查看 Docker 服务');
       await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
-      expect(execute.mock.calls[0]?.[0]).toMatchObject({ command: 'docker ps -a', scope: { goal: '查看 Docker 服务' } });
+      expect(execute.mock.calls[0]?.[0]).toMatchObject({ command: 'docker ps -a', scope: {
+        goal: expect.stringContaining('当前用户输入：查看 Docker 服务'),
+        intent: { originalGoal: '检查磁盘占用', currentInput: '查看 Docker 服务' }
+      } });
       expect(execute.mock.calls[0]?.[3]).toMatchObject({ readOnly: true });
       expect(approval).not.toHaveBeenCalled();
       await vi.waitFor(() => expect(statuses.at(-1)).toBe('answered'));

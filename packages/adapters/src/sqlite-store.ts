@@ -37,12 +37,34 @@ WHERE bucket = 'tasks' AND json_extract(value, '$.provider') IS NULL;
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, unixepoch());
 `;
 
+export interface DataRepair {
+  name: string;
+  version: number;
+  recordIds: string[];
+  /** Full read sets detect inserted/deleted rows as well as changed values. */
+  baselines: Array<{ bucket: string; values: unknown[] }>;
+  changes: Array<{ bucket: string; id: string; value: unknown }>;
+}
+
+/** No prompt, credentials, output or request body belongs in a budget receipt. */
+export interface RequestBudgetCommit {
+  records: Array<{ bucket: string; id: string; before: unknown; value: unknown }>;
+  receipt: { owner: string; requestId: string; binding: string; before?: unknown; value: unknown };
+}
+
 export class SqliteStore {
   private readonly raw: Database.Database;
   private readonly db;
 
   constructor(file: string) {
     this.raw = new Database(file);
+    try {
+      this.migrate();
+      this.db = drizzle(this.raw);
+    } catch (error) { this.raw.close(); throw error; }
+  }
+
+  private migrate(): void {
     this.raw.pragma('journal_mode = WAL');
     this.raw.exec(migration0001);
     this.raw.exec(migration0002);
@@ -82,7 +104,7 @@ export class SqliteStore {
         INSERT INTO schema_migrations(version, applied_at) VALUES (6, unixepoch());
       `);
     })();
-    this.raw.transaction(() => {
+    const migrateLegacyQueries = this.raw.transaction(() => {
       if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 7').get()) return;
       // Legacy records did not persist the read-only capability. Only exact,
       // trivially safe historical previews can be recovered without the source command.
@@ -94,8 +116,8 @@ export class SqliteStore {
           AND json_extract(value, '$.preview') IN ('df -h', 'df -hT', 'docker ps', 'docker ps -a');
         INSERT INTO schema_migrations(version, applied_at) VALUES (7, unixepoch());
       `);
-    })();
-    this.raw.transaction(() => {
+    });
+    const migrateLegacyCompletion = this.raw.transaction(() => {
       if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 8').get()) return;
       this.raw.exec(`
         UPDATE records SET value = json_remove(json_set(value, '$.status', 'answered'), '$.resumeReason')
@@ -128,8 +150,41 @@ export class SqliteStore {
                 AND json_extract(prior.value, '$.role') = 'user'), 0));
         INSERT INTO schema_migrations(version, applied_at) VALUES (8, unixepoch());
       `);
-    })();
-    this.db = drizzle(this.raw);
+    });
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 9').get()) return;
+      // Keep published migration SQL unchanged, but prevent its legacy heuristics
+      // from granting capabilities or inferring completion during a new upgrade.
+      // All three versions commit together: a crash cannot lose these preimages.
+      const unknown = this.raw.prepare("SELECT id,value FROM records WHERE bucket = 'operations' AND json_extract(value, '$.status') = 'unknown'")
+        .all() as Array<{ id: string; value: string }>;
+      const stopped = this.raw.prepare("SELECT id,value FROM records WHERE bucket = 'tasks' AND json_extract(value, '$.status') IN ('paused','failed')")
+        .all() as Array<{ id: string; value: string }>;
+      const restore = this.raw.prepare('UPDATE records SET value = ? WHERE bucket = ? AND id = ?');
+      migrateLegacyQueries();
+      for (const row of unknown) restore.run(row.value, 'operations', row.id);
+      migrateLegacyCompletion();
+      // Schema readiness is distinct from per-record repair completion. Parser
+      // failures must not mark the entire data migration finished.
+      this.raw.exec(`
+        CREATE TABLE data_repairs (
+          name TEXT NOT NULL, version INTEGER NOT NULL, record_id TEXT NOT NULL, applied_at INTEGER NOT NULL,
+          PRIMARY KEY (name, version, record_id)
+        );
+        INSERT INTO schema_migrations(version, applied_at) VALUES (9, unixepoch());
+      `);
+      for (const row of stopped) restore.run(row.value, 'tasks', row.id);
+    }).immediate();
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 10').get()) return;
+      this.raw.exec(`
+        CREATE TABLE request_budget_receipts (
+          owner TEXT NOT NULL, request_id TEXT NOT NULL, binding TEXT NOT NULL, value TEXT NOT NULL,
+          updated_at INTEGER NOT NULL, PRIMARY KEY(owner, request_id)
+        );
+        INSERT INTO schema_migrations(version, applied_at) VALUES (10, unixepoch());
+      `);
+    }).immediate();
   }
 
   get<T>(bucket: string, id: string): T | undefined {
@@ -146,6 +201,49 @@ export class SqliteStore {
   put(bucket: string, id: string, value: unknown): void {
     this.db.insert(records).values({ bucket, id, value: JSON.stringify(value), updatedAt: Date.now() })
       .onConflictDoUpdate({ target: [records.bucket, records.id], set: { value: JSON.stringify(value), updatedAt: Date.now() } }).run();
+  }
+
+  /** Compare the whole read set and atomically commit records plus version receipts.
+   * Analysis is done before this synchronous transaction, never inside it. */
+  commitDataRepair(repair: DataRepair): void {
+    this.raw.transaction(() => {
+      for (const { bucket, values } of repair.baselines) {
+        if (JSON.stringify(this.list(bucket)) !== JSON.stringify(values)) {
+          throw new Error('Historical repair source changed; retry from a fresh snapshot');
+        }
+      }
+      for (const { bucket, id, value } of repair.changes) this.put(bucket, id, value);
+      const receipt = this.raw.prepare('INSERT INTO data_repairs(name,version,record_id,applied_at) VALUES(?,?,?,?)');
+      for (const id of repair.recordIds) receipt.run(repair.name, repair.version, id, Date.now());
+    }).immediate();
+  }
+
+  requestBudgetReceipt<T>(owner: string, requestId: string): { binding: string; value: T } | undefined {
+    const row = this.raw.prepare('SELECT binding,value FROM request_budget_receipts WHERE owner = ? AND request_id = ?')
+      .get(owner, requestId) as { binding: string; value: string } | undefined;
+    return row ? { binding: row.binding, value: JSON.parse(row.value) as T } : undefined;
+  }
+
+  /** Acknowledgment is safe only after this immediate transaction has committed.
+   * Receipt collisions, stale records and partial writes all roll back together. */
+  commitRequestBudget(change: RequestBudgetCommit): void {
+    this.raw.transaction(() => {
+      const receipt = change.receipt;
+      const previous = this.requestBudgetReceipt(receipt.owner, receipt.requestId);
+      if (receipt.before === undefined ? previous !== undefined
+        : !previous || previous.binding !== receipt.binding || JSON.stringify(previous.value) !== JSON.stringify(receipt.before)) {
+        throw new Error('Budget receipt changed; reload authoritative state');
+      }
+      for (const record of change.records) {
+        if (JSON.stringify(this.get(record.bucket, record.id)) !== JSON.stringify(record.before)) {
+          throw new Error('Budget source changed; reload authoritative state');
+        }
+      }
+      for (const record of change.records) this.put(record.bucket, record.id, record.value);
+      this.raw.prepare(`INSERT INTO request_budget_receipts(owner,request_id,binding,value,updated_at) VALUES(?,?,?,?,?)
+        ON CONFLICT(owner,request_id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
+        .run(receipt.owner, receipt.requestId, receipt.binding, JSON.stringify(receipt.value), Date.now());
+    }).immediate();
   }
 
   remove(bucket: string, id: string): void {
@@ -170,9 +268,13 @@ export class SqliteStore {
 
   appendLog(terminalId: string, data: string): void {
     const insert = this.raw.prepare('INSERT INTO terminal_logs(terminal_id, created_at, bytes, data) VALUES (?, ?, ?, ?)');
-    for (let offset = 0; offset < data.length; offset += 8192) {
-      const chunk = data.slice(offset, offset + 8192);
+    for (let offset = 0; offset < data.length;) {
+      let end = Math.min(data.length, offset + 8192);
+      if (end < data.length && data.charCodeAt(end - 1) >= 0xd800 && data.charCodeAt(end - 1) <= 0xdbff
+        && data.charCodeAt(end) >= 0xdc00 && data.charCodeAt(end) <= 0xdfff) end--;
+      const chunk = data.slice(offset, end);
       insert.run(terminalId, Date.now(), Buffer.byteLength(chunk), chunk);
+      offset = end;
     }
   }
 
@@ -205,10 +307,24 @@ export class SqliteStore {
   }
 
   readLogPage(terminalId: string, cursor = 0): { text: string; nextCursor: number; more: boolean } {
-    const rows = this.raw.prepare('SELECT id, data FROM terminal_logs WHERE terminal_id = ? AND id > ? ORDER BY id LIMIT 5')
-      .all(terminalId, cursor) as Array<{ id: number; data: string }>;
-    const page = rows.slice(0, 4);
-    return { text: page.map((row) => row.data).join(''), nextCursor: page.at(-1)?.id ?? cursor, more: rows.length > 4 };
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error('Invalid log cursor');
+    // BLOB slicing bounds bytes without SQLite TEXT substr dropping NUL suffixes.
+    // Oversized/corrupt rows are rejected, never partially consumed. Keep BOMs
+    // as log data; decode only complete rows that fit the page budget.
+    const rows = this.raw.prepare('SELECT id, substr(CAST(data AS BLOB), 1, 49153) AS data FROM terminal_logs WHERE terminal_id = ? AND id > ? ORDER BY id LIMIT 5')
+      .all(terminalId, cursor) as Array<{ id: number; data: Buffer }>;
+    const page: Array<{ id: number; data: string }> = [];
+    const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+    let bytes = 0;
+    for (const row of rows.slice(0, 4)) {
+      const size = row.data.length;
+      if (bytes + size > 48 * 1024) {
+        if (!page.length) throw new Error('Log chunk exceeds the bounded page; no cursor consumed');
+        break;
+      }
+      bytes += size; page.push({ id: row.id, data: decoder.decode(row.data) });
+    }
+    return { text: page.map((row) => row.data).join(''), nextCursor: page.at(-1)?.id ?? cursor, more: rows.length > page.length };
   }
 
   cleanupLogs(maxAgeMs = 30 * 24 * 60 * 60_000, maxBytes = 5 * 1024 ** 3): void {

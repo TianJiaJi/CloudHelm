@@ -3,7 +3,7 @@ import { TerminalManager } from '@cloudhelm/application';
 import type { RawTerminal } from '@cloudhelm/core';
 import type { TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
-import { TaskRunner, type TaskSignals } from './task-runner.js';
+import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { openAiFixture } from './openai-sse-fixture.js';
 
 function deferred() {

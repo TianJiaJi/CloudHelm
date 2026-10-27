@@ -19,7 +19,8 @@ export class RuntimeBridge {
   constructor(private readonly onEvent: (event: Extract<RuntimeMessage, { event: unknown }>['event']) => void,
     private readonly readLog: (taskId: string, operationId: string, cursor: number) => import('@cloudhelm/contracts/runtime').LogPage,
     private readonly onStopped: () => void = () => {},
-    private readonly diagnostic: (event: DiagnosticEvent) => void = () => {}) {
+    private readonly diagnostic: (event: DiagnosticEvent) => void = () => {},
+    private readonly requestBudget?: (command: unknown) => import('@cloudhelm/contracts').BudgetOutcome) {
     this.child = utilityProcess.fork(join(import.meta.dirname, 'runtime.js'), [], { serviceName: 'CloudHelm Agent and SSH runtime' });
     this.child.on('message', (message: RuntimeMessage) => this.receive(message));
     this.child.on('exit', () => {
@@ -52,6 +53,15 @@ export class RuntimeBridge {
   private receive(message: RuntimeMessage): void {
     if (this.closing || this.stopped) return;
     if ('diagnostic' in message) { this.diagnostic(message.diagnostic); return; }
+    if ('budgetRequest' in message) {
+      const query = message.budgetRequest;
+      let result: import('@cloudhelm/contracts').BudgetOutcome;
+      try { result = this.requestBudget?.(query.command) ?? { error: 'budget-unavailable' }; }
+      catch { result = { error: 'budget-unavailable' }; }
+      try { this.child.postMessage({ budgetResult: { id: query.id, ...result } }); }
+      catch { /* A lost acknowledgment never refunds or replays a committed reservation. */ }
+      return;
+    }
     if ('readLog' in message) {
       const query = message.readLog;
       try { this.child.postMessage({ logResult: { id: query.id, value: this.readLog(query.taskId, query.operationId, query.cursor) } }); }
