@@ -148,6 +148,9 @@ export interface TaskView {
   plan?: PlanStep[];
   report?: VerificationReport;
   verificationState?: VerificationState;
+  verificationRound?: import('./verification-v3.js').VerificationRound;
+  /** Recent report revisions; the complete archive is persisted separately. */
+  verificationHistory?: VerificationReport[];
   requestCount: number;
   requestLimit: number;
   createdAt: number;
@@ -163,11 +166,17 @@ export interface OperationView {
   reconciledAt?: number;
   reconciliation?: OperationReconciliation;
   intentKey?: string;
+  verificationSource?: import('./verification-v3.js').VerificationSource;
+  outputExpectation?: import('./verification-v3.js').OutputExpectation;
+  /** Backend observed a terminal completion/code, never reconciliation prose; launch failure may still mean the payload did not start. */
+  exitObserved?: boolean;
+  completedAt?: number;
   /** Directory captured with the full command fingerprint, never inferred from a display preview. */
   commandSource?: { version: 1; cwd: string };
   serviceUnit?: string;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
+  privilege?: import('./privilege.js').PrivilegeFeedbackView;
   failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'unknown';
   effects?: 'none' | 'possible';
   loginAs?: string;
@@ -314,7 +323,8 @@ export type AppEvent =
       transport?: 'http' | 'opaque'; taskId: string; model: ModelChoice; request: number; createdAt: number }
   | { type: 'work-progress'; taskId: string; plan: PlanStep[] }
   | { type: 'work-report'; taskId: string; report?: VerificationReport }
-  | { type: 'verification-state'; taskId: string; value?: VerificationState };
+  | { type: 'verification-state'; taskId: string; value?: VerificationState }
+  | { type: 'verification-round'; taskId: string; value: import('./verification-v3.js').VerificationRound };
 
 export interface ShortcutSettings { bindings: Record<string, string>; enabled: boolean }
 
@@ -372,6 +382,8 @@ export interface DesktopAPI {
   cancelInput(requestId: string): Promise<void>;
   pauseConversation(taskId: string): Promise<void>;
   resumeConversation(taskId: string): Promise<void>;
+  /** Re-project a settled automatic report from existing records only; no SSH/model execution. */
+  rebuildVerificationReport(taskId: string): Promise<void>;
   extendRequestBudget(input: import('./request-budget.js').ExtendRequestBudget): Promise<import('./request-budget.js').BudgetExtensionResult>;
   listRemote(hostId: string, path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>>;
   readTerminalLog(terminalId: string): Promise<string>;

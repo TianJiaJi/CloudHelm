@@ -18,12 +18,19 @@
 .menuFoot button { font-size: 11px; color: var(--muted); }
 .menuIntro { color: var(--muted); font-size: 11px; padding: 9px 10px 12px; }
 .empty { padding: 14px 10px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-top: 7px; }
-.footer button { font-size: 11px; color: var(--muted); padding: 5px 3px; gap: 5px; min-width: 0; }
-.permissionTrigger > span, .contextTrigger > span { white-space: nowrap; }
+.footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 6px; min-width: 0; }
+.footer button { font-size: 11px; line-height: 16px; color: var(--muted); padding: 4px 2px; gap: 4px; min-width: 0; }
+.permissionControl { display: flex; flex: none; min-width: 0; max-width: min(140px, 45%); }
+.permissionControl .permissionTrigger { justify-content: flex-start; gap: 4px; height: 24px; max-width: 100%; min-width: 0; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--accentSoft); color: var(--text); font-size: 11px; line-height: 16px; }
+.permissionControl .permissionTrigger:hover, .permissionControl .permissionTrigger[aria-expanded=true] { background: var(--raised); }
+.permissionControl .permissionTrigger:disabled { opacity: .65; cursor: not-allowed; }
+.permissionTrigger[aria-expanded=true] > svg:last-child { transform: rotate(-90deg); }
+.permissionTrigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.permissionTrigger > svg, .contextTrigger { flex: none; }
+.contextTrigger > span { white-space: nowrap; }
 .footer button:disabled { opacity: .65; }
 .permissive { --permissionOrange: #f5a14b; }
-.picker button.permissive, .picker button.permissive > svg, .footer button.permissive { color: var(--permissionOrange) !important; }
+.picker button.permissive, .picker button.permissive > svg, .permissionTrigger.permissive { color: var(--permissionOrange) !important; }
 @media (prefers-color-scheme: light) {
   .permissive { --permissionOrange: #b85c00; }
 }

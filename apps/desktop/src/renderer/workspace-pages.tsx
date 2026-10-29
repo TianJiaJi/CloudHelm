@@ -1,5 +1,7 @@
 import { MessageContent } from './message-content.js';
+import { PrivilegeFeedback } from './privilege-feedback.js';
 import { VerificationChecks } from './verification-checks.js';
+import { VerificationFactsCard, VerificationHistory } from './verification-facts-card.js';
 import { ReasoningContent } from './reasoning-content.js';
 import { useEffect, useState } from 'react';
 import type { OperationView, TaskView } from '@cloudhelm/contracts';
@@ -74,6 +76,7 @@ export function OperationCard({ operation, report }: { operation: OperationView;
   return <section className={styles.operationCard} onContextMenu={(event) => openContextMenu(event, menuEntries(), '操作详情')}>
     <div className={styles.cardTitle}><Icon name="terminal" /><strong>{operation.kind === 'command' ? '远程命令' : '文件操作'}</strong><small>{operation.reconciliation?.kind === 'risk-accepted' ? '风险已接管' : statuses[operation.status]}</small></div>
     <pre className={styles.command}>{operation.preview}</pre>
+    <PrivilegeFeedback value={operation.privilege} />
     {output && <pre className={styles.outputTail}>{output.slice(-1600)}</pre>}
     {operation.manualReviewAvailable && operation.ruleId === 'ai-review-deny' && <div className={styles.cardActions}>
       <button onClick={() => void capture(() => window.cloudhelm.requestAiDenialReview(operation.taskId, operation.id), report)}>申请人工复核这次操作</button>
@@ -89,7 +92,7 @@ export function OperationCard({ operation, report }: { operation: OperationView;
 }
 
 export function VerificationCard({ conversation, report }: { conversation: TaskView; report(error: string): void }): React.JSX.Element {
-  const verified = conversation.status === 'answered' && conversation.verificationState?.status === 'verified' && !!conversation.report?.evidenceOperationIds.length;
+  if (conversation.report?.facts) return <VerificationFactsCard conversation={conversation} value={conversation.report} report={report} />;
   const unverified = conversation.status === 'answered' && conversation.verificationState?.status === 'unverified';
   const failure = conversation.status === 'failed' ? presentError(conversation.summary) : null;
   const structured = conversation.report?.version === 2;
@@ -99,7 +102,7 @@ export function VerificationCard({ conversation, report }: { conversation: TaskV
   return <section className={`${styles.reviewCard} ${styles.verificationCard} ${unverified ? styles.verificationWarning : ''}`}
     role={unverified ? 'alert' : undefined}
     onContextMenu={(event) => openContextMenu(event, copyEntries('复制结论', conclusion, report), '验证结论')}>
-    <div className={styles.cardTitle}><Icon name={verified ? 'check' : 'shield'} /><strong>{unverified ? structured ? '已登记 · 有未验证项' : '已执行 · 未核验' : failure?.title ?? statusLabel[conversation.status]}</strong></div>
+    <div className={styles.cardTitle}><Icon name="shield" /><strong>{unverified ? structured ? '已登记 · 有未验证项' : '已执行 · 未核验' : failure?.title ?? (conversation.report ? '历史报告 · 模型判断' : statusLabel[conversation.status])}</strong></div>
     <p>{conclusion || '还需要补充验证证据，请查看对话中的说明。'}</p>
     <VerificationChecks value={conversation.report} />
     {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
@@ -123,6 +126,7 @@ export function ReportPage({ conversation, operations, report }: { conversation:
       <h3>恢复说明</h3><ul>{conversation.report.recovery.map((item) => <li key={item}>{item}</li>)}</ul>
       <h3>验证证据</h3>{operations.filter((operation) => conversation.report?.evidenceOperationIds.includes(operation.id)).map((operation) => <OperationCard key={operation.id} operation={operation} report={report} />)}
     </>}
+    <VerificationHistory values={conversation.verificationHistory} />
     <h3>对话记录</h3>{messages.map((message, index) => <article className={styles.message} key={`${message.createdAt}:${index}`}
       onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
       <strong>{message.role === 'user' ? '你' : message.role === 'agent' ? 'CloudHelm' : '系统'}</strong>{message.role === 'agent' ? <><ReasoningContent value={message.reasoning} />{message.text && <MarkdownMessage text={message.text} />}</> : message.document ? <MessageContent document={message.document} /> : <p>{message.text}</p>}</article>)}

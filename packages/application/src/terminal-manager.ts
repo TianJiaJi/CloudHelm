@@ -8,7 +8,7 @@ type Owner = 'agent' | 'human' | 'suspended' | 'closed';
 
 interface PendingCommand {
   capture: OperationOutputCapture;
-  failure?: Pick<OperationResult, 'failureKind' | 'effects'>;
+  failure?: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege'>;
   settle(result: OperationResult): void;
   remoteCompletion: Promise<'exited' | 'unknown'>;
   completeRemote(state: 'exited' | 'unknown'): void;

@@ -57,18 +57,16 @@ export function ModelPicker({ models, selected, disabled, conversation, choose }
 
 const descriptions: Record<ReviewMode, string> = {
   ask: '普通读写自动执行；高影响或无法确认影响时询问。',
-  'ai-review': '不确定操作由独立模型审核；高影响操作询问。',
-  permissive: '自动执行不透明脚本；硬禁令和保护路径仍生效。'
+  'ai-review': '高影响或不透明操作先由独立模型审核；不确定时询问。',
+  permissive: '不透明操作可自动执行；已识别高影响仍询问，硬禁令和保护路径始终生效。'
 };
 
-export function ComposerFooter({ host, conversation, legacy, usage, compaction, pendingModel, report }: {
-  compaction?: 'running' | 'complete' | 'failed'; host?: HostView; conversation?: TaskView; legacy: boolean; usage?: ContextUsageView; pendingModel?: string; report(error: string): void;
+export function PermissionPicker({ host, conversation, legacy, report }: {
+  host?: HostView; conversation?: TaskView; legacy: boolean; report(error: string): void;
 }): React.JSX.Element {
   const permissions = useMenuAnchor();
-  const context = useMenuAnchor();
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
-  const { remaining, label: usageLabel, details } = contextUsagePresentation(usage, compaction);
   const selectedMode = host ? conversation?.reviewModesByHost?.[host.id] ?? host.defaultMode : undefined;
   async function choose(mode: ReviewMode): Promise<void> {
     if (!host || !conversation || savingRef.current || mode === selectedMode) return;
@@ -76,14 +74,32 @@ export function ComposerFooter({ host, conversation, legacy, usage, compaction, 
     try { await capture(() => window.cloudhelm.updateConversationReviewMode(conversation.id, host.id, mode), report); }
     finally { savingRef.current = false; setSaving(false); }
   }
-  return <>
-    <div className={styles.footer}>
+  return <div className={styles.permissionControl}>
       <button type="button" className={`${styles.permissionTrigger} ${selectedMode === 'permissive' ? styles.permissive : ''}`} aria-label={selectedMode ? `权限选择，当前 ${reviewLabel[selectedMode]}` : '未授权远端操作'}
         aria-haspopup="menu" aria-expanded={!!permissions.anchor} disabled={!host || !conversation || legacy || host.archived || saving}
-        title={conversation ? '仅应用于当前对话的当前主机' : '新对话将继承主机默认档位'} {...permissions.trigger}>
+        title={conversation ? '仅应用于当前对话的当前主机' : '新对话继承主机默认档位；发送后可切换当前对话的权限'} {...permissions.trigger}>
         <Icon name="shield" size={13} /><span>{saving ? '更新中…' : selectedMode ? reviewLabel[selectedMode] : '未授权远端操作'}</span>
         {host && <Icon name="chevron" size={11} />}
       </button>
+    {permissions.anchor && host && conversation && <MenuSurface anchor={permissions.anchor} label="权限选择" placement="above" align="start" className={styles.picker} close={permissions.close}>
+      <div className={styles.menuIntro}>仅当前对话 · {host.label}</div>
+      {(Object.keys(descriptions) as ReviewMode[]).map((mode) => <button type="button" key={mode} role="menuitem"
+        className={mode === 'permissive' ? styles.permissive : undefined}
+        aria-current={selectedMode === mode ? 'true' : undefined} onClick={() => void choose(mode)}>
+        <span className={styles.permissionText}><strong>{reviewLabel[mode]}</strong><small>{descriptions[mode]}</small></span>
+        {selectedMode === mode && <Icon name="check" size={15} />}
+      </button>)}
+    </MenuSurface>}
+  </div>;
+}
+
+export function ComposerFooter({ usage, compaction, pendingModel }: {
+  compaction?: 'running' | 'complete' | 'failed'; usage?: ContextUsageView; pendingModel?: string;
+}): React.JSX.Element {
+  const context = useMenuAnchor();
+  const { remaining, label: usageLabel, details } = contextUsagePresentation(usage, compaction);
+  return <>
+    <div className={styles.footer}>
       <button type="button" className={styles.contextTrigger} aria-label={`上下文用量，${usageLabel}`} aria-haspopup="menu" aria-expanded={!!context.anchor}
         title={details} {...context.trigger}>
         <svg width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" className={styles.ring}>
@@ -94,15 +110,6 @@ export function ComposerFooter({ host, conversation, legacy, usage, compaction, 
       </button>
     </div>
     {pendingModel && <p className={styles.pending}>下一次请求使用 {pendingModel}</p>}
-    {permissions.anchor && host && conversation && <MenuSurface anchor={permissions.anchor} label="权限选择" placement="above" align="start" className={styles.picker} close={permissions.close}>
-      <div className={styles.menuIntro}>仅当前对话 · {host.label}</div>
-      {(Object.keys(descriptions) as ReviewMode[]).map((mode) => <button type="button" key={mode} role="menuitem"
-        className={mode === 'permissive' ? styles.permissive : undefined}
-        aria-current={selectedMode === mode ? 'true' : undefined} onClick={() => void choose(mode)}>
-        <span className={styles.permissionText}><strong>{reviewLabel[mode]}</strong><small>{descriptions[mode]}</small></span>
-        {selectedMode === mode && <Icon name="check" size={15} />}
-      </button>)}
-    </MenuSurface>}
     {context.anchor && <MenuSurface anchor={context.anchor} label="上下文用量" placement="above" className={styles.picker} close={context.close}>
       <div className={styles.contextDetails}><strong>上下文窗口</strong><p>{details}</p>
         {usage && <small>{usage.model.modelId} · {usage.request > 0 ? `请求 #${usage.request}` : '发送准备'}</small>}

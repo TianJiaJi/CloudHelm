@@ -116,6 +116,7 @@ export const useUi = create<UiState>((set) => ({
     if (event.type === 'work-progress') return updateConversation(state, event.taskId, { plan: event.plan });
     if (event.type === 'work-report') return updateConversation(state, event.taskId, { report: event.report });
     if (event.type === 'verification-state') return updateConversation(state, event.taskId, { verificationState: event.value });
+    if (event.type === 'verification-round') return updateConversation(state, event.taskId, { verificationRound: event.value });
     if (event.type === 'task-message' && state.snapshot) {
       const duplicate = state.snapshot.messages.some((message) => message.taskId === event.taskId && message.createdAt === event.createdAt && message.role === event.role && message.text === event.text);
       return duplicate ? {} : { snapshot: { ...state.snapshot, messages: [...state.snapshot.messages, event] } };

@@ -32,14 +32,20 @@ export function requestBusinessFacts(task: TaskView, operations: OperationView[]
   const state = runtimeFacts(current);
   const index = current.filter((op) => ['proposed', 'approved', 'running'].includes(op.status));
   if (index.length > 64) throw new Error('活动操作索引过多，不能省略运行状态后继续');
-  const source = (op: OperationView) => ({ operationId: op.id, hostId: op.hostId, kind: op.kind, status: op.status,
-    readOnly: op.readOnly ?? null, effects: op.effects, exitCode: op.exitCode, createdAt: op.createdAt,
+  const source = (op: OperationView) => {
+    const privilege = op.privilege || op.authentication === 'succeeded' ? { ...(op.privilege ? { stage: op.privilege.stage, code: op.privilege.code,
+      source: op.privilege.source, businessCommand: op.privilege.businessCommand, recovery: op.privilege.recovery } : {}), method: op.privilege?.method ?? 'sudo',
+      scope: 'operation-only', loginAs: op.loginAs === undefined ? null : redactOutput(op.loginAs).slice(0, 128),
+      runAs: op.runAs === undefined ? null : redactOutput(op.runAs).slice(0, 128), authentication: op.authentication } : undefined;
+    return { operationId: op.id, hostId: op.hostId, kind: op.kind, status: op.status,
+    readOnly: op.readOnly ?? null, effects: op.effects, exitCode: op.exitCode, createdAt: op.createdAt, privilege,
     sourceVersion: digest([op.id, op.hostId, op.kind, op.status, op.createdAt, op.readOnly, op.effects, op.exitCode,
       op.reconciledAt, op.reconciliation?.kind, op.reconciliation?.outcome, op.reconciliation?.evidenceOperationIds,
-      op.outputCapture, digest(redactOutput(op.outputTail ?? ''))]),
+      op.outputCapture, privilege, digest(redactOutput(op.outputTail ?? ''))]),
     output: { truncated: op.outputCapture?.truncated ?? null,
       totalChars: op.outputCapture?.totalChars ?? null, tailChars: op.outputCapture?.tailChars ?? null,
-      retrieval: { tool: 'read_operation_log', operationId: op.id, cursor: 0 }, availability: 'reauthorize-on-read; retention-not-guaranteed' } });
+      retrieval: { tool: 'read_operation_log', operationId: op.id, cursor: 0 }, availability: 'reauthorize-on-read; retention-not-guaranteed' } };
+  };
   const ownedRound = mergeOperationViews(round).filter((op) => op.taskId === task.id);
   const latest = new Map<string, number>();
   ownedRound.forEach((op, i) => { if (op.status === 'succeeded' && op.readOnly !== true) latest.set(op.hostId, i); });

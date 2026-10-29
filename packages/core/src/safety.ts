@@ -2,6 +2,7 @@ import { isServiceQuery } from './service-observation.js';
 import { isDockerMetadataQuery } from './docker-query-policy.js';
 import { isBoundedDiagnosticCall } from './diagnostic-query-policy.js';
 import path from 'node:path';
+import { callDirectory, hasIncompleteCommandSemantics, resolveCommandDirectory, resolveCommandPath } from './command-semantics.js';
 import type { CommandAnalysis, CommandCall, ProposedOperation, SafetyDecision, SafetySettings } from './model.js';
 
 const CRITICAL_TREES = new Set(['/', '/etc', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib', '/boot', '/home', '/root', '/var', '/var/lib', '/var/lib/docker', '/bin', '/sbin', '/lib', '/lib64', '/dev', '/proc', '/sys']);
@@ -20,11 +21,9 @@ function decision(verdict: SafetyDecision['verdict'], ruleId: string, reason: st
   return { verdict, ruleId, reason };
 }
 
-function literalPath(value: string, cwd: string): string | null {
-  if (!value || /[$`*?{}\[\]<>\n\r]/u.test(value)) return null;
+function literalPath(value: string, cwd: string | null): string | null {
   const unquoted = value.replace(/^(['"])(.*)\1$/u, '$2');
-  if (!unquoted || unquoted.startsWith('~')) return null;
-  return path.posix.resolve(cwd, unquoted);
+  return resolveCommandPath(unquoted, cwd);
 }
 
 function isInside(target: string, root: string): boolean {
@@ -36,13 +35,15 @@ function isRecursive(args: string[]): boolean {
   return args.some((arg) => arg === '--recursive' || /^-[a-zA-Z]*[rR]/u.test(arg));
 }
 
-function criticalMassTarget(value: string, cwd: string): boolean {
+function criticalMassTarget(value: string, cwd: string | null): boolean {
   const normalized = literalPath(value, cwd);
   if (normalized && CRITICAL_TREES.has(normalized)) return true;
   const unquoted = value.replace(/^(['"])(.*)\1$/u, '$2');
   const glob = unquoted.search(/[*?{\[]/u);
   if (glob < 0) return false;
-  const base = path.posix.resolve(cwd, unquoted.slice(0, glob));
+  const prefix = unquoted.slice(0, glob);
+  if (!cwd && !prefix.startsWith('/')) return false;
+  const base = path.posix.resolve(cwd ?? '/', prefix);
   return CRITICAL_TREES.has(base) || [...CRITICAL_TREES].some((target) => target.startsWith(base));
 }
 
@@ -76,16 +77,22 @@ function hardCommandReason(analysis: CommandAnalysis, cwd: string): string | nul
     || /(?:password|passwd|otp|verification[_-]?code)\s*(?:=|:)\s*\S+/iu.test(analysis.raw)) {
     return 'Credentials must use the private authentication channel, never a Shell command';
   }
-  let effectiveCwd = cwd;
-  for (const rawCall of analysis.calls) {
-    const call = rawCall;
+  let effectiveCwd: string | null = cwd;
+  for (const call of analysis.calls) {
+    if (analysis.scopedContexts) effectiveCwd = callDirectory(call, cwd);
     const name = path.posix.basename(call.name);
-    if (name === 'cd' || name === 'pushd') effectiveCwd = literalPath(call.args.at(-1) ?? '', effectiveCwd) ?? effectiveCwd;
+    if (!analysis.scopedContexts && (name === 'cd' || name === 'pushd')) effectiveCwd = literalPath(call.args.at(-1) ?? '', effectiveCwd);
+    for (const effect of call.semantics?.tar?.paths ?? []) {
+      if (effect.kind !== 'write') continue;
+      const target = literalPath(effect.path, resolveCommandDirectory(effect.directory, cwd));
+      if (target && (isBlockDevice(target) || CRITICAL_FILES.has(target))) return 'Archive output changes a disk or essential system file';
+    }
     if ((BAD_DISK_TOOLS.has(name) || name.startsWith('mkfs.')) && !isQuery(call)) {
       return 'Disk formatting or partition mutation is reserved for manual operation';
     }
-    if (name === 'dd' && call.args.some((arg) => isBlockDevice(arg.replace(/^of=/u, '')))) return 'Direct disk overwrite is forbidden';
-    if (['cp', 'mv', 'install', 'tee', 'truncate', 'shred'].includes(name) && call.args.some((arg) => isBlockDevice(arg.replace(/^--[^=]+=/u, '')))) return 'Direct disk mutation is forbidden';
+    if (name === 'dd' && call.args.some((arg) => isBlockDevice(literalPath(arg.replace(/^of=/u, ''), effectiveCwd) ?? ''))) return 'Direct disk overwrite is forbidden';
+    if (['cp', 'mv', 'install', 'tee', 'truncate', 'shred'].includes(name)
+      && call.args.some((arg) => isBlockDevice(literalPath(arg.replace(/^--[^=]+=/u, ''), effectiveCwd) ?? ''))) return 'Direct disk mutation is forbidden';
     if (['rm', 'mv', 'tee', 'truncate', 'shred'].includes(name) && call.args.some((arg) => CRITICAL_FILES.has(literalPath(arg, effectiveCwd) ?? ''))) return 'Destruction of essential system files is forbidden';
     if (['mv', 'rmdir'].includes(name) && call.args.some((arg) => criticalMassTarget(arg, effectiveCwd))) return 'Removing or relocating a system tree is forbidden';
     if (name === 'rsync' && call.args.some((arg) => arg.startsWith('--delete')) && criticalMassTarget(call.args.at(-1) ?? '', effectiveCwd)) return 'Deleting system-tree contents through synchronization is forbidden';
@@ -106,16 +113,25 @@ function hardCommandReason(analysis: CommandAnalysis, cwd: string): string | nul
     }
   }
   if (analysis.redirectTargets.some(isBlockDevice)) return 'Direct redirection to a block device is forbidden';
-  if (analysis.redirectTargets.some((target) => CRITICAL_FILES.has(literalPath(target, effectiveCwd) ?? ''))) return 'Overwriting essential system files is forbidden';
+  const redirects = analysis.redirectEffects?.map((effect) => ({ target: effect.target,
+    cwd: resolveCommandDirectory(effect.context.cwd, cwd) }))
+    ?? analysis.redirectTargets.map((target) => ({ target, cwd: effectiveCwd }));
+  if (redirects.some((effect) => { const target = literalPath(effect.target, effect.cwd);
+    return !!target && (isBlockDevice(target) || CRITICAL_FILES.has(target)); })) return 'Overwriting a disk or essential system file is forbidden';
   return null;
 }
 
 function sensitiveRead(analysis: CommandAnalysis, cwd: string): boolean {
   return analysis.calls.some((call) => {
     const name = path.posix.basename(call.name);
+    if (name === 'tar' && call.semantics?.tar) {
+      return call.semantics.tar.paths.some((effect) => effect.kind === 'read'
+        && SENSITIVE_FILE.test(literalPath(effect.path, resolveCommandDirectory(effect.directory, cwd)) ?? ''))
+        || call.semantics.coverage === 'partial' && call.args.some((arg) => SENSITIVE_FILE.test(literalPath(arg, callDirectory(call, cwd)) ?? ''));
+    }
     if (!['cat', 'grep', 'head', 'tail', 'less', 'more', 'sed', 'awk', 'bash', 'sh', 'zsh', 'source', '.',
       'cp', 'mv', 'rsync', 'scp', 'tar', 'find', 'tee'].includes(name)) return false;
-    return call.args.some((arg) => SENSITIVE_FILE.test(literalPath(arg, cwd) ?? ''));
+    return call.args.some((arg) => SENSITIVE_FILE.test(literalPath(arg, callDirectory(call, cwd)) ?? ''));
   });
 }
 
@@ -140,27 +156,36 @@ function protectedTarget(operation: ProposedOperation): boolean {
 
 function protectedCommandTarget(operation: ProposedOperation, analysis: CommandAnalysis): boolean {
   const { cwd } = operation.scope;
-  let effectiveCwd = cwd;
-  const overlaps = (raw: string, roots: string[], destructive: boolean): boolean => {
+  let effectiveCwd: string | null = cwd;
+  const overlaps = (raw: string, roots: string[], destructive: boolean, directory = effectiveCwd): boolean => {
     const value = raw.replace(/^[A-Za-z_-][A-Za-z_0-9-]*=/u, '');
     // A literal prefix of a glob still identifies a protected tree.
     const prefix = value.split(/[*?{\[]/u)[0] ?? '';
-    const target = literalPath(prefix, effectiveCwd);
+    const target = literalPath(prefix, directory);
     if (target === null) return false;
     return roots.some((root) => isInside(target, root)
       || (destructive && isInside(path.posix.resolve(root), target))
       || (prefix !== value && path.posix.resolve(root).startsWith(target)));
   };
-  if (analysis.redirectTargets.some((target) => overlaps(target, writePaths(operation), false))) return true;
+  if (analysis.redirectEffects?.some((effect) => overlaps(effect.target, writePaths(operation), false,
+    resolveCommandDirectory(effect.context.cwd, cwd)))) return true;
+  if (!analysis.redirectEffects && analysis.redirectTargets.some((target) => overlaps(target, writePaths(operation), false))) return true;
   for (const [index, call] of analysis.calls.entries()) {
+    if (analysis.scopedContexts) effectiveCwd = callDirectory(call, cwd);
     const name = path.posix.basename(call.name);
+    for (const effect of call.semantics?.tar?.paths ?? call.semantics?.git?.paths ?? []) {
+      if (overlaps(effect.path, effect.kind === 'read' ? readPaths(operation) : writePaths(operation),
+        effect.recursive ?? false, resolveCommandDirectory(effect.directory, cwd))) return true;
+    }
+    if (name === 'tar' && call.semantics?.tar && call.semantics.coverage === 'complete') continue;
     if (name === 'echo' || name === 'printf') continue;
     if (index < analysis.calls.length - 1 && ['sudo', 'env', 'command', 'exec', 'nohup', 'nice', 'time', 'timeout', 'setsid']
       .includes(name)) continue;
     const destructive = ['rm', 'rmdir', 'mv', 'chmod', 'chown', 'find', 'rsync'].includes(name);
     const readOnly = isQuery(call) || ['grep', 'head', 'tail', 'less', 'wc', 'file', 'sha256sum'].includes(name);
     const writeOnly = ['mkdir', 'touch', 'rm', 'rmdir', 'chmod', 'chown', 'truncate', 'tee'].includes(name);
-    const operands = call.args.filter((arg) => !arg.startsWith('-'));
+    const targetArgs = call.semantics?.git?.args ?? call.args;
+    const operands = targetArgs.filter((arg) => !arg.startsWith('-'));
     if (['cp', 'install'].includes(name) && !call.args.some((arg) => arg === '-t' || arg.startsWith('--target-directory'))) {
       if (operands.length >= 2) {
         if (operands.slice(0, -1).some((arg) => overlaps(arg, readPaths(operation), false))
@@ -170,10 +195,10 @@ function protectedCommandTarget(operation: ProposedOperation, analysis: CommandA
     }
     const roots = readOnly ? readPaths(operation) : writeOnly ? writePaths(operation)
       : [...readPaths(operation), ...writePaths(operation)];
-    if (call.args.some((arg) => (!arg.startsWith('-') || arg.includes('=')) && overlaps(arg, roots, destructive))) return true;
-    if (name === 'cd' || name === 'pushd') effectiveCwd = literalPath(call.args.at(-1) ?? '', effectiveCwd) ?? effectiveCwd;
+    if (targetArgs.some((arg) => (!arg.startsWith('-') || arg.includes('=')) && overlaps(arg, roots, destructive))) return true;
+    if (!analysis.scopedContexts && (name === 'cd' || name === 'pushd')) effectiveCwd = literalPath(call.args.at(-1) ?? '', effectiveCwd);
   }
-  if (analysis.redirectTargets.some((target) => overlaps(target, writePaths(operation), false))) return true;
+  if (!analysis.redirectEffects && analysis.redirectTargets.some((target) => overlaps(target, writePaths(operation), false))) return true;
   return false;
 }
 
@@ -181,6 +206,8 @@ function isQuery(call: CommandCall): boolean {
   if (call.dynamic || call.redirects) return false;
   const name = path.posix.basename(call.name);
   if (![name, `/bin/${name}`, `/usr/bin/${name}`].includes(call.name)) return false;
+  if (name === 'date') return call.args.every((arg) => arg.startsWith('+') || ['-u', '--utc', '--universal', '-R', '--rfc-email', '-I', '--iso-8601', '--help', '--version'].includes(arg));
+  if (name === 'hostname') return call.args.every((arg) => ['-f', '--fqdn', '-s', '--short', '-I', '--all-ip-addresses', '-i', '--ip-address', '-d', '--domain', '-A', '--all-fqdns', '--help', '--version'].includes(arg));
   if (isServiceQuery(name, call.args)) return true;
   if (name === 'docker') return isDockerMetadataQuery(call.args);
   if ((BAD_DISK_TOOLS.has(name) || name.startsWith('mkfs.')) && call.args.length === 1
@@ -228,7 +255,7 @@ function plainSudoQuery(analysis: CommandAnalysis, names: readonly string[], all
 
 /** Low-risk auto-approval is deliberately narrower than effect classification. */
 export function isReadOnlyQuery(analysis: CommandAnalysis): boolean {
-  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection) return false;
+  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || hasIncompleteCommandSemantics(analysis)) return false;
   if (!analysis.hasCompound && analysis.calls.length === 1) return isQuery(analysis.calls[0]!);
   return plainSudoQuery(analysis, ['docker']);
 }
@@ -242,14 +269,30 @@ function literalReadList(analysis: CommandAnalysis): boolean {
       && call.args.every((arg, argIndex) => analysis.calls[index]?.args[argIndex] === arg));
 }
 
+/** A literal sudo wrapper (optional -- only) preserves a proven query's effects,
+ * not its auto-approval. Never accept identity/options, scripts or extra calls. */
+function singleSudoEffectFree(analysis: CommandAnalysis): boolean {
+  const wrapper = analysis.steps?.[0]?.call;
+  const inner = analysis.calls[1];
+  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || analysis.steps?.length !== 1
+    || analysis.calls.length !== 2 || !wrapper || !['sudo', '/usr/bin/sudo'].includes(wrapper.name)
+    || wrapper.dynamic || wrapper.redirects || !inner || analysis.steps[0]?.condition !== 'always' || analysis.calls[0]?.name !== wrapper.name
+    || analysis.calls[0].args.length !== wrapper.args.length || !wrapper.args.every((arg, i) => arg === analysis.calls[0]?.args[i])) return false;
+  const args = wrapper.args[0] === '--' ? wrapper.args.slice(1) : wrapper.args;
+  return args.length === inner.args.length + 1 && args[0] === inner.name
+    && args.slice(1).every((arg, index) => arg === inner.args[index]) && isQuery(inner);
+}
+
 /** Effect-free capability: privileged file inspection still takes its normal review path. */
 export function isEffectFreeQuery(analysis: CommandAnalysis): boolean {
+  if (hasIncompleteCommandSemantics(analysis)) return false;
   const diagnostic = !analysis.hasError && !analysis.hasExpansion && !analysis.hasPipeline && !analysis.hasRedirection
     && !analysis.hasCompound && analysis.calls.length === 1 && isBoundedDiagnosticCall(analysis.calls[0]!);
-  return isReadOnlyQuery(analysis) || diagnostic || literalReadList(analysis) || plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true);
+  return isReadOnlyQuery(analysis) || diagnostic || literalReadList(analysis) || plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true) || singleSudoEffectFree(analysis);
 }
 
 function isLowRiskCommand(analysis: CommandAnalysis, operation: ProposedOperation): boolean {
+  if (hasIncompleteCommandSemantics(analysis)) return false;
   if (isReadOnlyQuery(analysis)) return true;
   if (analysis.hasCompound || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || analysis.calls.length !== 1) return false;
   const call = analysis.calls[0];
@@ -269,7 +312,7 @@ function isLowRiskCommand(analysis: CommandAnalysis, operation: ProposedOperatio
   });
 }
 
-function securityConfiguration(value: string, cwd: string): boolean {
+function securityConfiguration(value: string, cwd: string | null): boolean {
   const target = literalPath(value, cwd);
   return !!target && (/^\/etc\/(?:ssh\/|sudoers(?:\.d\/|$)|sysctl\.d\/|iptables\/)/u.test(target)
     || /^\/root\/\.ssh\//u.test(target) || /\/\.ssh\/authorized_keys$/u.test(target));
@@ -277,8 +320,14 @@ function securityConfiguration(value: string, cwd: string): boolean {
 
 function highImpactCommand(analysis: CommandAnalysis, cwd: string): string | null {
   const names = analysis.calls.map((call) => path.posix.basename(call.name));
-  if (analysis.redirectTargets.some((target) => securityConfiguration(target, cwd))
-    || analysis.calls.some((call) => !isQuery(call) && call.args.some((arg) => securityConfiguration(arg, cwd)))) {
+  const securityRedirect = analysis.redirectEffects
+    ? analysis.redirectEffects.some((effect) => securityConfiguration(effect.target, resolveCommandDirectory(effect.context.cwd, cwd)))
+    : analysis.redirectTargets.some((target) => securityConfiguration(target, cwd));
+  if (securityRedirect
+    || analysis.calls.some((call) => !isQuery(call) && (call.semantics?.tar
+      ? call.semantics.tar.paths.some((effect) => effect.kind === 'write'
+        && securityConfiguration(effect.path, resolveCommandDirectory(effect.directory, cwd)))
+      : call.args.some((arg) => securityConfiguration(arg, callDirectory(call, cwd)))))) {
     return 'Changes SSH, sudo, or host security configuration';
   }
   if (names.some((name) => HIGH_IMPACT_COMMANDS.has(name))) return 'Changes account access, firewall, or host availability';
@@ -287,7 +336,8 @@ function highImpactCommand(analysis: CommandAnalysis, cwd: string): string | nul
     if (name === 'rm' && isRecursive(call.args)) return true;
     if (['chmod', 'chown'].includes(name) && isRecursive(call.args)) return true;
     if (name === 'rsync' && call.args.some((arg) => arg.startsWith('--delete'))) return true;
-    if (name === 'git' && call.args[0] === 'reset' && call.args.includes('--hard')) return true;
+    if (name === 'git' && (call.semantics?.git?.subcommand ?? call.args[0]) === 'reset'
+      && (call.semantics?.git?.args ?? call.args).includes('--hard')) return true;
     if (name === 'docker' && (call.args.includes('prune') || call.args.includes('--volumes') || call.args.includes('-v') && call.args.includes('down'))) return true;
     return ['apt', 'apt-get', 'dnf', 'yum'].includes(name) && call.args.some((arg) => ['remove', 'purge', 'autoremove', 'upgrade', 'dist-upgrade'].includes(arg));
   })) return 'Broad deletion, permission, package, or volume change';
@@ -297,7 +347,7 @@ function highImpactCommand(analysis: CommandAnalysis, cwd: string): string | nul
 }
 
 function ordinaryCommand(analysis: CommandAnalysis): boolean {
-  if (analysis.hasExpansion || analysis.hasPipeline || !analysis.calls.length) return false;
+  if (analysis.hasExpansion || analysis.hasPipeline || !analysis.calls.length || hasIncompleteCommandSemantics(analysis)) return false;
   if (analysis.hasRedirection) {
     return analysis.calls.length === 1 && ['echo', 'printf'].includes(path.posix.basename(analysis.calls[0]!.name))
       && analysis.redirectTargets.length === 1 && !analysis.calls[0]!.dynamic;
@@ -310,20 +360,26 @@ function ordinaryCommand(analysis: CommandAnalysis): boolean {
   if (call.dynamic || !ORDINARY_COMMANDS.has(name)) return false;
   if (OPAQUE_COMMANDS.has(name) && call.args.some((arg) => ['-c', '-e', '--eval', '-m'].includes(arg)
     || /\.(?:py|js|sh|bash|pl|rb|php)$/u.test(arg))) return false;
-  if (name === 'git' && ['clean', 'push', 'reset', 'rebase'].includes(call.args[0] ?? '')) return false;
+  if (name === 'git' && ['clean', 'push', 'reset', 'rebase'].includes(call.semantics?.git?.subcommand ?? call.args[0] ?? '')) return false;
   if (name === 'docker' && !['compose', 'build', 'pull', 'ps', 'logs', 'restart', 'start', 'stop'].includes(call.args[0] ?? '')) return false;
   return true;
 }
 
-/** A literal script file; dynamic arguments and shell snippets remain opaque. */
+/** The inspector reads with the operation entry cwd, not a launcher's changed cwd. */
+function scriptUsesEntryDirectory(call: CommandCall): boolean {
+  return !call.context || call.context.namespace === 'inherited' && call.context.cwd.state === 'known'
+    && call.context.cwd.changes.length === 0 && !call.context.unknownReasons.length;
+}
+
+/** A literal script file; dynamic or changed-context execution remains opaque. */
 export function scriptFilePath(analysis: CommandAnalysis): string | undefined {
   if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection
-    || (analysis.hasCompound && analysis.steps?.length !== 1)) return undefined;
+    || hasIncompleteCommandSemantics(analysis) || (analysis.hasCompound && analysis.steps?.length !== 1)) return undefined;
   const call = analysis.calls.find((item) => ['bash', 'sh', 'zsh'].includes(path.posix.basename(item.name))
-    && !item.dynamic && item.args.length >= 1 && !item.args[0]?.startsWith('-'));
+    && scriptUsesEntryDirectory(item) && !item.dynamic && item.args.length >= 1 && !item.args[0]?.startsWith('-'));
   if (call) return call.args[0];
   const direct = analysis.calls.length === 1 ? analysis.calls[0] : undefined;
-  return direct && !direct.dynamic && /\.\w*sh$/u.test(direct.name) ? direct.name : undefined;
+  return direct && scriptUsesEntryDirectory(direct) && !direct.dynamic && /\.\w*sh$/u.test(direct.name) ? direct.name : undefined;
 }
 
 export function inspectScriptSafety(operation: Extract<ProposedOperation, { kind: 'command' }>, source: string,

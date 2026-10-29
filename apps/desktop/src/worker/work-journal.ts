@@ -1,7 +1,11 @@
 import { Type, type Static } from 'typebox';
 import type { BusinessTool } from '@cloudhelm/core';
 import type { AppEvent, OperationView, VerificationReport } from '@cloudhelm/contracts';
-import { operationNeedsVerification, VerificationCheckSchema, UnverifiedChangeSchema, type VerificationReason } from '@cloudhelm/contracts';
+import { operationNeedsVerification, VerificationSubmissionV3Schema, type VerificationReason,
+  type VerificationSubmissionV3, type VerificationFacts, type GoalCheck } from '@cloudhelm/contracts';
+import { validateSubmissionV3 } from './verification-submission.js';
+import { buildVerificationReport, evaluateRunOutput, verificationReason } from './verification-facts.js';
+import type { VerificationFeedback } from './verification-feedback.js';
 import { validateVerificationV2 } from './verification-report-v2.js';
 import { createReconciliationTool } from './reconciliation-tool.js';
 import { mergeOperationViews } from './runtime-facts.js';
@@ -20,26 +24,66 @@ export class WorkJournal {
   private report?: VerificationReport;
   private reportReason?: Exclude<VerificationReason, 'report-missing'>;
   private reportIssue?: { code: string; guidance: string };
+  private submission?: VerificationSubmissionV3;
+  private notes?: VerificationReport;
+  private failures = 0;
+  private revision = 0;
   constructor(private readonly taskId: string, private readonly operations: () => OperationView[],
     private readonly emit: (event: AppEvent) => void,
     private readonly readLog: (operationId: string, cursor: number) => Promise<LogPage>,
     private readonly reconcile: (operation: OperationView) => boolean = () => false,
     private readonly reconciled: (operation: OperationView) => void = () => {},
-    private readonly verificationOperations: () => OperationView[] = operations) {}
+    private readonly verificationOperations: () => OperationView[] = operations,
+    private readonly roundId: () => string = () => taskId, initialReport?: VerificationReport) {
+    this.report = initialReport ? structuredClone(initialReport) : undefined;
+    this.notes = initialReport?.facts?.registration === 'automatic' ? undefined : this.report;
+    this.submission = this.report?.expectations;
+    this.revision = initialReport?.facts?.revision ?? 0;
+    if (this.report?.facts) this.reportReason = verificationReason(this.report) as Exclude<VerificationReason, 'report-missing'> | undefined;
+  }
 
   resetReport(): void {
     this.report = undefined; this.reportReason = undefined;
-    this.reportIssue = undefined;
+    this.reportIssue = undefined; this.submission = undefined; this.notes = undefined; this.failures = 0; this.revision = 0;
     this.emit({ type: 'work-report', taskId: this.taskId });
   }
   hasReport(): boolean { return !!this.report; }
-  completionReport(): { reportStatus?: 'verified' | 'unverified'; reportUnverifiedReason?: VerificationReason } {
-    return this.report ? { reportStatus: this.reportReason ? 'unverified' : 'verified', reportUnverifiedReason: this.reportReason } : {};
+  submissionClosed(): boolean { return this.failures >= 2; }
+  /** Always assemble backend facts at completion, even if the model never submitted a report. */
+  finalize(roundId: string): VerificationReport | undefined {
+    const round = this.verificationOperations().filter((op) => op.taskId === this.taskId);
+    if (!round.length || !this.report && round.every((op) => op.readOnly === true && !op.outputExpectation || op.status === 'denied')) return undefined;
+    const checks: GoalCheck[] = this.submission ? (this.submission.checks ?? []).flatMap((check) => {
+      const id = check.kind === 'run-output' ? check.operationId : check.evidenceOperationId;
+      const operation = round.find((op) => op.id === id);
+      if (!operation) return [];
+      return check.kind === 'run-output' ? [evaluateRunOutput(operation, check)] : [{ kind: 'model-assessment' as const,
+        authority: 'model' as const, target: check.target, expected: check.expected, observed: check.observed,
+        status: check.status, operationIds: [id] }];
+    }) : (this.notes?.checks ?? []).map((check) => ({ kind: 'model-assessment', authority: 'model',
+      target: check.target, expected: check.expected, observed: check.observed, status: check.status,
+      operationIds: [...check.changeOperationIds, ...check.evidenceOperationIds] }));
+    const report = buildVerificationReport({ roundId, revision: this.revision, operations: round,
+      all: this.operations().filter((op) => op.taskId === this.taskId), submitted: this.notes, checks });
+    if (this.submission) report.expectations = structuredClone(this.submission);
+    if (JSON.stringify(report) === JSON.stringify(this.report)) return this.report;
+    report.facts!.revision = ++this.revision;
+    this.report = report;
+    this.reportReason = verificationReason(report) as Exclude<VerificationReason, 'report-missing'> | undefined;
+    this.emit({ type: 'work-report', taskId: this.taskId, report: structuredClone(this.report) });
+    return this.report;
+  }
+  completionReport(): { reportStatus?: 'verified' | 'unverified'; reportUnverifiedReason?: VerificationReason; reportFacts?: VerificationFacts } {
+    return this.report ? { reportStatus: this.reportReason ? 'unverified' : 'verified', reportUnverifiedReason: this.reportReason,
+      ...(this.report.facts ? { reportFacts: this.report.facts } : {}) } : {};
   }
   lastReportIssue(): { code: string; guidance: string } | undefined { return this.reportIssue; }
-  private rejected(code: string, guidance: string) {
+  private rejected(code: string, guidance: string, feedback?: VerificationFeedback) {
+    if (this.submissionClosed()) guidance += ' 本轮不再要求修正报告；请直接说明已有结果与限制，后端会自动生成基础报告，不要重放操作。';
     this.reportIssue = { code, guidance };
-    return result(JSON.stringify(this.reportIssue), true);
+    return result(JSON.stringify({ ...this.reportIssue, ...(feedback ? {
+      issues: feedback.issues, omittedIssues: feedback.omittedIssues, repair: feedback.repair
+    } : {}) }), true);
   }
 
   tools() {
@@ -54,20 +98,31 @@ export class WorkJournal {
         return result('Plan updated');
       }
     };
-    const reportParameters = Type.Object({ version: Type.Optional(Type.Literal(2)),
-      checks: Type.Optional(Type.Array(VerificationCheckSchema, { maxItems: 32 })),
-      unverifiedChanges: Type.Optional(Type.Array(UnverifiedChangeSchema, { maxItems: 64 })),
-      summary: Type.String({ minLength: 1 }), access: Type.Array(Type.String()),
-      evidenceOperationIds: Type.Array(Type.String(), { maxItems: 64 }),
-      changes: Type.Array(Type.String(), { minItems: 1 }), recovery: Type.Array(Type.String(), { minItems: 1 }) });
-    const report: BusinessTool<Static<typeof reportParameters>> = {
+    // New model calls use the exact backend schema; legacy records/direct replay
+    // remain readable below but are not advertised as a new submission format.
+    const reportParameters = VerificationSubmissionV3Schema;
+    const report: BusinessTool<VerificationReport> = {
       name: 'submit_verification', label: 'Record change checks and uncertainty', replay: 'never', parameters: reportParameters,
-      description: 'Use version=2 after changes: checks(changeOperationIds,target,expected,observed,evidenceOperationIds,status=passed/failed/inconclusive), unverifiedChanges(operationId,reason). Cover every real change; top evidenceOperationIds is the exact check-ID union. passed requires successful, SafetyGate-classified effect-free checks with exit=0; EACH changed host needs a check after its latest change, including cleanup. Reuse prior IDs; do not replay work to manufacture success. failed/inconclusive may be recorded honestly as unverified; no evidence means inconclusive, not failed/passed. This validates structure, not semantic relevance. Literal bounded sudo cat/ls/stat may qualify after review; glob/expansion, sudo head/find and opaque commands do not. Keep summary/access/changes/recovery in the language of the current user request (not applicable must be explicit); preserve literal paths/output, never credentials. Unversioned reports remain legacy format.',
+      description: 'Optional report notes, not a completion gate. Prefer version=3: summary/recovery/checks are optional; backend assembles operation coverage and evidence indexes. run-output(operationId,expectedOutput,expectedExitCode=0) compares complete captured output exactly (CRLF normalized), independently of side effects; use the actual expected output including newline. model-assessment(target,expected,observed,evidenceOperationId,status) records your interpretation of an effect-free observation, NOT backend proof. File content read-back is matched automatically by host/path/hash. Expectations are model proposals, not proof of the entire user goal. Never execute or replay commands merely to complete a report. After a rejection correct once at most, then answer honestly; backend still creates a basic report. Unknown-result locks remain independent. No credentials. Legacy reports remain readable as model assessments, not backend proof.',
       execute: async (_id, value) => {
+        if (value.version === 3) {
+          if (this.submissionClosed()) return result('Report submission closed after two rejected attempts. Answer from existing observations; backend will assemble facts. No operation was executed and no outcome lock was cleared.');
+          if (this.submission) return result('Notes already recorded for this round. Answer from the recorded results; do not replace expectations merely to obtain a passing label.');
+          const validation = validateSubmissionV3(this.taskId, value, this.verificationOperations(), this.operations());
+          if (!validation.accepted) { this.failures++; return this.rejected(validation.code, validation.guidance); }
+          this.submission = validation.submission;
+          this.report = { version: 3, summary: validation.submission.summary ?? '已登记目标观察。',
+            recovery: validation.submission.recovery ?? [], access: [], changes: [], evidenceOperationIds: [] };
+          this.notes = this.report;
+          this.reportIssue = undefined;
+          this.finalize(this.roundId());
+          return result('Notes recorded. Backend will evaluate recorded goals and generate the report at completion; execution, goals and impact are separate. Do not resubmit to manufacture success.');
+        }
+        if (this.submission) return this.rejected('verification-format-downgrade', '已有新版目标观察，不能用旧报告覆盖；请说明已有结果。');
         if (value.version !== undefined || value.checks !== undefined || value.unverifiedChanges !== undefined) {
           const validation = validateVerificationV2(this.taskId, value, this.verificationOperations(), this.operations());
-          if (!validation.accepted) return this.rejected(validation.code, validation.guidance);
-          this.report = validation.report; this.reportReason = validation.reason; this.reportIssue = undefined;
+          if (!validation.accepted) return this.rejected(validation.code, validation.guidance, validation);
+          this.report = validation.report; this.notes = this.report; this.reportReason = validation.reason; this.reportIssue = undefined;
           this.emit({ type: 'work-report', taskId: this.taskId, report: structuredClone(validation.report) });
           return result(validation.reason ? 'Checks recorded as unverified; explain failed/inconclusive results without replay.' : 'Checks recorded; conclusions remain limited to the cited observations.');
         }
@@ -107,7 +162,7 @@ export class WorkJournal {
           return this.rejected('verification-outcome-unresolved', '仍有未决远端操作结果，须先核验原结果，不能重放变更。');
         }
         this.reportIssue = undefined;
-        this.report = structuredClone(value); this.reportReason = undefined;
+        this.report = structuredClone(value); this.notes = this.report; this.reportReason = undefined;
         this.emit({ type: 'work-report', taskId: this.taskId, report: value });
         return result('Verification report recorded; report the conclusion to the user');
       }

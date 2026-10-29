@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { CommandCall } from '@cloudhelm/core';
+import { entryContext, launcherInfo, unknownContext } from './command-semantics/wrappers.js';
 
 /** Decode literal quoting only. This never expands variables or executes shell text. */
 export function shellWord(text: string): string {
@@ -30,34 +31,9 @@ export function shellWord(text: string): string {
   return result;
 }
 
-const VALUE_OPTIONS: Record<string, Set<string>> = {
-  sudo: new Set(['-u', '-g', '-p', '-C', '-R', '-D', '-T', '-h', '--user', '--group', '--prompt', '--close-from', '--chroot', '--chdir', '--command-timeout', '--host']),
-  env: new Set(['-u', '-C', '--unset', '--chdir']),
-  command: new Set(), exec: new Set(['-a']), nohup: new Set(), busybox: new Set(),
-  nice: new Set(['-n', '--adjustment']), time: new Set(['-f', '-o', '--format', '--output']),
-  timeout: new Set(['-k', '-s', '--kill-after', '--signal']), setsid: new Set(),
-  xargs: new Set(['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars']),
-  runuser: new Set(['-u', '-g', '-G', '--user', '--group', '--supp-group'])
-};
-
-/** Find the executable after a known launcher; embedded scripts are handled separately. */
+/** Find the executable and its local context without authorizing its execution. */
 export function wrappedCommand(call: CommandCall): CommandCall | undefined {
-  const name = path.posix.basename(call.name);
-  const values = VALUE_OPTIONS[name];
-  if (!values) return;
-  let index = 0;
-  while (index < call.args.length) {
-    const arg = call.args[index]!;
-    if (arg === '--') { index++; break; }
-    if (arg.startsWith('-')) {
-      if (name === 'env' && (arg.startsWith('-S') || arg === '--split-string' || arg.startsWith('--split-string='))) return;
-      index += values.has(arg) ? 2 : 1;
-    } else if (/^[A-Za-z_][A-Za-z_0-9]*=/u.test(arg)) index++;
-    else break;
-  }
-  if (name === 'timeout') index++;
-  if (!call.args[index]) return;
-  return { ...call, name: call.args[index]!, args: call.args.slice(index + 1) };
+  return launcherInfo(call).command;
 }
 
 export function embeddedShell(call: CommandCall): string | undefined {
@@ -78,11 +54,14 @@ export function embeddedShell(call: CommandCall): string | undefined {
     }
   }
   if (name === 'env') {
-    const split = call.args.findIndex((arg) => arg === '-S' || arg.startsWith('-S') || arg === '--split-string' || arg.startsWith('--split-string='));
+    const split = launcherInfo(call).splitIndex ?? -1;
     if (split >= 0) {
       const option = call.args[split]!;
-      return option.startsWith('--split-string=') ? option.slice(15)
-        : option.startsWith('-S') && option.length > 2 ? option.slice(2) : call.args[split + 1];
+      const attached = option.startsWith('--split-string=') || option.startsWith('-S') && option.length > 2;
+      const source = option.startsWith('--split-string=') ? option.slice(15)
+        : attached ? option.slice(2) : call.args[split + 1];
+      const tail = call.args.slice(split + (attached ? 1 : 2)).map((arg) => `'${arg.replace(/'/gu, "'\\''")}'`);
+      return source === undefined ? undefined : [source, ...tail].join(' ');
     }
   }
   if (!['bash', 'sh', 'dash', 'zsh', 'ksh', 'su', 'runuser'].includes(name)) return;
@@ -97,6 +76,8 @@ export function findCommands(call: CommandCall): CommandCall[] {
   return call.args.flatMap((arg, index) => {
     if (!['-exec', '-execdir', '-ok', '-okdir'].includes(arg) || !call.args[index + 1]) return [];
     const end = call.args.findIndex((value, offset) => offset > index && (value === ';' || value === '+'));
-    return [{ ...call, name: call.args[index + 1]!, args: call.args.slice(index + 2, end < 0 ? undefined : end) }];
+    return [{ ...call, name: call.args[index + 1]!, args: call.args.slice(index + 2, end < 0 ? undefined : end),
+      context: ['-execdir', '-okdir'].includes(arg)
+        ? unknownContext(call.context ?? entryContext(), 'find execdir changes directory per match') : call.context }];
   });
 }

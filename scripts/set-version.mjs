@@ -19,7 +19,8 @@ export const PACKAGE_FILES = [
   'packages/adapters/package.json',
   'packages/application/package.json',
   'packages/contracts/package.json',
-  'packages/core/package.json'
+  'packages/core/package.json',
+  'Tests/package.json'
 ];
 const README_VERSION = /当前版本为 \*\*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/u;
 

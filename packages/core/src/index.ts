@@ -1,4 +1,5 @@
 export * from './model.js';
+export * from './command-semantics.js';
 export * from './ports.js';
 export * from './fingerprint.js';
 export * from './safety.js';
@@ -9,6 +10,7 @@ export * from './sudo-plan.js';
 export * from './clarification.js';
 export * from './diagnostics.js';
 export * from './sudo-outcome.js';
+export * from './privilege.js';
 export * from './agent-session.js';
 export * from './request-budget.js';
 export * from './command-preflight.js';

@@ -31,16 +31,60 @@ export interface OperationScope {
 }
 
 export type ProposedOperation =
-  | { id: string; kind: 'command'; command: string; serviceUnit?: string; scope: OperationScope }
+  | { id: string; kind: 'command'; command: string; serviceUnit?: string;
+      outputExpectation?: { expectedOutput: string; expectedExitCode?: number }; scope: OperationScope }
   | { id: string; kind: 'write-file'; path: string; content: string; scope: OperationScope }
   | { id: string; kind: 'upload'; localPath: string; remotePath: string; localRoot: string; contentSha256: string; size: number; scope: OperationScope }
   | { id: string; kind: 'delete-path'; path: string; scope: OperationScope };
+
+/** Lexical cwd relative to the operation entry directory, not remote realpath evidence. */
+export type CommandDirectory = { state: 'known'; changes: string[] } | { state: 'unknown' };
+
+export interface CommandContext {
+  cwd: CommandDirectory;
+  /** Requested identity is not evidence of successful authentication. */
+  identity: { state: 'inherited' } | { state: 'requested'; user?: string; group?: string } | { state: 'unknown' };
+  namespace: 'inherited' | 'unknown';
+  unknownReasons: string[];
+}
+
+export interface CommandPathEffect {
+  kind: 'read' | 'write';
+  path: string;
+  directory: CommandDirectory;
+  /** Directory traversal/extraction may affect descendants, not only the operand. */
+  recursive?: boolean;
+}
+
+export interface GitCommandSemantics {
+  subcommand?: string;
+  args: string[];
+  directory: CommandDirectory;
+  paths: CommandPathEffect[];
+}
+
+export interface TarCommandSemantics {
+  mode?: 'create' | 'list' | 'extract';
+  paths: CommandPathEffect[];
+}
+
+export interface CommandSemantics {
+  /** Coverage of supported argv semantics, not proof of all runtime effects or remote path identity. */
+  coverage: 'complete' | 'partial';
+  unknownReasons: string[];
+  git?: GitCommandSemantics;
+  tar?: TarCommandSemantics;
+}
 
 export interface CommandCall {
   name: string;
   args: string[];
   dynamic: boolean;
   redirects: boolean;
+  context?: CommandContext;
+  semantics?: CommandSemantics;
+  /** Range in raw source, or in the separately labelled embedded shell source. */
+  source?: { start: number; end: number; depth: number };
 }
 
 export interface CommandAnalysis {
@@ -48,6 +92,10 @@ export interface CommandAnalysis {
   /** Literal foreground commands in shell evaluation order; absent for opaque syntax. */
   steps?: Array<{ call: CommandCall; condition: 'always' | 'success' | 'failure' }>;
   redirectTargets: string[];
+  /** Per-redirection shell context; wrapper cwd does not affect shell redirection. */
+  redirectEffects?: Array<{ target: string; context: CommandContext }>;
+  /** New analyzers attach scoped contexts; absent for legacy synthetic analysis. */
+  scopedContexts?: boolean;
   hasExpansion: boolean;
   hasPipeline: boolean;
   hasCompound: boolean;
@@ -76,6 +124,7 @@ export interface OperationResult {
   exitCode?: number;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
+  privilege?: import('./privilege.js').PrivilegeFeedback;
   failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'unknown';
   effects?: 'none' | 'possible';
   stdoutTail: string;

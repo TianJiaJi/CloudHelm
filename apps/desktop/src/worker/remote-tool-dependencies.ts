@@ -7,7 +7,7 @@ export interface RemoteToolDependencies {
   hosts: RuntimeHost[];
   localFiles: LocalFileAccess;
   ensureTerminal(hostId: string, sessionId?: string): Promise<string>;
-  requestRoot?(host: RuntimeHost, command: string, cwd: string, reason: string, signal?: AbortSignal): Promise<unknown>;
+  requestRoot?(host: RuntimeHost, command: string, cwd: string, reason: string, signal?: AbortSignal, method?: import('@cloudhelm/core').PrivilegeMethod): Promise<unknown>;
   scope(host: RuntimeHost, terminalId: string, cwd?: string): OperationScope;
   runOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string): Promise<{ result?: import('@cloudhelm/core').OperationResult; readOnly?: boolean; content: Array<{ type: 'text'; text: string }>; details: unknown; isError: boolean }>;
 }

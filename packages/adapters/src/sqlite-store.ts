@@ -185,6 +185,17 @@ export class SqliteStore {
         INSERT INTO schema_migrations(version, applied_at) VALUES (10, unixepoch());
       `);
     }).immediate();
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 11').get()) return;
+      // Preserve old reports verbatim. Never upgrade their assertions into deterministic evidence.
+      this.raw.exec(`
+        INSERT OR IGNORE INTO records(bucket, id, value, updated_at)
+        SELECT 'verification-reports', id || ':legacy-v11',
+          json_object('taskId', id, 'report', json_extract(value, '$.report')), updated_at
+        FROM records WHERE bucket = 'tasks' AND json_type(value, '$.report') = 'object';
+        INSERT INTO schema_migrations(version, applied_at) VALUES (11, unixepoch());
+      `);
+    }).immediate();
   }
 
   get<T>(bucket: string, id: string): T | undefined {

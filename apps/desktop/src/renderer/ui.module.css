@@ -1,6 +1,6 @@
 .app {
   --canvas: #1a1c1d; --panel: #242728; --raised: #303436; --border: #373b3d;
-  --text: #e5e7e8; --muted: #9a9fa2; --accent: #83b7aa; --accentSoft: #2b3d38; --terminalBg: #202324;
+  --text: #e5e7e8; --muted: #9a9fa2; --accent: #83b7aa; --accentText: #192a25; --accentSoft: #2b3d38; --terminalBg: #202324;
   display: flex; height: 100%; min-width: 900px; gap: 10px; padding: 12px; background: var(--canvas); color: var(--text); font-size: 13px;
 }
 .app button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: transparent; color: inherit; border-radius: 6px; }
@@ -76,7 +76,7 @@
 .emptyGlyph { display: grid; place-items: center; width: 76px; height: 76px; border: 1px solid var(--border); border-radius: 19px; background: var(--raised); color: var(--accent); }
 .empty h1 { margin: 24px 0 8px; font-size: 21px; font-weight: 550; color: var(--text); }
 .empty p { max-width: 350px; font-size: 12px; line-height: 1.7; margin: 0 0 24px; }
-.primary { background: var(--accent) !important; color: #192a25 !important; padding: 8px 13px !important; border-radius: 7px; font-size: 12px; font-weight: 600; }
+.primary { background: var(--accent) !important; color: var(--accentText) !important; padding: 8px 13px !important; border-radius: 7px; font-size: 12px; font-weight: 600; }
 .primary:hover { filter: brightness(1.06); }
 .error { position: absolute; left: 14px; right: 14px; bottom: 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; z-index: 25; background: #503935; color: #fbe1dd; border: 1px solid #966d64; border-radius: 8px; padding: 11px 13px; font-size: 12px; line-height: 1.5; }
 .error span { overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
@@ -204,7 +204,7 @@
 .reportPage > details { font-size: 12px; }
 .reportPage > details > summary { padding: 15px 0; }
 @media (prefers-color-scheme: light) {
-  .app { --canvas: #eef0f0; --panel: #fafbfb; --raised: #e7ebea; --border: #d6dcda; --text: #262d2a; --muted: #6d7672; --accent: #397d6b; --accentSoft: #e0eeE8; --terminalBg: #f7f9f8; }
+  .app { --canvas: #eef0f0; --panel: #fafbfb; --raised: #e7ebea; --border: #d6dcda; --text: #262d2a; --muted: #6d7672; --accent: #397d6b; --accentText: #fff; --accentSoft: #e0eeE8; --terminalBg: #f7f9f8; }
   .dangerText { color: #ab5649 !important; }
   .composer { border-color: #cbd2cf; }
   .scrim { background: #20282666; }

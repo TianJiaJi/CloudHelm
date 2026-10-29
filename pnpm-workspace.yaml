@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - Tests
 overrides:
   ssh2>cpu-features: '-'
   ssh2>nan: '-'

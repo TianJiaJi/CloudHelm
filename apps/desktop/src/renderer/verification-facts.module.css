@@ -1,0 +1,3 @@
+.dimensions { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 12px; margin: 12px 0; line-height: 1.6; }
+.dimensions dt { color: var(--muted); }
+.dimensions dd { margin: 0; overflow-wrap: anywhere; }

@@ -6,7 +6,7 @@ import { Value } from 'typebox/value';
 import type { SqliteStore } from '@cloudhelm/adapters';
 import type { ReferenceStore } from './reference-store.js';
 import type { MessageDocument } from '@cloudhelm/contracts';
-import { modelThinking } from '@cloudhelm/adapters';
+import { BashAnalyzer, modelThinking } from '@cloudhelm/adapters';
 import { rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -103,6 +103,7 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
         ...(prepared ? { preparedRevision: prepared.revision } : {}) });
     } catch (error) { restoreSelections(tokens, scopes); throw error; }
   }
+  ipcMain.handle('cloudhelm:rebuild-verification-report', (_event, id: string) => state.rebuildVerificationReport(id, new BashAnalyzer()));
   ipcMain.handle('cloudhelm:start-conversation', (_event, input: ConversationStart) => start(input));
   ipcMain.handle('cloudhelm:send-message', (_event, id: string, text: string, tokens: string[]) => send(id, text, tokens));
   if (store && references) registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime,

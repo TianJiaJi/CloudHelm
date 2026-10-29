@@ -1,4 +1,4 @@
-import { redactOutput, type OperationResult } from '@cloudhelm/core';
+import { redactOutput, privilegeGuidance, type OperationResult } from '@cloudhelm/core';
 
 /** UTF-8-safe bounded feedback, after redaction; never a way to slice raw secrets. */
 export function feedbackTail(value: string, maxBytes: number): { text: string; truncated: boolean } {
@@ -8,6 +8,7 @@ export function feedbackTail(value: string, maxBytes: number): { text: string; t
   return { text: bytes.subarray(start).toString('utf8'), truncated: start > 0 };
 }
 function guidance(result: OperationResult, readOnly?: boolean): string {
+  if (result.privilege) return privilegeGuidance(result.privilege);
   if (result.authentication === 'succeeded') return result.status === 'succeeded' && result.exitCode === 0
     ? 'The operation completed successfully after private authentication. Earlier password retry messages do not negate exit 0. Continue using bounded sudo when needed; do not test sudo -n/-l/-v. Authentication is isolated per operation; passwordless probes do not determine whether authenticated sudo works.'
     : 'Private authentication succeeded, but that does not prove the requested command succeeded. Follow the reported status and exit code; do not test sudo -n/-l/-v or bypass a control stop.';
@@ -29,7 +30,7 @@ function output(result: OperationResult) {
 }
 export function operationFeedbackDetails(result: OperationResult, readOnly?: boolean) {
   return { operationId: result.operationId, status: result.status, readOnly: readOnly ?? 'unclassified',
-    exitCode: result.exitCode ?? null, effects: result.effects ?? 'not-classified',
+    exitCode: result.exitCode ?? null, effects: result.effects ?? 'not-classified', ...(result.privilege ? { privilege: result.privilege } : {}),
     outputTruncated: output(result).truncated || result.outputCapture?.truncated === true ? true : result.outputCapture?.truncated ?? 'unknown',
     capturedChars: result.outputCapture?.totalChars ?? null, logAvailability: result.logRef ? 'reference-only' : 'unknown',
     ...(result.logRef ? { retrieval: { tool: 'read_operation_log', operationId: result.operationId, cursor: 0 } } : {}) };

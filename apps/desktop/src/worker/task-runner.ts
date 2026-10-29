@@ -1,5 +1,7 @@
 import { blockedOperationFeedback, operationToolResult } from './operation-feedback.js';
-import { decideTaskCompletion, reportRequiredOperations } from './task-completion.js';
+import { decideTaskCompletion } from './task-completion.js';
+import { VerificationRoundTracker } from './verification-round.js';
+import { verificationSource } from './verification-source.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { ClarificationCoordinator, SafetyGate, type TerminalManager } from '@cloudhelm/application';
@@ -15,7 +17,7 @@ import { interruptionContext } from './task-input-context.js';
 import { taskContextSnapshot } from './task-context.js';
 import { TaskProgress } from './task-progress.js';
 import { observeProgressTools } from './task-progress-observer.js';
-import { RequestBudgetError } from '@cloudhelm/core';
+import { RequestBudgetError, PrivilegeError, privilegeGuidance } from '@cloudhelm/core';
 import { operationIntentKey, isReadOnlyQuery, isSudoStatusProbe, safeDiagnostic, serialCall, type ConversationSession, type SessionStorage, type DiagnosticEvent, sudoTarget, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
 import type { ApprovalView, OperationView, InterruptionSource, UserInterruption, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
@@ -36,8 +38,7 @@ export class TaskRunner {
   private readonly clarification: ClarificationCoordinator;
   private profile: RuntimeProfile;
   private readonly journal: WorkJournal;
-  /** First operation in the current change/verification round; not reset by continuation. */
-  private verificationStartCount = 0;
+  private readonly verification: VerificationRoundTracker;
   private controlVersion = 0;
   private resuming?: { version: number; promise: Promise<void> };
   private readonly intent: TaskIntent;
@@ -86,10 +87,7 @@ export class TaskRunner {
     this.intent = new TaskIntent(task, (value) => signals.event({ type: 'task-intent', taskId: task.id, value }));
     const pendingReport = task.resumeReason === 'report' || (task.verificationState?.status === 'unverified' && !task.report);
     this.resumeReason = task.resumeReason ?? (pendingReport ? 'report' : undefined);
-    const initialOperations = this.operationViews();
-    const firstUnverified = initialOperations.findIndex((operation) => operationNeedsVerification(operation)
-      || (pendingReport && task.verificationState?.operationIds.includes(operation.id)));
-    this.verificationStartCount = firstUnverified >= 0 ? firstUnverified : task.resumeReason === 'report' ? 0 : initialOperations.length;
+    this.verification = new VerificationRoundTracker(task, this.operationViews(), signals.event);
     for (const operation of priorOperations) this.replayProtected.add(operation.id);
     this.clarification = new ClarificationCoordinator(task.id, (request) => {
       if (request.status === 'answered') { this.intent.clarify(request); this.progress.observe('clarification', request.id); }
@@ -106,7 +104,7 @@ export class TaskRunner {
       this.progress.observe('resolution', JSON.stringify([operation.id, operation.reconciliation?.kind]));
       this.signals.event({ type: 'operation', value: operation });
       this.publishExecution();
-    }, () => this.verificationOperations());
+    }, () => this.verificationOperations(), () => this.verification.id, task.report);
     this.localFiles = new LocalFileAccess(task.localScopes ?? []);
   }
 
@@ -121,14 +119,14 @@ export class TaskRunner {
         }
         return this.ensureTerminal(id);
       },
-      requestRoot: async (host, command, cwd, reason, signal) => {
+      requestRoot: async (host, command, cwd, reason, signal, method) => {
         this.assertRemoteActive();
         if (!this.privileged) throw new Error('Root sessions unavailable');
-        try { return await this.privileged.request(host, command, cwd, reason, this.intent.goal(), gate, signal, this.intent.snapshot()); }
-        catch (error) { this.blockRemote('Root 会话未建立或已失效，请处理后明确继续。'); throw error; }
+        try { return await this.privileged.request(host, command, cwd, reason, this.intent.goal(), gate, signal, this.intent.snapshot(), method); }
+        catch (error) { this.blockRemote(error instanceof PrivilegeError ? privilegeGuidance(error.feedback) : '提权上下文未建立；直接su通常需要root密码而非sudo密码。请处理后点击继续AI或明确发送下一步指令。', false, 'interrupted'); throw error; }
       }, scope: (host, id, cwd) => this.scope(host, id, cwd),
       runOperation: (gate, operation, signal, label) => this.runOperation(gate, operation, signal, label) }, gate);
-    const currentSystemPrompt = createTaskPrompt(this.task, this.hosts, () => this.operationViews(), () => this.verificationOperations(), this.privileged, () => this.journal.hasReport(), () => this.intent.snapshot());
+    const currentSystemPrompt = createTaskPrompt(this.task, this.hosts, () => this.operationViews(), () => this.verificationOperations(), this.privileged, () => this.journal.hasReport(), () => this.intent.snapshot(), () => this.journal.submissionClosed());
     this.agent = await createConversationSession({
       thinkingLevel, profile: this.profile, storage: this.storage,
       systemPrompt: currentSystemPrompt(), currentSystemPrompt,
@@ -215,29 +213,27 @@ export class TaskRunner {
     if (this.status === 'waiting-user') throw new Error('请先回答需求澄清，或停止本轮对话');
     if (!this.agent) throw new Error('Task has not started');
     if (this.agent.isStreaming && !['running', 'waiting-review'].includes(this.status)) throw new Error('AI 正在暂停，请稍后再发送消息。');
-    const continueUnfinished = ['paused', 'failed', 'recovering', 'human-control'].includes(this.status)
-      && this.verificationOperations().some((operation) => operationNeedsVerification(operation)
-        || (operation.status === 'succeeded' && operation.readOnly !== true));
-    // A fresh user message after a clean completion may intentionally request the same action again.
-    const newRound = !this.needsRecovery && !this.remoteBlocked && !this.agent.isStreaming
-      && this.status === 'answered' && this.resumeReason !== 'report';
+    // Only a closed, backend-recorded round can be replaced. Ordinary chat is never risk acceptance.
+    const newRound = !this.remoteBlocked && !this.agent.isStreaming && this.verification.closed
+      && this.resumeReason !== 'report' && !this.operationViews().some(operationNeedsVerification);
     const nextIntent = this.intent.previewInput(deriveInputIntent(text, document, intent), newRound, document?.requestId);
     const snapshot = this.preparationSnapshot([], preparedRevision ? undefined : nextIntent);
     assertPreparedInput(snapshot, preparedRevision ?? snapshot.revision, text);
     this.controlVersion++;
-    if (newRound) this.replayProtected.clear();
+    if (newRound && this.journal.completionReport().reportStatus === 'verified') this.replayProtected.clear();
     if (['paused', 'failed', 'recovering', 'human-control'].includes(this.status)) this.needsRecovery = true;
     this.remoteBlocked = undefined;
     this.intent.input(deriveInputIntent(text, document, intent), newRound, document?.requestId);
-    this.journal.resetReport();
-    this.signals.event({ type: 'verification-state', taskId: this.task.id });
+    if (newRound) {
+      this.journal.resetReport();
+      this.signals.event({ type: 'verification-state', taskId: this.task.id });
+    }
     if (this.agent.isStreaming) {
       void this.agent.steer(text, document).catch((error: unknown) => this.blockRemote(String(error)));
       return;
     }
     this.progress.reset();
-    if (!continueUnfinished) this.verificationStartCount = this.operationViews().length;
-    this.journal.resetReport();
+    if (newRound) this.verification.begin(this.task.id);
     this.setStatus('running');
     void this.continueWithMessage(this.agent, text, document);
   }
@@ -310,7 +306,6 @@ export class TaskRunner {
       }
     }
     this.progress.reset();
-    this.journal.resetReport();
     this.remoteBlocked = undefined;
     this.setStatus('running');
     await this.appendInterruptionContext(this.agent);
@@ -397,7 +392,7 @@ export class TaskRunner {
   private async performOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined,
     hostLabel: string, manualReview = false) {
     this.assertRemoteActive();
-    this.journal.resetReport();
+    operation = await this.privileged?.prepare?.(operation) ?? operation;
     if (operation.kind === 'command' && !operation.scope.sessionId) {
       // Identity is derived before fingerprinting, never by the renderer or after approval.
       const analysis = await this.analyzer.analyze(operation.command).catch(() => undefined);
@@ -430,7 +425,7 @@ export class TaskRunner {
       `Executed: false; effects: none. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}`, undefined, outcome.readOnly);
     const result = outcome.result;
     if (result.requiresUserAction) {
-      this.blockRemote('认证未通过或当前认证形式需要人工接管，已暂停。请处理后手动继续，AI 不会自动改换方式重试。');
+      this.blockRemote(result.privilege ? privilegeGuidance(result.privilege) : '认证未通过或当前认证形式需要人工接管，已暂停。请处理后手动继续，AI 不会自动改换方式重试。', false, 'interrupted');
     } else if (result.status === 'handed-over') {
       this.blockRemote('终端已转为人工输入；请核验结果后发送消息继续。');
     } else if (result.status === 'unknown') {
@@ -485,7 +480,7 @@ export class TaskRunner {
         this.diagnostic({ event: 'operation.proposed', hostId: operation.scope.hostId, operationId: operation.id,
           runAs: operation.scope.runAs, loginAs: operation.scope.loginAs, sessionId: operation.scope.sessionId, cwd: operation.scope.cwd, policyRevision: operation.scope.policyRevision });
         this.proposedOperations.set(operation.id, operation);
-        this.updateOperation(operation, 'proposed');
+        this.updateOperation(operation, 'proposed', await verificationSource(operation, this.analyzer));
       },
       classified: async (id, readOnly) => {
         const view = this.operations.get(id);
@@ -514,13 +509,17 @@ export class TaskRunner {
         if (!operation) return;
         operation.status = result.status === 'succeeded' ? 'succeeded' : result.status === 'failed' ? 'failed' : 'unknown';
         operation.exitCode = result.exitCode;
+        operation.exitObserved = ['succeeded', 'failed'].includes(result.status) && Number.isInteger(result.exitCode);
+        operation.completedAt = operation.exitObserved ? operation.completedAt ?? Date.now() : undefined;
+        operation.outputCapture = result.outputCapture;
         operation.authentication = result.authentication; operation.authenticationAttempts = result.authenticationAttempts;
-        operation.failureKind = result.failureKind; operation.effects = result.effects;
+        operation.failureKind = result.failureKind; operation.effects = result.effects; operation.privilege = result.privilege;
         operation.logRef = result.logRef;
         operation.outputTail = redactOutput(result.stdoutTail);
         if (operation.kind !== 'command' && result.stdoutTail) operation.reason = redactOutput(result.stdoutTail).slice(-2000);
         this.signals.event({ type: 'operation', value: operation });
-        this.recordPendingVerification(operation);
+        this.verification.pending(this.task.id, operation, this.operationViews());
+        if (!this.isRunning()) this.journal.finalize(this.verification.id);
         this.publishExecution();
       }
     };
@@ -564,8 +563,11 @@ export class TaskRunner {
     });
   }
 
-  private updateOperation(operation: ProposedOperation, status: OperationView['status']): void {
+  private updateOperation(operation: ProposedOperation, status: OperationView['status'], source?: OperationView['verificationSource']): void {
+    this.verification.record(this.task.id, operation.id);
     const view: OperationView = {
+      verificationSource: source,
+      outputExpectation: operation.kind === 'command' ? operation.outputExpectation : undefined,
       serviceUnit: operation.kind === 'command' ? operation.serviceUnit : undefined,
       commandSource: operation.kind === 'command' && redactOutput(operation.scope.cwd) === operation.scope.cwd
         ? { version: 1, cwd: operation.scope.cwd } : undefined,
@@ -593,14 +595,18 @@ export class TaskRunner {
     if (!operation) return;
     operation.status = result.status === 'succeeded' ? 'succeeded' : result.status === 'failed' ? 'failed' : 'unknown';
     operation.exitCode = result.exitCode;
+    operation.exitObserved = ['succeeded', 'failed'].includes(result.status) && Number.isInteger(result.exitCode);
+    operation.completedAt = operation.exitObserved ? operation.completedAt ?? Date.now() : undefined;
     operation.authentication = result.authentication; operation.authenticationAttempts = result.authenticationAttempts;
-    operation.failureKind = result.failureKind; operation.effects = result.effects;
+    operation.failureKind = result.failureKind; operation.effects = result.effects; operation.privilege = result.privilege;
     operation.outputTail = redactOutput(result.stdoutTail);
     operation.outputCapture = result.outputCapture;
     operation.logRef = result.logRef;
     this.signals.event({ type: 'operation', value: operation });
-    this.recordPendingVerification(operation);
+    this.verification.pending(this.task.id, operation, this.operationViews());
     this.publishExecution();
+    if (this.status === 'answered') this.finishRun();
+    else if (!this.isRunning()) this.journal.finalize(this.verification.id);
     if (!this.isRunning() && operation.logRef) this.terminal.releaseIdle(operation.logRef);
   }
 
@@ -617,10 +623,8 @@ export class TaskRunner {
     if (!operation) return;
     this.operations.set(operation.id, applyCommittedRiskAcceptance(operation, accepted));
     this.progress.observe('resolution', JSON.stringify([operation.id, accepted.reconciliation?.kind]));
-    if (operation.reconciliation?.kind === 'evidence') {
-      this.journal.resetReport();
-      if (this.status === 'answered') this.finishRun();
-    }
+    if (this.status === 'answered') this.finishRun();
+    else this.journal.finalize(this.verification.id);
     this.publishExecution();
   }
 
@@ -755,23 +759,17 @@ export class TaskRunner {
   }
 
   private verificationOperations(): OperationView[] {
-    return this.operationViews().slice(this.verificationStartCount);
-  }
-
-  /** Persist the pending round before model completion so a crash cannot erase its changes. */
-  private recordPendingVerification(operation: OperationView): void {
-    if (operation.status !== 'succeeded' || operation.readOnly === true) return;
-    const operationIds = reportRequiredOperations(this.verificationOperations()).map((item) => item.id);
-    this.signals.event({ type: 'verification-state', taskId: this.task.id,
-      value: { status: 'unverified', operationIds, reasonCode: 'report-missing' } });
+    return this.verification.operations(this.operationViews());
   }
 
   private finishRun(): void {
+    this.journal.finalize(this.verification.id);
     const completion = decideTaskCompletion({ operations: this.operationViews(),
       roundOperations: this.verificationOperations(), answered: this.agent?.lastTurnAnswered ?? false,
       hasReport: this.journal.hasReport(), reportIssue: this.journal.lastReportIssue(), ...this.journal.completionReport() });
     if (completion.verificationState !== undefined) this.signals.event({ type: 'verification-state',
       taskId: this.task.id, value: completion.verificationState ?? undefined });
+    if (completion.status === 'answered') this.verification.close(this.task.id);
     this.setStatus(completion.status, completion.summary, completion.resumeReason);
   }
 
@@ -789,6 +787,7 @@ export class TaskRunner {
   private setStatus(status: TaskStatus, summary?: string, resumeReason?: ResumeReason): void {
     this.status = status;
     this.resumeReason = resumeReason;
+    if (status === 'paused' || status === 'failed') this.journal.finalize(this.verification.id);
     this.publishExecution();
     if (!this.isRunning()) { this.signals.clearCredentials?.(); this.privileged?.close(); }
     if (!this.isRunning()) for (const id of this.terminalByHost.values()) this.terminal.releaseIdle(id);

@@ -1,0 +1,311 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppSnapshot, ConversationStart, HostView, LocalScope, TaskView } from '@cloudhelm/contracts';
+import type { RuntimeCall, RuntimeProfile } from '@cloudhelm/contracts/runtime';
+import type { AppState } from '../../../apps/desktop/src/main/app-state.js';
+import type { RuntimeBridge } from '../../../apps/desktop/src/main/runtime-bridge.js';
+import { registerConversationIpc } from '../../../apps/desktop/src/main/conversation-ipc.js';
+import { legacyRequestBudget } from '@cloudhelm/core';
+
+const ipc = vi.hoisted(() => ({ handlers: new Map<string, (...args: any[]) => unknown>() }));
+vi.mock('electron', () => ({ ipcMain: { handle: (channel: string, listener: (...args: any[]) => unknown) => ipc.handlers.set(channel, listener) } }));
+
+const profile: RuntimeProfile = { provider: 'cloudhelm-custom', modelId: 'model-one', apiKey: 'fixture-api-key',
+  baseUrl: 'https://models.example.test/v1', credentialRevision: 'profile-revision' };
+const localScope: LocalScope = { path: '/selected/service', kind: 'directory' };
+function makeHost(id: string): HostView {
+  return { id, label: id, address: `${id}.example.test`, port: 22, username: 'ubuntu', auth: 'agent', status: 'disconnected',
+    protectedPaths: [], defaultMode: 'ai-review', policyRevision: 1 };
+}
+function makeConversation(hostIds: string[] = ['host-a']): TaskView {
+  return { session: { version: 1, id: 'conversation-one' }, id: 'conversation-one', goal: 'Inspect service', hostIds, localScopes: [], status: 'paused', provider: profile.provider,
+    modelId: profile.modelId, credentialRevision: profile.credentialRevision, requestCount: 1, requestLimit: 100, createdAt: 1, updatedAt: 1 };
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+async function invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
+  const handler = ipc.handlers.get(`cloudhelm:${channel}`);
+  if (!handler) throw new Error(`Missing IPC handler: ${channel}`);
+  return await handler({ sender: 'mock-renderer' }, ...args) as T;
+}
+
+function setup(task = makeConversation(), running = false) {
+  const hosts = [makeHost('host-a'), makeHost('host-b')];
+  if (running) for (const host of hosts) if (task.hostIds.includes(host.id)) host.status = 'connected';
+  const conversations = new Map([[task.id, task]]);
+  const active = new Set(running ? [task.id] : []);
+  const messages: AppSnapshot['messages'] = [];
+  const selections = new Map([['selected-token', localScope]]);
+  const state = {
+    requestBudgets: { input: vi.fn(), complete: vi.fn(),
+      current: vi.fn(() => task.budget ?? legacyRequestBudget('fixture-round', task.requestCount, task.requestLimit)),
+      reopen: vi.fn(() => task.budget ?? legacyRequestBudget('fixture-round', task.requestCount, task.requestLimit)) },
+    runtimeProfile: vi.fn(() => ({ ...profile })),
+    conversationProfile: vi.fn(() => ({ ...profile })),
+    runtimeReviewerForLiveTask: vi.fn((current: TaskView) => ({ selection: { kind: 'current' as const },
+      provider: current.provider ?? '', modelId: current.modelId, revision: 1 })),
+    getHost: vi.fn((id: string) => { const host = hosts.find((item) => item.id === id); if (!host) throw new Error('Unknown host'); return host; }),
+    getTask: vi.fn((id: string) => { const value = conversations.get(id); if (!value) throw new Error('Unknown conversation'); return value; }),
+    runtimeHost: vi.fn((id: string) => ({ ...hosts.find((host) => host.id === id)! })),
+    snapshot: vi.fn(() => ({ operations: [], messages })),
+    rebuildVerificationReport: vi.fn(async () => {}),
+    createTask: vi.fn((goal: string, hostIds: string[], modelId: string, localScopes: LocalScope[]) => {
+      const created = { ...makeConversation(hostIds), id: 'new-conversation', session: { version: 1 as const, id: 'new-conversation' }, goal, modelId, localScopes };
+      conversations.set(created.id, created); return created;
+    }),
+    setTaskModel: vi.fn((id: string, next: RuntimeProfile) => { Object.assign(conversations.get(id)!, { provider: next.provider, modelId: next.modelId, credentialRevision: next.credentialRevision }); }),
+    authorizeTask: vi.fn((id: string, hostIds: string[], scopes: LocalScope[]) => {
+      const value = conversations.get(id)!; value.hostIds.push(...hostIds); value.localScopes.push(...scopes);
+    }),
+    record: vi.fn((message: AppSnapshot['messages'][number]) => { messages.push(message); }),
+    assertDeletable: vi.fn((id: string) => { void conversations.get(id); }),
+    deleteTask: vi.fn((id: string) => { conversations.delete(id); })
+  };
+  const call = vi.fn(async (request: RuntimeCall): Promise<unknown> => {
+    if (request.method === 'has-task') return active.has(request.taskId);
+    if (request.method === 'start-task') active.add(request.task.id);
+    return undefined;
+  });
+  const connectHost = vi.fn(async (id: string) => { hosts.find((host) => host.id === id)!.status = 'connected'; });
+  const takeSelections = vi.fn((tokens: string[]) => {
+    if (!Array.isArray(tokens) || tokens.some((token) => !selections.has(token))) throw new Error('Invalid local selection token');
+    const result = tokens.map((token) => selections.get(token)!); tokens.forEach((token) => selections.delete(token)); return result;
+  });
+  const restoreSelections = vi.fn((tokens: string[], scopes: LocalScope[]) => { tokens.forEach((token, index) => selections.set(token, scopes[index]!)); });
+  registerConversationIpc({ sessionRoot: '/tmp/cloudhelm-ipc-test-sessions', state: state as unknown as AppState, runtime: { call } as unknown as RuntimeBridge, connectHost, takeSelections, restoreSelections });
+  return { state, call, connectHost, takeSelections, restoreSelections, active, conversations };
+}
+
+beforeEach(() => ipc.handlers.clear());
+
+describe('conversation IPC authorization boundary', () => {
+  it('rebuilds report records without SSH restoration, session binding, credentials or model budget', async () => {
+    const task = makeConversation(); task.status = 'answered'; delete task.session;
+    const fixture = setup(task);
+    await invoke('rebuild-verification-report', task.id);
+    expect(fixture.state.rebuildVerificationReport).toHaveBeenCalledWith(task.id, expect.anything());
+    expect(fixture.connectHost).not.toHaveBeenCalled(); expect(fixture.call).not.toHaveBeenCalled();
+    expect(fixture.state.runtimeProfile).not.toHaveBeenCalled(); expect(fixture.state.conversationProfile).not.toHaveBeenCalled();
+    expect(fixture.state.requestBudgets.input).not.toHaveBeenCalled(); expect(fixture.state.requestBudgets.current).not.toHaveBeenCalled();
+  });
+  it('rejects an exhausted ordinary continuation before SSH restoration or worker dispatch', async () => {
+    const task = makeConversation(); task.requestCount = task.requestLimit;
+    const fixture = setup(task);
+    await expect(invoke('resume-task', task.id)).rejects.toThrow('budget-exhausted');
+    expect(fixture.connectHost).not.toHaveBeenCalled(); expect(fixture.call).not.toHaveBeenCalled();
+    expect(fixture.state.requestBudgets.reopen).not.toHaveBeenCalled();
+  });
+  it('rejects malformed extension payloads before restoration', async () => {
+    const fixture = setup();
+    await expect(invoke('extend-request-budget', { taskId: 'conversation-one', amount: 1000 })).rejects.toThrow('budget-invalid');
+    expect(fixture.call).not.toHaveBeenCalled(); expect(fixture.connectHost).not.toHaveBeenCalled();
+  });
+  it.each(['host-a', null])('starts a conversation with only the explicit host or no remote authorization: %s', async (hostId) => {
+    const fixture = setup();
+    const input: ConversationStart & { hostIds: string[] } = {
+      hostId, hostIds: ['host-b'], message: 'Inspect the service', localSelectionTokens: ['selected-token']
+    };
+    const created = await invoke<TaskView>('start-conversation', input);
+    const expectedHosts = hostId ? [hostId] : [];
+    expect(created.hostIds).toEqual(expectedHosts);
+    expect(fixture.state.createTask).toHaveBeenCalledWith(input.message, expectedHosts, profile.modelId, [localScope]);
+    const start = fixture.call.mock.calls.map(([request]) => request).find((request) => request.method === 'start-task');
+    expect(start).toMatchObject({ task: { hostIds: expectedHosts }, hosts: expectedHosts.map((id) => ({ id })), profile });
+    expect(fixture.connectHost.mock.calls.flat()).toEqual(expectedHosts);
+  });
+
+  it.each([['host-a', 'host-b'], { hostId: 'host-a' }, 1, undefined, ''].map((hostId) => ({ hostId })))('rejects malformed host authorization before side effects: $hostId', async ({ hostId }) => {
+    const fixture = setup();
+    await expect(invoke('start-conversation', { hostId, message: 'Inspect service', localSelectionTokens: [] })).rejects.toThrow();
+    expect(fixture.state.createTask).not.toHaveBeenCalled();
+    expect(fixture.connectHost).not.toHaveBeenCalled();
+    expect(fixture.call).not.toHaveBeenCalled();
+  });
+
+  it.each([{ hostIds: ['host-a'] }, { hostIds: [] }])('allows selected local material but never adds remote hosts to follow-up messages: $hostIds', async ({ hostIds }) => {
+    const task = makeConversation([...hostIds]);
+    const fixture = setup(task, true);
+    await invoke('send-message', task.id, 'Also inspect host-b', ['selected-token'], { hostIds: ['host-b'] });
+    expect(fixture.state.authorizeTask).toHaveBeenCalledWith(task.id, [], [localScope]);
+    expect(fixture.call).toHaveBeenCalledWith({ method: 'authorize-task', taskId: task.id, hosts: [], localScopes: [localScope] });
+    expect(fixture.call).toHaveBeenCalledWith({ method: 'task-message', taskId: task.id, text: 'Also inspect host-b' });
+    expect(task.hostIds).toEqual(hostIds);
+    expect(fixture.connectHost).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { channel: 'send-message', running: false }, { channel: 'send-message', running: true },
+    { channel: 'resume-task', running: false }, { channel: 'resume-task', running: true }
+  ])('keeps historical multihost work read-only in the backend: $channel, active=$running', async ({ channel, running }) => {
+    const task = makeConversation(['host-a', 'host-b']);
+    const fixture = setup(task, running);
+    await expect(invoke(channel, task.id, 'Continue changes', [])).rejects.toThrow();
+    expect(fixture.connectHost).not.toHaveBeenCalled();
+    expect(fixture.takeSelections).not.toHaveBeenCalled();
+    expect(fixture.call.mock.calls.some(([request]) => ['start-task', 'task-message', 'resume-task'].includes(request.method))).toBe(false);
+  });
+
+  it('validates the selected model credentials before opening SSH on a new conversation', async () => {
+    const fixture = setup();
+    fixture.state.runtimeProfile.mockImplementation(() => { throw new Error('API Key is missing'); });
+    await expect(invoke('start-conversation', { hostId: 'host-a', message: 'Deploy', localSelectionTokens: [] })).rejects.toThrow('API Key');
+    expect(fixture.connectHost).not.toHaveBeenCalled();
+    expect(fixture.takeSelections).not.toHaveBeenCalled();
+    expect(fixture.state.createTask).not.toHaveBeenCalled();
+  });
+
+  it('validates restored credential bindings before opening SSH or consuming selected local material', async () => {
+    const fixture = setup();
+    fixture.state.conversationProfile.mockImplementation(() => { throw new Error('Please reselect the account'); });
+    await expect(invoke('send-message', 'conversation-one', 'Continue', ['selected-token'])).rejects.toThrow('reselect');
+    expect(fixture.connectHost).not.toHaveBeenCalled();
+    expect(fixture.takeSelections).not.toHaveBeenCalled();
+    expect(fixture.call.mock.calls.some(([request]) => request.method === 'start-task')).toBe(false);
+  });
+});
+
+describe('conversation runtime restoration', () => {
+  it.each(['send-message', 'resume-task'])('reconnects an existing runtime before forwarding %s without loading changed credentials', async (channel) => {
+    const fixture = setup(makeConversation(), true);
+    fixture.state.getHost('host-a').status = 'disconnected';
+    fixture.state.conversationProfile.mockImplementation(() => { throw new Error('Saved credentials changed after this runtime started'); });
+    const connected = deferred<void>();
+    fixture.connectHost.mockImplementation(async (id) => { await connected.promise; fixture.state.getHost(id).status = 'connected'; });
+    const pending = invoke(channel, 'conversation-one', 'Continue', []);
+    await vi.waitFor(() => expect(fixture.connectHost).toHaveBeenCalledWith('host-a'), { timeout: 15000 });
+    expect(fixture.call.mock.calls.some(([request]) => ['task-message', 'resume-task', 'start-task'].includes(request.method))).toBe(false);
+    connected.resolve();
+    await pending;
+    expect(fixture.state.conversationProfile).not.toHaveBeenCalled();
+    expect(fixture.state.runtimeProfile).not.toHaveBeenCalled();
+    expect(fixture.call).toHaveBeenCalledWith({ method: 'set-review-profile', taskId: 'conversation-one',
+      reviewer: { selection: { kind: 'current' }, provider: 'cloudhelm-custom', modelId: 'model-one', revision: 1 } });
+    expect(fixture.call.mock.calls.filter(([request]) => request.method === 'start-task')).toHaveLength(0);
+    expect(fixture.call).toHaveBeenCalledWith(channel === 'send-message'
+      ? { method: 'task-message', taskId: 'conversation-one', text: 'Continue' }
+      : { method: 'resume-task', taskId: 'conversation-one' });
+  });
+
+  it('does not reconnect an already connected live runtime or silently replace its model profile', async () => {
+    const fixture = setup(makeConversation(), true);
+    await invoke('resume-task', 'conversation-one');
+    expect(fixture.connectHost).not.toHaveBeenCalled();
+    expect(fixture.state.conversationProfile).not.toHaveBeenCalled();
+    expect(fixture.call.mock.calls.some(([request]) => request.method === 'start-task')).toBe(false);
+  });
+
+  it('does not forward a message when reconnecting fails and permits a later reconnect', async () => {
+    const fixture = setup(makeConversation(), true);
+    fixture.state.getHost('host-a').status = 'disconnected';
+    fixture.connectHost.mockRejectedValueOnce(new Error('SSH host fingerprint changed'));
+    await expect(invoke('send-message', 'conversation-one', 'Continue', ['selected-token'])).rejects.toThrow('fingerprint changed');
+    expect(fixture.takeSelections).not.toHaveBeenCalled();
+    expect(fixture.call.mock.calls.some(([request]) => ['task-message', 'start-task'].includes(request.method))).toBe(false);
+    await invoke('send-message', 'conversation-one', 'Continue', ['selected-token']);
+    expect(fixture.connectHost).toHaveBeenCalledTimes(2);
+    expect(fixture.call.mock.calls.filter(([request]) => request.method === 'task-message')).toHaveLength(1);
+    expect(fixture.state.conversationProfile).not.toHaveBeenCalled();
+  });
+
+  it('shares a reconnect across concurrent requests for the same live runtime', async () => {
+    const fixture = setup(makeConversation(), true);
+    fixture.state.getHost('host-a').status = 'disconnected';
+    const connected = deferred<void>();
+    fixture.connectHost.mockImplementation(async (id) => { await connected.promise; fixture.state.getHost(id).status = 'connected'; });
+    const pending = [invoke('send-message', 'conversation-one', 'Continue', []), invoke('resume-task', 'conversation-one')];
+    await vi.waitFor(() => expect(fixture.connectHost).toHaveBeenCalledTimes(1), { timeout: 15000 });
+    connected.resolve();
+    await Promise.all(pending);
+    expect(fixture.connectHost).toHaveBeenCalledTimes(1);
+    expect(fixture.call.mock.calls.filter(([request]) => request.method === 'start-task')).toHaveLength(0);
+  });
+
+  it('coalesces concurrent message/resume restoration instead of starting the same runtime twice', async () => {
+    const fixture = setup();
+    const hasTask = deferred<boolean>();
+    fixture.call.mockImplementation(async (request) => {
+      if (request.method === 'has-task') return hasTask.promise;
+      if (request.method === 'start-task') fixture.active.add(request.task.id);
+      return undefined;
+    });
+    const pending = [invoke('send-message', 'conversation-one', 'Continue', []), invoke('resume-task', 'conversation-one')];
+    hasTask.resolve(false);
+    await Promise.all(pending);
+    expect(fixture.call.mock.calls.filter(([request]) => request.method === 'start-task')).toHaveLength(1);
+    expect(fixture.connectHost).toHaveBeenCalledTimes(1);
+    expect(fixture.call).toHaveBeenCalledWith({ method: 'task-message', taskId: 'conversation-one', text: 'Continue' });
+  });
+
+  it('allows a later restoration attempt after an earlier start failed', async () => {
+    const fixture = setup();
+    let fail = true;
+    fixture.call.mockImplementation(async (request) => {
+      if (request.method === 'has-task') return false;
+      if (request.method === 'start-task' && fail) { fail = false; throw new Error('Runtime launch failed'); }
+      return undefined;
+    });
+    await expect(invoke('resume-task', 'conversation-one')).rejects.toThrow('Runtime launch failed');
+    await expect(invoke('resume-task', 'conversation-one')).resolves.toBeUndefined();
+    expect(fixture.call.mock.calls.filter(([request]) => request.method === 'start-task')).toHaveLength(2);
+  });
+});
+
+it('does not restore or authorize a conversation while submitting clarification answers', async () => {
+  const f = setup();
+  await invoke('answer-clarification', 'conversation-one', 'request', [{ id: 'scope', value: 'test' }]);
+  expect(f.call.mock.calls.map(([call]) => call)).toEqual([{ method: 'answer-clarification', taskId: 'conversation-one', requestId: 'request', answers: [{ id: 'scope', value: 'test' }] }]);
+  expect(f.connectHost).not.toHaveBeenCalled();
+  expect(f.takeSelections).not.toHaveBeenCalled();
+});
+
+it('blocks ordinary messages and local attachment authorization while waiting for clarification', async () => {
+  const f = setup({ ...makeConversation(), status: 'waiting-user' }, true);
+  await expect(invoke('send-message', 'conversation-one', 'continue', ['selected-token'])).rejects.toThrow('先回答');
+  expect(f.call).not.toHaveBeenCalled();
+  expect(f.takeSelections).not.toHaveBeenCalled();
+});
+
+describe('conversation deletion IPC', () => {
+  it('drops the runtime task before removing the authoritative record', async () => {
+    const fixture = setup();
+    fixture.active.add('conversation-one');
+    await invoke('delete-conversation', 'conversation-one');
+    expect(fixture.state.assertDeletable).toHaveBeenCalledWith('conversation-one');
+    expect(fixture.call).toHaveBeenCalledWith({ method: 'delete-task', taskId: 'conversation-one' });
+    expect(fixture.state.deleteTask).toHaveBeenCalledWith('conversation-one');
+  });
+  it('skips the runtime when the task was never loaded there', async () => {
+    const fixture = setup();
+    await invoke('delete-conversation', 'conversation-one');
+    expect(fixture.call).not.toHaveBeenCalledWith({ method: 'delete-task', taskId: 'conversation-one' });
+    expect(fixture.state.deleteTask).toHaveBeenCalledWith('conversation-one');
+  });
+  it('rejects malformed ids before touching state or runtime', async () => {
+    const fixture = setup();
+    await expect(invoke('delete-conversation', '')).rejects.toThrow('Invalid conversation id');
+    await expect(invoke('delete-conversation', 42)).rejects.toThrow('Invalid conversation id');
+    expect(fixture.state.assertDeletable).not.toHaveBeenCalled();
+    expect(fixture.state.deleteTask).not.toHaveBeenCalled();
+  });
+  it('stops everywhere when the authoritative state refuses the deletion', async () => {
+    const fixture = setup();
+    fixture.active.add('conversation-one');
+    fixture.state.assertDeletable.mockImplementation(() => { throw new Error('对话仍在进行中，请先停止或等待结束后再删除'); });
+    await expect(invoke('delete-conversation', 'conversation-one')).rejects.toThrow(/进行中/u);
+    expect(fixture.call).not.toHaveBeenCalledWith({ method: 'delete-task', taskId: 'conversation-one' });
+    expect(fixture.state.deleteTask).not.toHaveBeenCalled();
+  });
+});
+
+it.each(['send-message', 'resume-task', 'set-conversation-model'])('rejects legacy session continuation through %s before side effects', async (channel) => {
+  const task = makeConversation();
+  delete task.session;
+  const f = setup(task);
+  await expect(invoke(channel, task.id, channel === 'set-conversation-model' ? profile : 'continue', [])).rejects.toThrow('旧对话');
+  expect(f.call).not.toHaveBeenCalled();
+  expect(f.connectHost).not.toHaveBeenCalled();
+  expect(f.takeSelections).not.toHaveBeenCalled();
+});

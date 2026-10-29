@@ -32,7 +32,8 @@ packages/
   application/   安全入口、输入协调、终端控制与写锁
   adapters/      Pi、SSH、SQLite 和 Bash 解析实现
   contracts/     renderer/main/worker 的边界类型
-scripts/         UI、Markdown、Electron 启动及依赖探针
+Tests/           按模块分区的单元／集成测试、专用 fixture、smoke 与离线评估
+scripts/         版本、发布、Git 钩子及工程检查（无测试实现）
 .github/workflows/ci.yml
 ```
 
@@ -44,14 +45,30 @@ scripts/         UI、Markdown、Electron 启动及依赖探针
 | --- | --- |
 | `pnpm dev` | 启动开发版 |
 | `pnpm build` | 编译主进程、preload、worker 和界面 |
-| `pnpm check` | TypeScript、Vitest、ESLint、依赖方向与行数检查，并校验版本一致 |
+| `pnpm check` | TypeScript、Vitest、ESLint、依赖方向、行数与测试目录检查，以及版本／更新日志校验 |
+| `pnpm lint:tests` | 阻止测试文件、快照和专用 fixture 混入业务与工程脚本目录 |
 | `pnpm version:set` | 从根目录 `version.json` 同步各包版本与 README；传入参数（如 `pnpm version:set 0.2.0`）时先写入 `version.json`。通常无需手动运行，pre-commit 钩子会自动同步 |
 | `pnpm version:check` | 只校验 `version.json`、各 `package.json` 与 README 版本一致，不一致退出非零 |
 | `pnpm test:ui` | 使用模拟后端验证 renderer 交互 |
 | `pnpm test:markdown` | 验证 Markdown 排版、链接和代码复制 |
+| `pnpm test:ai-panel` | 使用模拟后端检查 AI 侧栏、权限入口、计划与折叠 |
 | `pnpm --filter @cloudhelm/desktop package` | 编译、重建 Electron 原生模块并生成本平台目录包 |
 | `pnpm test:desktop` | 启动编译后的真实 Electron 应用 |
 | `pnpm test:desktop:packaged` | 启动目录包并检查其自身依赖与资源 |
+
+### 集中测试工作区
+
+测试统一放在根目录 [`Tests/`](../Tests/README.md)，按 `core`、`application`、`adapters`、`contracts`、`desktop` 分区；测试专用辅助模块也留在这里。`Tests/smoke/` 保存浏览器和桌面探针，`Tests/scripts/` 测试工程脚本，`Tests/evaluation/` 只处理离线对照元数据。产品中的 `host-connection-test.ts`／`.tsx` 是用户连接测试功能，仍属于业务代码。
+
+`Tests/package.json` 是独立私有 workspace，依赖使用已验证的固定版本，版本同步和提交钩子也覆盖它；不加入桌面发行依赖。业务代码禁止反向导入测试。TypeScript、ESLint、依赖与 800 行检查都覆盖测试；页面 fixture 也纳入类型检查。
+
+```sh
+pnpm test --maxWorkers=2
+pnpm exec vitest run Tests/desktop/worker/verification-user-workflow.test.ts
+pnpm lint:tests
+```
+
+`pnpm test` 仍运行完整默认集合，`--maxWorkers=2` 可用于内存或冷启动受限的本机。环境跳过不算真实环境验收，不通过新增排除掩盖失败。
 
 ### 浏览器测试
 
@@ -96,7 +113,7 @@ Agent 命令环境禁用 Git/systemd 分页器和 Git 终端认证，采用 UTF-
 sudo 的默认回归测试可单独运行：
 
 ```sh
-pnpm exec vitest run apps/desktop/src/worker/sudo-terminal.integration.test.ts packages/adapters/src/ssh-command-terminal.test.ts packages/adapters/src/remote-command-program.test.ts
+pnpm exec vitest run Tests/desktop/worker/sudo-terminal.integration.test.ts Tests/adapters/ssh-command-terminal.test.ts Tests/adapters/remote-command-program.test.ts
 ```
 
 其中真实本地进程／PTY 测试使用 sudo 替身验证 askpass 密码隔离、免密和取消路径，不连接生产服务器，也不修改本机 sudo 策略。真实服务器验收和剩余兼容性边界见 [STATUS.md](STATUS.md)。

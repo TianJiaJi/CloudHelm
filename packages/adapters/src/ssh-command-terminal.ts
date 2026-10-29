@@ -27,7 +27,7 @@ export class SshCommandTerminal implements RawTerminal {
   onCommand(listener: (event: ShellCommandEvent) => void): void { this.command = listener; }
   private data = (_text: string) => {};
   private display = (_text: string) => {};
-  private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects'>) => {};
+  private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege'>) => {};
   private exited = (_code: number | undefined) => {};
   private closedListener = () => {};
   private authentication = (_challenge: { id: string; prompt?: string }) => {};
@@ -142,7 +142,9 @@ export class SshCommandTerminal implements RawTerminal {
           }
           else if (event.type === 'prompt' && typeof event.data === 'string') this.prompt = event.data;
           else if (event.type === 'launch-error' && ['permission-denied', 'unsupported'].includes(String(event.kind))) {
-            this.failure({ failureKind: event.kind as 'permission-denied' | 'unsupported', effects: this.precedingSteps ? 'possible' : 'none' });
+            this.failure({ failureKind: event.kind as 'permission-denied' | 'unsupported', effects: this.precedingSteps ? 'possible' : 'none',
+              ...(sudo && event.code === 'sudo-unavailable' ? { privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable',
+                source: 'transport', businessCommand: this.precedingSteps ? 'unknown' : 'not-started', recovery: this.precedingSteps ? 'verify' : 'confirm-alternative' } as const } : {}) });
             this.data(event.kind === 'unsupported' ? '命令未启动：所需工具或工作目录不存在。请确认工具已安装、路径正确后继续。' : '命令未启动：当前身份无权访问工具或工作目录。请核验权限后提交新的审核操作。'); complete(127); return;
           }
           else if (event.type === 'exit' && Number.isInteger(event.code)) { complete(event.code as number); return; }

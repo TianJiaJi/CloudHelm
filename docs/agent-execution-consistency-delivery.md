@@ -1,12 +1,14 @@
-# Agent 执行一致性修复：交付与验收
+# Agent 执行一致性修复：历史交付与验收
 
-## 状态
+本文保留该阶段的实现依据、失败边界与当时验证数字，不作为当前工作树的最新验收。报告机制已演进为[验收 V3](VERIFICATION_V3.md)，测试入口统一迁入 [Tests/](../Tests/README.md)；当前结果见[验收状态](STATUS.md)。
+
+## 历史状态
 
 - 阶段A–F2已验收，计划正式完成13/13步，已标记第13步。
 - 最终完整门禁：`bb7fd8190`退出0，133文件、1350测试通过，7文件19项条件跳过（16项POSIX/PTY、3项外部SSH opt-in）；typecheck、ESLint、依赖方向、800行、版本/CHANGELOG、构建、完整Edge UI、Markdown、隔离Windows Electron装配及`git diff --check`全部通过。对照脚本13项测试包含在总数中。
 - Electron装配验证了preload隔离、SQLite/WASM、临时safeStorage、loopback握手、本地模型协议、崩溃恢复及无重复投影；不是打包产物验收。截图位于`.cache/ui-smoke/`、`.cache/markdown-smoke/`和`.cache/desktop-smoke/built/window.png`。
 - 真实模型、真实用户主机SSH和自然行为对照**未运行**；本文不把本地fixture通过等同于模型不会幻觉。
-- 自动验收期间未升级依赖、修改SDK或发版；后续Git提交不代表发布或真实环境验收。原有`README.md`与`docs/CURRENT_ARCHITECTURE_MAP.md`改动独立保留，不混入本次修复提交。
+- 该阶段自动验收未升级依赖、修改 SDK 或发版。Git 提交不等于发布或真实环境验收；当前提交范围以操作者本轮确认及实际 Git 历史为准，不由旧交付记录限制。
 
 ## 主要变更
 
@@ -23,20 +25,20 @@
 
 - `plans/agent-execution-consistency-fixes.md`：逐阶段决策、失败与验收记录（本地计划文件，默认忽略提交）。
 - `docs/agent-evidence-boundaries.md`：Docker/架构/存储/网络/服务的观察、推断、未知与纠错样例。
-- `apps/desktop/src/main/structured-preparation-integration.test.ts`：Main/SQLite→IPC→Worker→TaskRunner→原生压缩，取消/变更/丢确认扣费与无重放。
-- `apps/desktop/src/worker/request-business-facts-native.test.ts`：压缩后事实与授权刷新、JSONL保留。
-- `apps/desktop/src/worker/task-runner-diagnostic-query.test.ts`：ping退出1与unknown的不同处理，人工审批保留。
-- `apps/desktop/src/worker/task-runner-verification-v2.test.ts`：三态报告、真实原生历史恢复、新消息与无重放。
-- `scripts/check-budget-switching.mjs`、`scripts/check-verification-checks.mjs`：切换对话及新版/历史报告UI回归。
+- `Tests/desktop/main/structured-preparation-integration.test.ts`：Main/SQLite→IPC→Worker→TaskRunner→原生压缩，取消/变更/丢确认扣费与无重放。
+- `Tests/desktop/worker/request-business-facts-native.test.ts`：压缩后事实与授权刷新、JSONL保留。
+- `Tests/desktop/worker/task-runner-diagnostic-query.test.ts`：ping退出1与unknown的不同处理，人工审批保留。
+- `Tests/desktop/worker/task-runner-verification-v2.test.ts`：三态报告、真实原生历史恢复、新消息与无重放。
+- `Tests/smoke/check-budget-switching.mjs`、`Tests/smoke/check-verification-checks.mjs`：切换对话及新版/历史报告UI回归。
 - `.cache/ui-smoke/`：本地截图，包括统计修复前后、输入预算与v2检查展示；不会上传。
 
 ## 自然任务对照脚本（只生成模板、比较人工记录）
 
 ```text
 node -e "require('node:fs').mkdirSync('.cache',{recursive:true})"
-node scripts/agent-task-comparison.mjs --template > .cache/agent-before.json
-node scripts/agent-task-comparison.mjs --template > .cache/agent-after.json
-node scripts/agent-task-comparison.mjs --compare .cache/agent-before.json .cache/agent-after.json
+node Tests/evaluation/agent-task-comparison.mjs --template > .cache/agent-before.json
+node Tests/evaluation/agent-task-comparison.mjs --template > .cache/agent-after.json
+node Tests/evaluation/agent-task-comparison.mjs --compare .cache/agent-before.json .cache/agent-after.json
 ```
 
 两个`--template`命令只生成未运行、未知计数的JSON模板。`--compare`命令在填写前会拒绝比较；不要把模板当已验证结果。脚本没有执行模式，不连接模型、主机或SSH，不启动Shell，只读取明确指定且≤64KiB的对照元数据文件，不读取应用数据/私有日志。
@@ -63,7 +65,7 @@ node scripts/agent-task-comparison.mjs --compare .cache/agent-before.json .cache
 - 生产诊断正文隔离后，不应依靠诊断流重建答案/文件/远端输出；仍可使用原生会话、现有审计和受授权的日志检索。原始私有AppData日志未读取，系统网络设置未改。
 - 最终装配验收限当前Windows环境和未打包构建；未生成安装包，未验证macOS/Linux或打包后发行物。应用新构建前先确认模型与远端均空闲，不因界面刷新重放未确定操作。
 
-## 验收命令
+## 当前可重跑命令
 
 在Windows cmd中清空真实SSH opt-in，并使用现有Edge的独立临时浏览器配置：
 
@@ -77,6 +79,7 @@ pnpm test --maxWorkers=1
 pnpm lint
 pnpm lint:deps
 pnpm lint:lines
+pnpm lint:tests
 pnpm version:check
 pnpm changelog:check
 pnpm build

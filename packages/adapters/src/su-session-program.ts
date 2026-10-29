@@ -73,9 +73,11 @@ prompt = b''
 incoming = b''
 remote = b''
 deadline = time.monotonic() + 120
+failure_code = 'authentication-unconfirmed'
 try:
     while True:
-        if not ready and (time.monotonic() > deadline or process.poll() is not None): raise ValueError('Authentication ended')
+        if not ready and time.monotonic() > deadline: raise TimeoutError()
+        if not ready and process.poll() is not None: raise ValueError('Authentication ended')
         watched = [sys.stdin.fileno(), peer if peer else server]
         if not ready: watched.append(master)
         readable, _, _ = select.select(watched, [], [], 0.1)
@@ -90,7 +92,8 @@ try:
                 if not chunk: raise ValueError('Authentication closed')
                 prompt = (prompt + chunk)[-4096:]
                 if not waiting and prompt.rstrip().endswith(b'Password:'):
-                    if termios.tcgetattr(slave)[3] & termios.ECHO or attempts >= 3: raise ValueError('Unsafe authentication')
+                    if termios.tcgetattr(slave)[3] & termios.ECHO or attempts >= 3:
+                        failure_code = 'unsupported'; raise ValueError('Unsafe authentication')
                     attempts += 1; waiting = True; prompt = b''
                     emit({'type': 'auth', 'id': str(attempts)})
             elif source is peer:
@@ -117,15 +120,18 @@ try:
                     if message.get('type') == 'answer':
                         if ready or not waiting or message.get('id') != str(attempts): continue
                         answer = message.get('answer')
-                        if not isinstance(answer, str) or len(answer) > 4095 or any(c in answer for c in '\r\n\0'): raise ValueError('Authentication canceled')
+                        if not isinstance(answer, str) or len(answer) > 4095 or any(c in answer for c in '\r\n\0'):
+                            failure_code = 'cancelled'; raise ValueError('Authentication canceled')
                         if process.poll() is not None or termios.tcgetattr(slave)[3] & termios.ECHO: raise ValueError('Authentication stale')
                         waiting = False
                         os.write(master, answer.encode() + b'\n')
                         answer = None; message = None; line = b''
                     elif ready: peer.sendall(line + b'\n')
                     else: raise ValueError('Not authenticated')
+except TimeoutError:
+    emit({'type':'error', 'code':'timeout'})
 except Exception:
-    emit({'type':'error', 'message':'Root session ended; verify remote outcomes before retrying.'})
+    emit({'type':'error', 'code':failure_code})
 finally:
     if peer: peer.close()
     if not ready and process.poll() is None:

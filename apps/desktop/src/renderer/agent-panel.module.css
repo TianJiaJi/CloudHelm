@@ -1,0 +1,92 @@
+.panel {
+  --panel: #1a1b1d; --canvas: #222427; --raised: #2a2d31; --border: #e0e2f221;
+  --text: #d1d3db; --muted: #9599a6; --accent: #dadde5; --accentText: #222427; --accentSoft: #e0e2f20d;
+  --success: #72c9a6; --assistant-font-size: 13px; --assistant-code-radius: 6px;
+  display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0;
+  position: relative; background: var(--panel); color: var(--text); font-size: 13px;
+  container: assistant / inline-size;
+}
+.panel button { transition: background-color .14s ease, color .14s ease; }
+.panel button:focus-visible, .panel summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agentHead { display: flex; align-items: center; gap: 6px; min-height: 38px; padding: 0 8px 0 12px; flex: none; }
+.panelTitle { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 12px; font-weight: 500; }
+.panelTitle > svg { color: var(--muted); flex: none; }
+.panelTitle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.headerActions { display: flex; align-items: center; gap: 2px; flex: none; color: var(--muted); }
+.headerActions > button { width: 24px; height: 24px; padding: 0; border-radius: 4px; }
+.headerActions > button:hover { background: var(--accentSoft); color: var(--text); }
+.assistantContext { display: flex; align-items: center; justify-content: space-between; flex: none; gap: 8px; min-height: 28px; padding: 0 12px 6px; font-size: 11px; border-bottom: 1px solid var(--border); }
+.assistantContext > span, .assistantContext > small { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.assistantContext > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.assistantContext > small { flex: none; font-size: 10px; color: var(--muted); }
+.agentActions { display: flex; flex: none; align-items: center; gap: 8px; padding: 7px 12px 0; }
+.taskStatus { font-size: 11px; color: var(--muted); }
+.taskStatus[data-state=running] { color: var(--text); }
+.taskStatus[data-state=waiting-review], .taskStatus[data-state=failed], .taskStatus[data-state=recovering] { color: light-dark(#975a17, #dfb27e); }
+.agentActions button { margin-left: auto; padding: 3px 6px; font-size: 11px; color: var(--accent); }
+.agentActivity { display: flex; flex: none; align-items: flex-start; gap: 6px; padding: 8px 0; color: var(--muted); font-size: 11px; line-height: 18px; overflow-wrap: anywhere; }
+.activityPulse { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; margin-top: 6px; animation: pulse 1.7s ease-in-out infinite; }
+.agentActivity[role=alert] { color: light-dark(#a54c3a, #efb294); }
+.agentScroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 16px 12px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; position: relative; overflow-anchor: none; }
+.scrollStage { display: flex; flex: 1; flex-direction: column; min-height: 0; position: relative; }
+.panel .jumpToLatest { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 2; padding: 5px 10px; border: 1px solid var(--border); border-radius: 20px; background: var(--raised); color: var(--text); font-size: 11px; box-shadow: 0 4px 14px #0003; white-space: nowrap; }
+.jumpToLatest > svg { transform: rotate(180deg); }
+.agentWelcome { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-height: min(360px, 50vh); padding: 24px 0; }
+.welcomeIcon { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text); background: var(--accentSoft); border-radius: 8px; }
+.agentWelcome > small { font-size: 10px; margin-top: 16px; color: var(--muted); letter-spacing: 1px; }
+.agentWelcome h2 { font-size: 18px; line-height: 26px; font-weight: 550; margin: 8px 0; letter-spacing: -.3px; }
+.agentWelcome > p { margin: 0; color: var(--muted); line-height: 20px; font-size: 12px; }
+.suggestions { display: grid; gap: 6px; margin-top: 20px; width: 100%; }
+.suggestions > span { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+.panel .suggestion { justify-content: flex-start; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; background: var(--accentSoft); text-align: left; font-size: 12px; line-height: 20px; gap: 8px; }
+.suggestion > svg { flex: none; color: var(--muted); }
+.suggestion > svg:last-child { margin-left: auto; opacity: .65; }
+.suggestion:hover { border-color: var(--border); background: var(--canvas); }
+.message { margin-bottom: 20px; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.identity { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 12px; line-height: 20px; }
+.identity strong { font-weight: 500; }
+.identityIcon { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; background: var(--accentSoft); color: var(--text); }
+.identityHint { color: var(--muted); font-size: 10px; }
+.message > p { margin: 8px 0; white-space: pre-wrap; }
+.message > small { display: block; margin-top: 8px; font-size: 10px; color: var(--muted); }
+.toolActivity { margin: 4px 0 12px; font-size: 12px; min-width: 0; color: var(--muted); }
+.toolActivity > summary { display: flex; align-items: center; gap: 6px; min-height: 24px; list-style: none; border-radius: 4px; padding: 2px 0; }
+.toolActivity > summary::-webkit-details-marker { display: none; }
+.toolActivity > summary:hover { color: var(--text); background: var(--accentSoft); }
+.toolActivity > summary > svg { flex: none; }
+.toolActivity > summary > svg:first-child { color: var(--success); }
+.toolActivity > summary > span { flex: none; font-size: 11px; }
+.toolActivity > summary > code { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.exitCode { flex: none; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.toolActivity[open] > summary > svg:last-child { transform: rotate(90deg); }
+.toolDetails { margin: 4px 0 0 8px; padding-left: 12px; border-left: 1px solid var(--border); }
+.planDock { flex: none; margin: 0; padding: 7px 10px; border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; background: var(--accentSoft); font-size: 12px; }
+.panel .planToggle { display: flex; align-items: center; gap: 6px; padding: 0; width: 100%; min-height: 24px; text-align: left; justify-content: flex-start; color: var(--text); }
+.panel .planToggle:hover { background: transparent; }
+.planToggle > svg, .planLabel { flex: none; }
+.planToggle > small { flex: none; padding: 2px 4px; border-radius: 3px; background: var(--accentSoft); font-size: 10px; line-height: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.planChevron { flex: none; display: flex; transform: rotate(90deg); color: var(--muted); }
+.planChevron[data-open=true] { transform: rotate(-90deg); }
+.planPreview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.planList { margin: 6px 0 0; padding: 0; list-style: none; max-height: min(160px, 22vh); overflow-y: auto; scrollbar-width: thin; }
+.planList li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; color: var(--muted); line-height: 20px; overflow-wrap: anywhere; }
+.planList li[data-state=running] { color: var(--text); }
+.planList li[data-state=done] .stepMark { color: var(--success); }
+.planList li[data-state=blocked] .stepMark { color: light-dark(#975a17, #dfb27e); }
+.stepTitle { flex: 1; min-width: 0; }
+.stepMark { flex: none; display: inline-grid; place-items: center; width: 13px; height: 13px; border: 1px solid var(--border); border-radius: 50%; font-size: 10px; line-height: 1; }
+.historyMenu { max-width: min(320px, calc(100vw - 24px)); }
+.menuLabel { padding: 8px 10px; font-size: 11px; color: var(--muted); }
+.menuEmpty { padding: 0 10px; color: var(--muted); font-size: 12px; }
+@container assistant (max-width: 360px) {
+  .agentScroll { padding-inline: 12px; }
+  .exitCode { display: none; }
+}
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-color-scheme: light) {
+  .panel { --panel: #fff; --canvas: #edeff2; --raised: #e1e1e1; --border: #4d6b992e; --text: #31353a; --muted: #5b6066; --accent: #36393d; --accentText: #fff; --accentSoft: #5663770d; --success: #007e60; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activityPulse { animation: none; }
+  .panel button { transition: none; }
+}

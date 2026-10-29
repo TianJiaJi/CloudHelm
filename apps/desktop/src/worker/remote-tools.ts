@@ -1,28 +1,34 @@
 import { createServiceTool } from './service-tool.js';
 import { createHash, randomUUID } from 'node:crypto';
-import type { BusinessTool } from '@cloudhelm/core';
+import { PrivilegeError, privilegeGuidance, type BusinessTool } from '@cloudhelm/core';
 import { Type, type Static } from 'typebox';
 import { createSelectedReadTool } from '@cloudhelm/adapters';
 import type { SafetyGate } from '@cloudhelm/application';
 import type { ProposedOperation } from '@cloudhelm/core';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
+import { OutputExpectationSchema } from '@cloudhelm/contracts';
+import { hasJournalCredentials } from './journal-secrets.js';
 
 
 function outOfScope() {
   return { content: [{ type: 'text' as const, text: 'Host is outside the conversation authorization scope' }], details: undefined, isError: true };
 }
 export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate) {
-    const parameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) });
+    const parameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()),
+      outputExpectation: Type.Optional(OutputExpectationSchema) });
     const tool: BusinessTool<Static<typeof parameters>> = {
       name: 'run_remote', label: 'Execute an audited remote SSH command',
-      description: 'Perform one logical action on an authorized host. Issue one remote call at a time and wait for its result before the next. Do not chain independent actions or print decorative separators. Use cwd instead of cd prefixes. Commands are shown in its dedicated real SSH terminal after safety review. Use absolute paths when possible. Pass sessionId only for a confirmed root session.',
+      description: 'Perform one logical action on an authorized host. Issue one remote call at a time and wait for its result before the next. Do not chain independent actions or print decorative separators. Use cwd instead of cd prefixes. Commands are shown in its dedicated real SSH terminal after safety review. Use absolute paths when possible. sessionId may select a prepared sudo context or confirmed root session. Sudo contexts elevate each literal command BEFORE review, not a root shell; cwd must be accessible to the login user. For known expected output, attach outputExpectation(expectedOutput,expectedExitCode=0) BEFORE running: backend compares the result automatically, with no submit_verification needed. Otherwise actual script completion/output is still recorded, not claimed to prove the whole goal. ls/stat are metadata observations, never file-content read-back.',
       parameters,
       replay: 'never',
       execute: async (_id, params, signal) => {
         const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
         if (!host) return outOfScope();
+        if (params.outputExpectation && hasJournalCredentials(JSON.stringify(params.outputExpectation))) return {
+          content: [{ type: 'text' as const, text: 'Expected output contains recognizable credentials; nothing executed. Remove credentials, never repeat them.' }], isError: true, details: undefined };
         const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
         const operation: ProposedOperation = { id: randomUUID(), kind: 'command', command: params.command,
+          outputExpectation: params.outputExpectation ? structuredClone(params.outputExpectation) : undefined,
           scope: deps.scope(host, terminalId, params.cwd) };
         return deps.runOperation(gate, operation, signal, host.label);
       }
@@ -30,7 +36,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     const writeParameters = Type.Object({ hostId: Type.String(), path: Type.String(), content: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) });
     const writeTool: BusinessTool<Static<typeof writeParameters>> = {
       name: 'write_remote_file', label: 'Write an audited remote file',
-      description: 'Write a UTF-8 file over SFTP on an authorized host. Existing regular files receive a private recovery copy. Maximum 1 MiB. Parent directory must exist. sessionId may select a root SSH session; su sessions do not elevate SFTP.',
+      description: 'Write a UTF-8 file over SFTP on an authorized host. Existing regular files receive a private recovery copy. Maximum 1 MiB. Parent directory must exist. sessionId may select a root SSH session; sudo/su contexts do not elevate SFTP.',
       parameters: writeParameters, replay: 'never',
       execute: async (_id, params, signal) => {
         const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
@@ -85,17 +91,24 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
         } catch (error) { return { content: [{ type: 'text' as const, text: String(error) }], details: undefined, isError: true }; }
       }
     };
-  const rootParameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.String(), reason: Type.String() });
+  const rootParameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.String(), reason: Type.String(),
+    method: Type.Optional(Type.Union([Type.Literal('sudo'), Type.Literal('ssh'), Type.Literal('su')])) });
   const rootTool: BusinessTool<Static<typeof rootParameters>> = {
-    name: 'request_root_session', label: 'Request a confirmed root session',
-    description: 'When sudo is unavailable, request user confirmation for an isolated root SSH or su session. Supply the intended operation and reason. This only verifies identity; it does not execute the intended command. Wait for the returned sessionId before any dependent calls. Never use this after a denied review or canceled/failed authentication.',
+    name: 'request_root_session', label: 'Request a controlled privilege context (sudo by default)',
+    description: 'Default method=sudo: confirm a prepared context, no probe, password or business command runs. Each later literal command is sudo-elevated before review; this is NOT a verified root login. Prefer actual bounded sudo actions. Explicit ssh/su alternatives need user confirmation; su normally needs ROOT password, not login sudo password. Supply intended action/reason/cwd; this tool never executes it. Follow structured feedback; never switch identity after a control stop or replay work. Sudo/su do not elevate SFTP.',
     parameters: rootParameters, replay: 'never',
     execute: async (_id, params, signal) => {
       const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
       if (!host) return outOfScope();
       if (!deps.requestRoot) throw new Error('Root sessions unavailable');
-      const session = await deps.requestRoot(host, params.command, params.cwd, params.reason, signal);
-      return { content: [{ type: 'text', text: JSON.stringify(session) }], details: undefined };
+      try {
+        const session = await deps.requestRoot(host, params.command, params.cwd, params.reason, signal, params.method ?? 'sudo');
+        return { content: [{ type: 'text', text: JSON.stringify(session) }], details: undefined };
+      } catch (error) {
+        const privilege = error instanceof PrivilegeError ? error.feedback : undefined;
+        return { content: [{ type: 'text', text: JSON.stringify({ privilege, guidance: privilege ? privilegeGuidance(privilege)
+          : 'Privilege context unavailable; no intended business action was dispatched. Wait for explicit user instructions; no automatic fallback.' }) }], details: { privilege }, isError: true };
+      }
     }
   };
   return [createServiceTool(deps, gate), rootTool, tool, writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];

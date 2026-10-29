@@ -1,3 +1,4 @@
+import { PrivilegeError, type PrivilegeFeedback } from '@cloudhelm/core';
 import { Duplex, PassThrough } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import type { ClientChannel } from 'ssh2';
@@ -14,7 +15,8 @@ export class SuSession implements CommandTransport {
   private closed = false;
   private challenge?: string;
   private readonly generation: number;
-  private readonly abort = () => this.close();
+  private failConnect?: (code: PrivilegeFeedback['code']) => void;
+  private readonly abort = () => this.failConnect ? this.failConnect('cancelled') : this.close();
   constructor(private readonly ssh: SshTransport, private readonly hostId: string,
     private readonly signal: AbortSignal, private readonly onClosed: () => void) {
     this.generation = ssh.connectionGeneration(hostId);
@@ -29,13 +31,15 @@ export class SuSession implements CommandTransport {
     this.broker = broker;
     await new Promise<void>((resolve, reject) => {
       const decoder = new StringDecoder('utf8'); let buffer = ''; let settled = false;
-      const timer = setTimeout(() => fail(), 125_000);
-      const fail = () => {
-        clearTimeout(timer);
-        if (!settled) { settled = true; reject(new Error('su authentication failed or unsupported; no business command sent')); }
+      const timer = setTimeout(() => fail('timeout'), 125_000);
+      const fail = (code: PrivilegeFeedback['code'] = 'authentication-unconfirmed') => {
+        clearTimeout(timer); this.failConnect = undefined;
+        if (!settled) { settled = true; reject(new PrivilegeError({ method: 'su', stage: 'authentication', code,
+          source: 'transport', businessCommand: 'not-started', recovery: 'user-action' })); }
         this.close();
       };
-      broker.on('close', fail); broker.on('error', fail); broker.stderr.on('data', fail);
+      this.failConnect = fail;
+      broker.on('close', () => fail('transport-unavailable')); broker.on('error', () => fail('transport-unavailable')); broker.stderr.on('data', () => fail('unsupported'));
       broker.on('data', (chunk: Buffer) => {
         if (this.closed) return;
         buffer += decoder.write(chunk);
@@ -47,16 +51,19 @@ export class SuSession implements CommandTransport {
             const event = JSON.parse(line);
             if (event.type === 'ready' && event.uid === 0 && !this.ready) {
               current(); this.signal.throwIfAborted(); this.ready = true; this.challenge = undefined;
-              settled = true; clearTimeout(timer); resolve();
+              settled = true; this.failConnect = undefined; clearTimeout(timer); resolve();
             } else if (event.type === 'auth' && !this.ready && !this.challenge && /^[1-3]$/u.test(event.id)) {
               this.challenge = event.id;
               void authenticate(event.id).then((answer) => {
                 if (this.closed || this.ready || this.challenge !== event.id) return;
                 current(); this.signal.throwIfAborted(); this.challenge = undefined;
+                if (answer === null) { fail('cancelled'); return; }
                 broker.write(JSON.stringify({ type: 'answer', id: event.id, answer }) + '\n');
-              }).catch(fail);
+              }).catch((error) => fail(error instanceof PrivilegeError ? error.feedback.code : 'authentication-unconfirmed'));
             } else if (event.type === 'output' && this.ready && typeof event.data === 'string' && this.active) {
               this.active.push(Buffer.from(event.data));
+            } else if (event.type === 'error' && ['timeout', 'unsupported', 'cancelled', 'authentication-unconfirmed', 'transport-unavailable'].includes(event.code)) {
+              fail(event.code); return;
             } else { fail(); return; }
           } catch { fail(); return; }
         }
@@ -94,6 +101,7 @@ export class SuSession implements CommandTransport {
   close(): void {
     if (this.closed) return;
     this.closed = true; this.ready = false; this.challenge = undefined;
+    const fail = this.failConnect; this.failConnect = undefined; fail?.('cancelled');
     this.signal.removeEventListener('abort', this.abort);
     this.active?.destroy(); this.broker?.end(); this.broker?.close();
     this.onClosed();

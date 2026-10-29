@@ -1,5 +1,6 @@
 module.exports = {
   forbidden: [
+    { name: 'no-production-to-tests', severity: 'error', from: { path: '^(apps|packages|scripts)/' }, to: { path: '^Tests/' } },
     { name: 'no-circular', severity: 'error', from: {}, to: { circular: true } },
     { name: 'core-is-pure', severity: 'error', from: { path: '^packages/core/' }, to: { path: '^(packages/(application|adapters|contracts)/|apps/)' } },
     { name: 'application-only-core', severity: 'error', from: { path: '^packages/application/' }, to: { path: '^(packages/(adapters|contracts)/|apps/)' } },

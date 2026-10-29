@@ -13,7 +13,7 @@ async function sourceFiles(directory) {
   return found.flat();
 }
 
-const files = [...await sourceFiles('apps'), ...await sourceFiles('packages'), ...await sourceFiles('scripts')];
+const files = [...await sourceFiles('apps'), ...await sourceFiles('packages'), ...await sourceFiles('scripts'), ...await sourceFiles('Tests')];
 let failures = 0;
 for (const file of files) {
   const count = (await readFile(file, 'utf8')).split('\n').length;

@@ -44,13 +44,15 @@ export class OperationInputBridge implements OperationExecutor {
     let reused = false;
     const dropAnswer = () => { lastAnswer?.fill(0); lastAnswer = undefined; };
     let active = true;
+    let interrupted: OperationResult['privilege'];
     let waiting: string | undefined;
     let attempts = 0;
     const maxAttempts = 3 * Math.max(1, analysis.steps?.filter(({ call }) => isSudo(call)).length ?? 0);
-    const cancel = () => {
+    const cancel = (code: 'cancelled' | 'timeout' | 'attempts-exhausted' | 'transport-unavailable' = 'cancelled') => {
       if (!active) return;
+      if (plan.auth) interrupted ??= { method: 'sudo', stage: 'authentication', code, source: 'transport', businessCommand: 'unknown', recovery: 'user-action' };
       this.credentials.clearTask(taskId); dropAnswer();
-      if (waiting) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
+      if (waiting && this.terminal.hostOf(terminalId) === hostId) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
       waiting = undefined;
       this.interactions.cancelForTerminal(terminalId);
       if (this.terminal.isAgentOwner(terminalId)) this.terminal.suspend(terminalId);
@@ -63,7 +65,7 @@ export class OperationInputBridge implements OperationExecutor {
       }
       if (!plan.auth || !current() || waiting || ++attempts > maxAttempts) {
         this.terminal.answerAuthentication(terminalId, operation.id, challenge.id, null);
-        cancel(); return;
+        cancel(attempts > maxAttempts ? 'attempts-exhausted' : 'transport-unavailable'); return;
       }
       waiting = challenge.id;
       // Reuse at most once. A new challenge after reuse means it was not accepted.
@@ -93,12 +95,12 @@ export class OperationInputBridge implements OperationExecutor {
       const goal = operation.scope.goal.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 160);
       const details: Omit<InputRequest, 'id' | 'expiresAt'> = {
         taskId, operationId: operation.id, hostId, terminalId, terminalGeneration, connectionGeneration,
-        kind: 'secret', recipient: 'sudo', prompt: 'sudo 身份验证',
-        reason: `为了完成“${goal}”，本次已审核的 sudo 命令需要密码。密码仅交给 sudo 的独立认证进程，不进入命令输入、AI 上下文或日志。成功后可在本任务运行期间内存复用最多 5 分钟；暂停、断线、认证失败或任务结束即清除。`
+        kind: 'secret', recipient: 'sudo', prompt: attempts > 1 ? `sudo 再次请求认证（${attempts}/${maxAttempts}）` : 'sudo 身份验证',
+        reason: `为了完成“${goal}”，本次已审核的 sudo 命令需要密码。通常使用登录账户密码，特殊sudo/PAM策略可能不同；再次询问不自动等于密码错误。密码仅交给 sudo 的独立认证进程，不进入命令输入、AI 上下文或日志。成功后可在本任务运行期间内存复用最多 5 分钟；暂停、断线、认证失败或任务结束即清除。`
       };
       void this.interactions.request(details, sink).then((status) => {
-        if (status !== 'submitted' && active) cancel();
-      }).catch(cancel);
+        if (status !== 'submitted' && active) cancel(status === 'expired' ? current() ? 'timeout' : 'transport-unavailable' : 'cancelled');
+      }).catch(() => cancel());
     });
     let output = '';
     let confirmed = false;
@@ -112,10 +114,13 @@ export class OperationInputBridge implements OperationExecutor {
       confirmed = this.terminal.confirmInput(terminalId, operation.id, 'y\n');
       if (confirmed) this.onAutoConfirmation?.(taskId, hostId);
     });
-    const leaseCheck = setInterval(() => { if (!current()) cancel(); }, 100);
-    signal?.addEventListener('abort', cancel, { once: true });
+    const leaseCheck = setInterval(() => { if (!current()) cancel('transport-unavailable'); }, 100);
+    const onAbort = () => cancel();
+    signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      const result = describeSudoOutcome(analysis, await this.terminal.execute(operation, fingerprint, signal, options), attempts);
+      const observed = await this.terminal.execute(operation, fingerprint, signal, options);
+      const result = describeSudoOutcome(analysis, interrupted ? { ...observed, privilege: interrupted, authenticationAttempts: attempts, requiresUserAction: true } : observed, attempts);
+      if (result.privilege && result.privilege.recovery !== 'private-input') result.requiresUserAction = true;
       if (result.authentication === 'succeeded' && lastAnswer && current()) this.credentials.remember(binding, lastAnswer);
       if (result.authentication === 'failed' || result.status === 'unknown' || result.status === 'handed-over') this.credentials.clearTask(taskId);
       if (result.authentication === 'failed') this.terminal.suspend(terminalId);
@@ -125,9 +130,9 @@ export class OperationInputBridge implements OperationExecutor {
       throw error;
     } finally {
       active = false; dropAnswer();
-      if (waiting) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
+      if (waiting && this.terminal.hostOf(terminalId) === hostId) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
       clearInterval(leaseCheck);
-      signal?.removeEventListener('abort', cancel);
+      signal?.removeEventListener('abort', onAbort);
       unsubscribeAuth(); unsubscribeOutput();
       this.interactions.cancelForTerminal(terminalId);
     }

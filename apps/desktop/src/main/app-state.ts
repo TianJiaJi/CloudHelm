@@ -7,6 +7,9 @@ import { OutputRedactor, type CommandAnalyzer } from '@cloudhelm/core';
 import { HISTORICAL_QUERY_REPAIR, planHistoricalQueryRepair } from './historical-query-repair.js';
 import { RequestBudgetAuthority } from './request-budget-authority.js';
 import { createRequestBudget } from '@cloudhelm/core';
+import { recordVerificationReport } from './verification-records.js';
+import { rebuildRecordedVerification } from './rebuild-verification.js';
+import { verificationReason } from '../worker/verification-facts.js';
 import { createBudgetRequestHandler } from './request-budget-broker.js';
 import { HostDraftSchema, TaskIntentStateSchema, isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
@@ -221,6 +224,28 @@ export class AppState {
     return task;
   }
 
+  /** Explicit data-only report refresh. Never restore a runner, connect SSH or request model budget. */
+  async rebuildVerificationReport(id: string, analyzer: CommandAnalyzer): Promise<void> {
+    if (typeof id !== 'string' || !id || id.length > 200) throw new Error('无效对话编号。');
+    const task = structuredClone(this.getTask(id));
+    const owned = () => [...this.operations.values()].filter((op) => op.taskId === id);
+    const busy = () => this.execution[id]?.model === 'running' || this.execution[id]?.remote === 'running';
+    if (busy()) throw new Error('任务尚未空闲，不能重新整理。');
+    const baseline = JSON.stringify([task, owned()]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const started = Date.now(); const expired = () => new Error('整理已有记录超时；未修改报告，也未执行命令。');
+    const report = await Promise.race([rebuildRecordedVerification(task, structuredClone(owned()), analyzer), new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(expired()), 5000);
+    })]).finally(() => { if (timer) clearTimeout(timer); });
+    if (Date.now() - started >= 5000) throw expired();
+    if (JSON.stringify([this.getTask(id), owned()]) !== baseline || busy()) throw new Error('整理期间记录已变化，未保存；请重新查看。');
+    const reason = verificationReason(report);
+    if (JSON.stringify(report) !== JSON.stringify(task.report)) this.record({ type: 'work-report', taskId: id, report });
+    this.record({ type: 'verification-state', taskId: id, value: { status: reason ? 'unverified' : 'verified',
+      operationIds: [...new Set([...report.facts!.operations.filter((op) => op.status === 'succeeded' && op.readOnly !== true).map((op) => op.operationId),
+        ...report.facts!.riskOperationIds])], ...(reason ? { reasonCode: reason } : {}) } });
+  }
+
   /** Permanently removes a finished conversation, its records and its terminal logs. */
   deleteTask(id: string): void {
     this.assertDeletable(id);
@@ -252,6 +277,7 @@ export class AppState {
     this.store.removeWhere('operations', 'taskId', id);
     this.store.removeWhere('messages', 'taskId', id);
     this.store.removeWhere('clarifications', 'taskId', id);
+    this.store.removeWhere('verification-reports', 'taskId', id);
     this.store.removePrefix('model-requests', `${id}:`);
     delete this.reasoningProgress[id];
     delete this.execution[id];
@@ -674,10 +700,12 @@ export class AppState {
         break;
       case 'work-progress':
       case 'work-report':
-      case 'verification-state': {
+      case 'verification-state':
+      case 'verification-round': {
         const task = this.getTask(event.taskId);
         if (event.type === 'work-progress') task.plan = event.plan;
-        else if (event.type === 'work-report') task.report = event.report;
+        else if (event.type === 'work-report') recordVerificationReport(this.store, task, event.report);
+        else if (event.type === 'verification-round') task.verificationRound = event.value;
         else task.verificationState = event.value;
         this.store.put('tasks', task.id, task);
         break;

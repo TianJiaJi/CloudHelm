@@ -32,7 +32,7 @@ export function eventDiagnostic(message: RuntimeMessage) {
       readOnly: event.value.readOnly, classification: event.value.readOnly === true ? 'effect-free' : 'unclassified',
       reconciliationKind: event.value.reconciliation?.kind,
       evidenceOperationIds: event.value.reconciliation?.evidenceOperationIds,
-      authentication: event.value.authentication, authenticationAttempts: event.value.authenticationAttempts, failureKind: event.value.failureKind, effects: event.value.effects });
+      authentication: event.value.authentication, authenticationAttempts: event.value.authenticationAttempts, failureKind: event.value.failureKind, effects: event.value.effects, errorCode: event.value.privilege?.code });
     case 'input-open': return safeDiagnostic({ event: 'authentication.open', taskId: event.value.taskId,
       hostId: event.value.hostId, operationId: event.value.operationId, requestId: event.value.id, status: event.value.kind });
     case 'input-close': return safeDiagnostic({ event: 'authentication.close', requestId: event.id });

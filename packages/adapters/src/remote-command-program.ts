@@ -101,6 +101,7 @@ def read_output():
 
 server = None
 socket_path = None
+missing_sudo = False
 try:
     header = b''
     while not header.endswith(b'\n'):
@@ -136,7 +137,9 @@ try:
     # Check only the executable and directory used by this launch; never install dependencies.
     if not os.path.isdir(cwd): raise FileNotFoundError()
     if not os.access(cwd, os.X_OK): raise PermissionError()
-    if shutil.which(argv[0], path=environment['PATH']) is None: raise FileNotFoundError()
+    if shutil.which(argv[0], path=environment['PATH']) is None:
+        missing_sudo = launch.get('sudo') is True and os.path.basename(argv[0]) == 'sudo'
+        raise FileNotFoundError()
     master, slave = pty.openpty()
     rows, cols = int(launch.get('rows', 30)), int(launch.get('cols', 100))
     if 1 <= rows <= 1000 and 1 <= cols <= 1000:
@@ -180,7 +183,8 @@ try:
                         entry['event'].set()
 except (FileNotFoundError, PermissionError):
     if process is None:
-        emit({'type': 'launch-error', 'kind': 'permission-denied' if isinstance(sys.exc_info()[1], PermissionError) else 'unsupported'})
+        emit({'type': 'launch-error', 'kind': 'permission-denied' if isinstance(sys.exc_info()[1], PermissionError) else 'unsupported',
+              'code': 'sudo-unavailable' if missing_sudo else 'launch-unavailable'})
     else: emit({'type': 'error', 'message': 'Command transport failed; verify remote outcome.'})
 except Exception:
     # Do not serialize exceptions or control messages: they might contain credentials.

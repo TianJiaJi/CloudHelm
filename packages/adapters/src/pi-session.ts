@@ -5,7 +5,8 @@ import { modelCapacity, modelThinking } from './model-catalog.js';
 import { conversationOutputTokens } from './model-capacity.js';
 import { meterModelRequest } from './model-request-meter.js';
 import type { ThinkingLevel, ThinkingView } from '@cloudhelm/core';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
+import { sessionDirectoryCleanup } from './session-directory-cleanup.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentSession, createEventBus, DefaultResourceLoader, SettingsManager,
@@ -25,6 +26,7 @@ interface ActiveCompaction {
 /** One native Pi session, with CloudHelm's explicit tools, credentials and lifecycle limits. */
 export async function createConversationSession(options: SessionOptions): Promise<ConversationSession> {
   const cwd = await mkdtemp(join(tmpdir(), 'cloudhelm-session-'));
+  const cleanupDirectory = sessionDirectoryCleanup(cwd);
   try {
     const manager = openSessionStorage(cwd, options.storage);
     const runtime = await isolatedModelRuntime(options.profile);
@@ -62,7 +64,7 @@ export async function createConversationSession(options: SessionOptions): Promis
       tools: [...options.tools.map((tool) => tool.name), 'ask_user'],
       customTools: options.tools as unknown as ToolDefinition[] });
     if (modelFallbackMessage) { session.dispose(); throw new Error(modelFallbackMessage); }
-    const adapter = new PiConversationSession(session, options, cwd, async (profile) => {
+    const adapter = new PiConversationSession(session, options, cleanupDirectory, async (profile) => {
       const { model } = await installSessionModel(runtime, profile);
       configureWindow(model);
       await session.setModel(model);
@@ -72,7 +74,7 @@ export async function createConversationSession(options: SessionOptions): Promis
     adapter.project();
     adapter.publishThinking();
     return adapter;
-  } catch (error) { await rm(cwd, { recursive: true, force: true }); throw error; }
+  } catch (error) { await cleanupDirectory(); throw error; }
 }
 
 class PiConversationSession implements ConversationSession {
@@ -93,9 +95,11 @@ class PiConversationSession implements ConversationSession {
   private previousFrameTokens?: number;
   private controlRevision = 0;
   private responseAttempt?: ModelRequestAttempt;
+  private disposed = false;
 
   constructor(private readonly session: AgentSession, private readonly options: SessionOptions,
-    private readonly cwd: string, private readonly applyModel: (profile: SessionProfile) => Promise<void>) {
+    private readonly cleanupDirectory: ReturnType<typeof sessionDirectoryCleanup>,
+    private readonly applyModel: (profile: SessionProfile) => Promise<void>) {
     this.reasoningStream = new PiReasoningStream((value) => options.event({ type: 'reasoning-progress', value }));
     this.active = { ...options.profile };
     this.selected = this.active;
@@ -378,10 +382,13 @@ class PiConversationSession implements ConversationSession {
   }
   clearQueue(): void { this.controlRevision++; this.invalidateCompaction(); this.session.clearQueue(); this.pendingDocuments.length = 0; }
   dispose(): void {
-    this.invalidateCompaction();
-    this.reasoningStream.clear();
-    this.session.dispose();
-    void rm(this.cwd, { recursive: true, force: true });
+    if (this.disposed) return;
+    this.disposed = true;
+    try {
+      this.invalidateCompaction();
+      this.reasoningStream.clear();
+      this.session.dispose();
+    } finally { void this.cleanupDirectory(); }
   }
 
   project(): void {

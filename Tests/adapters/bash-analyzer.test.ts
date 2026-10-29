@@ -1,0 +1,237 @@
+import { describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { BashAnalyzer, findGrammarPath, grammarPathCandidates } from '../../packages/adapters/src/bash-analyzer.js';
+import { decideSafety, isEffectFreeQuery, isReadOnlyQuery, scriptFilePath, type ProposedOperation } from '@cloudhelm/core';
+
+const scope = {
+  taskId: 'task-1', hostId: 'host-1', cwd: '/srv/app', runAs: 'deploy',
+  terminalId: 'terminal-1', terminalGeneration: 1, policyRevision: 1,
+  allowedWorkingRoots: ['/srv/app'], protectedPaths: ['/srv/backup'], goal: 'Deploy the app'
+};
+
+function command(value: string): Extract<ProposedOperation, { kind: 'command' }> {
+  return { id: 'operation-1', kind: 'command', command: value, scope };
+}
+
+const analyzer = new BashAnalyzer();
+
+describe('deterministic safety policy', () => {
+  it('treats a literal list of ordinary queries as effect-free, but not a dynamic or mutating list', async () => {
+    expect(isEffectFreeQuery(await analyzer.analyze('id; ls -ld /root'))).toBe(true);
+    for (const command of ['id; touch /tmp/change', 'id; ls "$(touch /tmp/change)"', 'ls /tmp/staged*']) {
+      expect(isEffectFreeQuery(await analyzer.analyze(command))).toBe(false);
+    }
+  });
+
+  it('classifies only literal foreground sudo file queries as effect-free, not auto-approved', async () => {
+    for (const command of ['sudo ls -la /root/test/test.py && sudo cat /root/test/test.py',
+      "sudo stat -c '%n %s' /root/test/test.py; sudo cat /root/test/test.py"]) {
+      const parsed = await analyzer.analyze(command);
+      expect(isEffectFreeQuery(parsed)).toBe(true);
+      expect(isReadOnlyQuery(parsed)).toBe(false);
+    }
+    for (const command of ['sudo cat /root/test/test.py && sudo head -n 1 /root/test/test.py',
+      'sudo cat /root/test/test.py && sudo install /tmp/stage /root/test/test.py',
+      'sudo cat /root/test/test.py | head -1', 'sudo cat /root/test/test.py > /tmp/out']) {
+      expect(isEffectFreeQuery(await analyzer.analyze(command))).toBe(false);
+    }
+  });
+  it.each([
+    ['pwd', 'allow', 'allow', 'allow'],
+    ['apt-get install -y curl', 'allow', 'allow', 'allow'],
+    ['systemctl restart nginx', 'allow', 'allow', 'allow'],
+    ['rm -rf /srv/app/cache', 'ask', 'evaluate', 'ask'],
+    ['python3 -c "print(1)"', 'ask', 'evaluate', 'allow'],
+    ['sh ./deploy.sh', 'ask', 'evaluate', 'allow'],
+    ['rm -rf /', 'deny', 'deny', 'deny']
+  ] as const)('applies all three levels to %s', async (value, first, second, third) => {
+    const analysis = await analyzer.analyze(value);
+    expect(decideSafety(command(value), { mode: 'ask', revision: 1 }, analysis).verdict).toBe(first);
+    expect(decideSafety(command(value), { mode: 'ai-review', revision: 1 }, analysis).verdict).toBe(second);
+    expect(decideSafety(command(value), { mode: 'permissive', revision: 1 }, analysis).verdict).toBe(third);
+  });
+
+  it.each(['rm -rf /', 'rm -rf /etc/', 'rm -rf /usr/*', 'echo ok; rm -rf /*', 'sudo rm -rf /etc', "bash -c 'rm -rf /'", 'dd if=/dev/zero of=/dev/sda', 'mkfs.ext4 /dev/sdb', 'cat /dev/zero > /dev/sda', 'chmod -R 777 /'])('rejects known catastrophic effect: %s', async (value) => {
+    const operation = command(value);
+    const decision = decideSafety(operation, { mode: 'permissive', revision: 1 }, await analyzer.analyze(value));
+    expect(decision.verdict).toBe('deny');
+  });
+
+  it.each([
+    "sudo bash -c 'rm -rf /'", "env bash -lc 'rm -rf /etc'", "su deploy -c 'rm -rf /'",
+    "sudo -u root -- env X=1 sh -xc 'rm -rf /*'", "su --command='mkfs.ext4 /dev/sda' root",
+    "command sudo --user=root sh -c 'chmod -R 777 /'", "env -S 'bash -c \"rm -rf /\"'",
+    "bash -c 'r'\"m -rf /\"", "nohup /bin/bash -c 'dd of=/dev/sda if=/dev/zero'"
+  ])('finds forbidden effects under wrappers: %s', async (value) => {
+    expect(decideSafety(command(value), { mode: 'permissive', revision: 1 }, await analyzer.analyze(value)).verdict).toBe('deny');
+  });
+
+  it.each(['ls -la /srv/app', 'pwd', 'ifconfig -a', 'mkdir -p ./cache', 'mkdir -p /etc/other', 'cd ./cache', 'cat /srv/app/config', 'cat -- ./config', 'echo text > /tmp/file'])('allows bounded ordinary operation: %s', async (value) => {
+    const operation = command(value);
+    const decision = decideSafety(operation, { mode: 'ask', revision: 1 }, await analyzer.analyze(value));
+    expect(decision.verdict).toBe('allow');
+  });
+
+  it.each(['ifconfig eth0 down', 'ls $(touch /tmp/foo)', 'python3 -c "print(1)"'])('does not whitelist a command name with unknown effects: %s', async (value) => {
+    const operation = command(value);
+    const decision = decideSafety(operation, { mode: 'ask', revision: 1 }, await analyzer.analyze(value));
+    expect(decision.verdict).toBe('ask');
+  });
+
+  it('blocks a user-protected directory through a command and a structured write', async () => {
+    const operation = command('rm -rf /srv/backup');
+    expect(decideSafety(operation, { mode: 'permissive', revision: 1 }, await analyzer.analyze(operation.command)).verdict).toBe('deny');
+    const write: ProposedOperation = { id: 'write-1', kind: 'write-file', path: '/srv/backup/secrets', content: 'new', scope };
+    expect(decideSafety(write, { mode: 'permissive', revision: 1 }).verdict).toBe('deny');
+    const read = command('ls /srv/backup');
+    expect(decideSafety(read, { mode: 'permissive', revision: 1 }, await analyzer.analyze(read.command)).verdict).toBe('deny');
+  });
+
+  it('separates read and write protected paths for simple copy operations, including sudo wrappers', async () => {
+    const directional = { ...scope, protectedPaths: [], protectedReadPaths: ['/srv/private-read'],
+      protectedWritePaths: ['/srv/private-write'] };
+    const decide = async (value: string) => decideSafety({ ...command(value), scope: directional },
+      { mode: 'ask', revision: 1 }, await analyzer.analyze(value)).verdict;
+    expect(await decide('cp /srv/private-write/input /srv/app/output')).toBe('allow');
+    expect(await decide('cp /srv/app/input /srv/private-read/output')).toBe('allow');
+    expect(await decide('sudo cp /srv/private-write/input /srv/app/output')).toBe('allow');
+    expect(await decide('cp /srv/private-read/input /srv/app/output')).toBe('deny');
+    expect(await decide('cp /srv/app/input /srv/private-write/output')).toBe('deny');
+    expect(await decide('cat /srv/private-read/input')).toBe('deny');
+    expect(await decide('tee /srv/private-write/output')).toBe('deny');
+  });
+
+  it('prevents structured uploads outside the selected local root', () => {
+    const upload: ProposedOperation = { id: 'upload-1', kind: 'upload', localPath: '/Users/alice/secrets', localRoot: '/Users/alice/project', remotePath: '/srv/app/secrets', contentSha256: 'a', size: 1, scope };
+    expect(decideSafety(upload, { mode: 'permissive', revision: 1 }).verdict).toBe('deny');
+  });
+
+  it('allows ordinary mutation without an AI request in level two', async () => {
+    const operation = command('docker compose up -d');
+    expect(decideSafety(operation, { mode: 'ai-review', revision: 1 }, await analyzer.analyze(operation.command)).verdict).toBe('allow');
+  });
+
+  it('sends opaque but valid execution for independent review in level two', async () => {
+    const operation = command('python3 -c "print(1)"');
+    expect(decideSafety(operation, { mode: 'ai-review', revision: 1 }, await analyzer.analyze(operation.command)).verdict).toBe('evaluate');
+  });
+
+  it.each(['sh ./setup.sh arg', 'sudo sh ./setup.sh arg', './setup.sh --flag'])(
+    'identifies a literal script for pre-execution inspection: %s', async (value) => {
+      expect(scriptFilePath(await analyzer.analyze(value))).toBe('./setup.sh');
+    });
+
+  it('stops execution when the analyzer cannot establish a complete parse', async () => {
+    const operation = command('echo foo; )');
+    expect(decideSafety(operation, { mode: 'permissive', revision: 1 }, await analyzer.analyze(operation.command)).verdict).toBe('error');
+  });
+  it.each([
+    'rm -rf $(echo /)', 'rm -rf "$(printf %s /)etc"', 'echo bad > $(echo /dev/sda)',
+    'rm -rf /{etc,usr}', 'find / -exec rm {} \\;', 'mv /etc /tmp/old', 'rsync -a --delete ./empty/ /',
+    'rm -r /', 'sudo -uroot rm -r /etc', 'busybox rm -rf /',
+    'timeout 3 nice -n 1 rm -rf /usr', 'xargs -n 1 rm -rf /',
+    'find /tmp -exec rm -rf / \\;', 'echo "$(sudo rm -rf /)"',
+    'cd /; rm -rf .', 'cd /etc; rm -rf *',
+    "eval 'rm -rf /'", "env -S'bash -c \"rm -rf /\"'",
+    "$'\\162m' -rf /", 'dd of=/dev/mapper/root if=/dev/zero',
+    'echo hi > /dev/mmcblk0', 'tee /dev/nvme0n1p1',
+    'truncate -s 0 /etc/passwd', 'echo bad > /etc/fstab',
+    `python3 -c 'import os; os.system("rm -rf /")'`,
+    `python3 -c 'import os; os.system("echo ok"); os.system("rm -rf /")'`,
+    `python3 -c 'import shutil; shutil.rmtree("/")'`,
+    `node -e 'require("fs").rmSync("/", {recursive: true})'`
+  ])('blocks common literal bypass forms: %s', async (value) => {
+    expect(decideSafety(command(value), { mode: 'permissive', revision: 1 }, await analyzer.analyze(value)).verdict).toBe('deny');
+  });
+
+  it.each(['rm -rf /srv', 'cat /srv/backup/*', 'cp /srv/backup/secret ./out', 'tee /srv/backup/secret', 'chmod -R 777 /srv/backup', 'rm -rf /srv/back*', 'cd /srv; rm -rf backup'])('protects resources and destructive ancestors: %s', async (value) => {
+    expect(decideSafety(command(value), { mode: 'permissive', revision: 1 }, await analyzer.analyze(value)).verdict).toBe('deny');
+  });
+
+  it.each(['cat', 'cat -', 'cat -- -', 'cat -n file', 'cat --help', 'cat ~', 'cat /dev/stdin', 'cat \"file\tname\"', 'cat $(echo /tmp/file)', 'PATH=/tmp ls', 'LD_PRELOAD=/tmp/hook.so id', 'pwd &', 'hostname new-name', 'date 010100002026', 'date --set now', '/tmp/ls /', 'mkdir -p /srv/app/cache', 'cd /srv/app', 'ls; pwd', 'ls $(touch /tmp/changed)'])('does not mint a read-only capability for %s', async (value) => {
+    expect(isReadOnlyQuery(await analyzer.analyze(value))).toBe(false);
+  });
+
+  it.each(['ls -la /srv/app', 'pwd', 'hostname -I', 'date -u', 'id deploy', 'cat /srv/app/config', 'cat -- ./config ./logs/run.log',
+    'docker ps', 'docker ps -a', 'docker container ls --all', 'sudo docker ps -a',
+    'docker version', 'docker network ls', 'sudo docker version',
+    'docker ps --format "{{.Names}}"', 'docker ps --format="{{.Names}}"',
+    'docker ps -a --format "table {{.Names}}\\t{{.Image}}\\t{{.Status}}"',
+    'docker container ls --all --format "{{.Names}}"'])('recognizes a pure read-only query: %s', async (value) => {
+    const analysis = await analyzer.analyze(value);
+    expect(isReadOnlyQuery(analysis), JSON.stringify(analysis)).toBe(true);
+    if (value.includes('docker')) for (const mode of ['ask', 'ai-review', 'permissive'] as const) {
+      expect(decideSafety(command(value), { mode, revision: 1 }, analysis).verdict).toBe('allow');
+    }
+  });
+
+  it.each(['sudo cat /root/test/test.py', 'sudo ls -la /root/test', 'sudo stat /root/test/test.py'])(
+    'classifies privileged file inspection as effect-free without granting low-risk approval: %s', async (value) => {
+      const analysis = await analyzer.analyze(value);
+      expect(analysis.calls.map((call) => call.name)).toEqual(['sudo', value.split(' ')[1]]);
+      expect(isEffectFreeQuery(analysis)).toBe(true);
+      expect(isReadOnlyQuery(analysis)).toBe(false);
+      expect(decideSafety(command(value), { mode: 'ask', revision: 1 }, analysis).ruleId).not.toBe('low-risk-command');
+    });
+
+  it.each(['sudo -u root cat /root/test/test.py', 'sudo -E cat /root/test/test.py',
+    'sudo sh -c "cat /root/test/test.py"', 'sudo cat /root/test/test.py 2>&1',
+    'sudo cat $(echo /root/test/test.py)', 'sudo cat /root/test/test.py; touch /root/test/new',
+    'sudo install file /root/test/test.py',
+    'sudo cat /srv/backup/private'])('does not mint privileged inspection for unsafe shape or scope: %s', async (value) => {
+    const analysis = await analyzer.analyze(value);
+    if (value.includes('/srv/backup')) expect(decideSafety(command(value), { mode: 'ask', revision: 1 }, analysis).verdict).toBe('deny');
+    else expect(isEffectFreeQuery(analysis)).toBe(false);
+  });
+
+  it.each(['docker run --rm alpine true', 'docker --host=tcp://other ps', 'docker ps --format "{{.Names | printf}}"',
+    'docker ps --format "{{.Names}}$(touch /tmp/changed)"', 'docker ps --format "{{.Names}}" --host=tcp://other',
+    'docker network rm app', 'docker network ls --host=tcp://other', 'docker version && touch /tmp/changed',
+    'sudo cat /root/test/test',
+    'docker ps -a && docker rm old', 'sudo sh -c "docker ps -a"'])('does not grant a Docker read capability to %s', async (value) => {
+    expect(isReadOnlyQuery(await analyzer.analyze(value))).toBe(false);
+  });
+
+  it.each(['fdisk -l', 'fdisk --list /dev/sda', 'sfdisk -l /dev/sda', 'wipefs -n /dev/sda',
+    'parted /dev/sda print', 'parted -s /dev/sda print free', 'mkfs.ext4 --version', 'wipefs --help'])(
+    'permits explicit disk queries without treating the program name as mutation: %s', async (value) => {
+      const analysis = await analyzer.analyze(value);
+      expect(isReadOnlyQuery(analysis)).toBe(true);
+      expect(decideSafety(command(value), { mode: 'ask', revision: 1 }, analysis).verdict).toBe('allow');
+    });
+
+  it.each(['fdisk /dev/sda', 'parted /dev/sda mklabel gpt'])(
+    'keeps disk mutations in the hard prohibition: %s', async (value) => {
+      expect(decideSafety(command(value), { mode: 'permissive', revision: 1 }, await analyzer.analyze(value)).verdict).toBe('deny');
+    });
+
+});
+
+describe('grammar deployment lookup', () => {
+  const bundle = path.join(path.sep, 'app', 'out', 'main', 'chunks');
+  const installed = path.join(path.sep, 'repo', 'packages', 'adapters', 'node_modules', 'tree-sitter-bash');
+
+  it('prefers packaged resources, then the built bundle, then the installed package', () => {
+    expect(grammarPathCandidates({ resourcesPath: path.join(path.sep, 'app', 'resources'), bundleDirectory: bundle, packageDirectory: installed }))
+      .toEqual([
+        path.join(path.sep, 'app', 'resources', 'tree-sitter-bash.wasm'),
+        path.join(bundle, 'tree-sitter-bash.wasm'),
+        path.join(bundle, '..', 'tree-sitter-bash.wasm'),
+        path.join(installed, 'tree-sitter-bash.wasm')
+      ]);
+  });
+
+  it('drops unknown locations instead of resolving them to the working directory', () => {
+    expect(grammarPathCandidates({ resourcesPath: undefined, bundleDirectory: undefined, packageDirectory: undefined })).toEqual([]);
+  });
+
+  it('finds the emitted grammar when neither resources nor the grammar package are reachable', () => {
+    const emitted = path.join(bundle, '..', 'tree-sitter-bash.wasm');
+    const locations = { bundleDirectory: bundle, packageDirectory: undefined, resourcesPath: undefined };
+    expect(findGrammarPath(locations, (file) => file === emitted)).toBe(emitted);
+  });
+
+  it('reports no grammar when every candidate is absent', () => {
+    expect(findGrammarPath({ bundleDirectory: bundle, packageDirectory: installed, resourcesPath: undefined }, () => false)).toBeUndefined();
+  });
+});
