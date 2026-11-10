@@ -3,7 +3,15 @@ import { documentText, type ContentModelPort, type MessageDocument, type Referen
 /** Compress only when the assembled request exceeds the available model budget. */
 export async function prepareMessage(document: MessageDocument, originals: ReferenceBody[], model: ContentModelPort,
   usedTokens: number, signal: AbortSignal, progress: (id: string) => void = () => {}) {
+  signal.throwIfAborted();
   const bodies = new Map(originals.map((body) => [body.reference.id, { ...body, summary: undefined as string | undefined }]));
+  const references = document.parts.filter((part) => part.type === 'reference');
+  if (bodies.size !== originals.length || new Set(references.map((part) => part.reference.id)).size !== bodies.size
+    || references.some(({ reference }) => {
+      const source = bodies.get(reference.id)?.reference;
+      return !source || source.kind !== reference.kind || source.hostId !== reference.hostId
+        || source.terminalId !== reference.terminalId || source.generation !== reference.generation;
+    })) throw new Error('引用来源不一致，请重新添加资料');
   const budget = Math.floor(model.contextWindow - model.reserveTokens - Math.max(0, usedTokens));
   if (budget < 256) throw new Error('当前对话上下文不足，请先整理上下文或开始新对话');
   const question = document.parts.filter((part) => part.type === 'text').map((part) => part.text).join('');
@@ -22,9 +30,10 @@ export async function prepareMessage(document: MessageDocument, originals: Refer
   signal.throwIfAborted();
   const text = documentText(document.parts, bodies);
   if (model.estimate(text) > budget) throw new Error('压缩后仍超过上下文容量，请缩小引用范围或开始新对话');
-  // Terminal evidence must never enter the SafetyGate's user-intent field.
-  const intent = document.parts.map((part) => part.type === 'text' ? part.text : part.reference.kind === 'paste'
-    ? bodies.get(part.reference.id)!.summary ?? bodies.get(part.reference.id)!.original : '').join('').trim() || '请分析这段终端输出';
+  // Only original user-authored material can enter authorization intent. Model-derived
+  // summaries belong to the request projection, never to the explicit-intent ledger.
+  const intent = document.parts.map((part) => part.type === 'text' ? part.text : bodies.get(part.reference.id)!.reference.kind === 'paste'
+    ? bodies.get(part.reference.id)!.original : '').join('').trim() || '请分析这段终端输出';
   return { text, intent, bodies: [...bodies.values()], document: { ...document, parts: document.parts.map((part) => part.type === 'text' ? part : {
     type: 'reference' as const, reference: { ...bodies.get(part.reference.id)!.reference, summarized: !!bodies.get(part.reference.id)!.summary }
   }) } };
