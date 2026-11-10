@@ -72,7 +72,8 @@ describe('real PTY ownership', () => {
     channel.complete(); await result;
   });
 
-  it.each(['hello', `${'🙂'.repeat(40000)}\n`])('reports authoritative redacted-output truncation without split surrogate pairs', async (output) => {
+  // Cross the capture-tail budget with bounded lines, not the secret redactor's line limit.
+  it.each(['hello', `${'🙂'.repeat(4000)}\n`.repeat(10)])('reports authoritative redacted-output truncation without split surrogate pairs', async (output) => {
     const channel = new FakeTerminal();
     const manager = new TerminalManager({ data() {}, state() {} });
     const id = manager.open('host', channel, 'task');
@@ -84,6 +85,22 @@ describe('real PTY ownership', () => {
       tailChars: result.stdoutTail.length, truncated: output.length > result.stdoutTail.length } });
     expect(result.stdoutTail.length).toBeLessThanOrEqual(16384);
     expect(Buffer.from(result.stdoutTail, 'utf8').toString('utf8')).toBe(result.stdoutTail);
+  });
+
+  it.each([0, 1001])('masks over-limit lines independently of SSH chunk size: %s', async (chunkSize) => {
+    const channel = new FakeTerminal();
+    const manager = new TerminalManager({ data() {}, state() {} });
+    const id = manager.open('host', channel, 'task');
+    const proposed = operation('capture-limit', manager.currentGeneration(id)); proposed.scope.terminalId = id;
+    const pending = manager.execute(proposed, operationFingerprint(proposed));
+    const output = `${'🙂'.repeat(40000)}\n`;
+    if (!chunkSize) channel.emit(output);
+    else for (let index = 0; index < output.length; index += chunkSize) channel.emit(output.slice(index, index + chunkSize));
+    channel.complete();
+    const result = await pending;
+    const safe = '[REDACTED LONG UNTERMINATED OUTPUT]\n';
+    expect(result.stdoutTail).toBe(safe);
+    expect(result.outputCapture).toEqual({ totalChars: safe.length, tailChars: safe.length, truncated: false });
   });
 
   it('blocks typing until the backend releases the idle session and invalidates old grants', async () => {
