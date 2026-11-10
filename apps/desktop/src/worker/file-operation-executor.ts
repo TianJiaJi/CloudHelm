@@ -38,9 +38,9 @@ export class FileOperationExecutor implements OperationExecutor {
       assertAuthorized();
       remoteStarted = true;
       const backup = operation.kind === 'delete-path'
-        ? await this.ssh.deleteFile(operation.scope.hostId, remotePath, assertAuthorized)
+        ? await this.ssh.deleteFile(operation.scope.hostId, remotePath, assertAuthorized, signal)
         : await this.ssh.writeFile(operation.scope.hostId, remotePath,
-          operation.kind === 'write-file' ? Buffer.from(operation.content) : content!, assertAuthorized);
+          operation.kind === 'write-file' ? Buffer.from(operation.content) : content!, assertAuthorized, signal);
       const handover = !this.terminal.isAgentOwner(operation.scope.terminalId)
         || this.terminal.currentGeneration(operation.scope.terminalId) !== operation.scope.terminalGeneration;
       return {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { SshTransport, type SshHost } from '../../packages/adapters/src/ssh-transport.js';
 
 const state = vi.hoisted(() => ({ clients: [] as Array<{ emit(event: string, ...args: unknown[]): boolean; end: ReturnType<typeof vi.fn> }>, sftp: {} as Record<string, unknown> }));
@@ -15,13 +16,21 @@ vi.mock('ssh2', async () => {
 const host: SshHost = { id: 'host', label: 'test', address: 'localhost', port: 22, username: 'test', auth: 'password', fingerprint: 'test' };
 beforeEach(() => { state.clients.length = 0; state.sftp = {}; });
 
-function sftpFixture(existing: boolean, afterWrite: () => void) {
+function sftpFixture(existing: boolean, afterWrite: () => void, regular = true) {
   const directory = { isDirectory: () => true, isSymbolicLink: () => false };
-  const file = { isDirectory: () => false, isSymbolicLink: () => false, size: 3, mode: 0o600 };
+  const file = { isFile: () => regular, isDirectory: () => false, isSymbolicLink: () => false, size: 3, mode: 0o600 };
   const write = vi.fn((_path: string, _data: Buffer, _options: unknown, callback: (error: null) => void) => { afterWrite(); callback(null); });
   const rename = vi.fn((_from: string, _to: string, callback: (error: null) => void) => callback(null));
   const unlink = vi.fn((_path: string, callback: (error: null) => void) => callback(null));
+  const open = vi.fn((_path: string, _flags: string, callback: (error: null, handle: Buffer) => void) => callback(null, Buffer.from('handle')));
+  const read = vi.fn((_handle: Buffer, buffer: Buffer, offset: number, length: number, position: number,
+    callback: (error: null, size: number) => void) => callback(null, Buffer.from('old').copy(buffer, offset, position, position + length)));
+  const events = new EventEmitter();
   state.sftp = {
+    on: events.on.bind(events), once: events.once.bind(events),
+    open, read,
+    fstat: (_handle: Buffer, callback: (error: null, stat: unknown) => void) => callback(null, file),
+    close: (_handle: Buffer, callback: (error: null) => void) => callback(null),
     lstat: (target: string, callback: (error: unknown, result?: unknown) => void) => {
       if (target === '/srv' || target === '/srv/app') callback(null, directory);
       else if (existing) callback(null, file);
@@ -30,10 +39,23 @@ function sftpFixture(existing: boolean, afterWrite: () => void) {
     readFile: (_path: string, callback: (error: null, value: Buffer) => void) => callback(null, Buffer.from('old')),
     writeFile: write, ext_openssh_rename: rename, unlink, end: vi.fn()
   };
-  return { write, rename, unlink };
+  return { write, rename, unlink, open, read };
 }
 
 describe('SFTP commit authorization', () => {
+  it('rejects non-regular targets before any backup read or mutation', async () => {
+    const calls = sftpFixture(true, () => {}, false);
+    const originalRead = state.sftp.readFile as (path: string, callback: (error: null, value: Buffer) => void) => void;
+    const read = vi.fn(originalRead); state.sftp.readFile = read;
+    const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+    try {
+      await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({ effects: 'none' });
+      await expect(ssh.deleteFile('host', '/srv/app/file')).rejects.toMatchObject({ effects: 'none' });
+      expect(read).not.toHaveBeenCalled(); expect(calls.write).not.toHaveBeenCalled();
+      expect(calls.rename).not.toHaveBeenCalled(); expect(calls.unlink).not.toHaveBeenCalled();
+      expect(calls.open).not.toHaveBeenCalled(); expect(calls.read).not.toHaveBeenCalled();
+    } finally { ssh.close(); }
+  });
   it('rejects a symbolic-link parent before reading a script or staging a structured write', async () => {
     const calls = sftpFixture(false, () => {});
     const read = vi.fn();

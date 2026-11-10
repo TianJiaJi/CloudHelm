@@ -1,4 +1,6 @@
 import { openSshControlPipe } from './ssh-control-pipe.js';
+import { withSftpSession } from './ssh-sftp-session.js';
+import { readBoundedSftpFile } from './sftp-read.js';
 import { runFixedSshCommand } from './ssh-fixed-exec.js';
 import { probeHostEnvironment } from './host-environment-probe.js';
 import { onDemandAuthHandler, type SshLoginChallenge } from './ssh-authentication.js';
@@ -285,82 +287,83 @@ export class SshTransport {
     });
   }
 
-  /** Read a small regular script for policy analysis; never follow symlinks or expose it to the model. */
-  async inspectScript(hostId: string, absolutePath: string): Promise<{ source: string; sha256: string }> {
-    return this.withSftp(hostId, async (sftp) => {
+  /** Read a small regular script for policy analysis; reject known links and never expose its source to the model. */
+  async inspectScript(hostId: string, absolutePath: string, signal?: AbortSignal): Promise<{ source: string; sha256: string }> {
+    return this.withSftp(hostId, async (sftp, assertActive) => {
       await this.checkSafeParent(sftp, absolutePath);
       const stat = await this.lstatOptional(sftp, absolutePath);
       if (!stat || !stat.isFile() || stat.isSymbolicLink() || stat.size > 65_536) throw new Error('Script is not a small regular file');
-      const bytes = await this.readSftpFile(sftp, absolutePath);
+      const bytes = await readBoundedSftpFile(sftp, absolutePath, 65_536, assertActive);
       if (bytes.length > 65_536 || bytes.includes(0)) throw new Error('Script content is not inspectable text');
       const source = bytes.toString('utf8');
       if (!Buffer.from(source, 'utf8').equals(bytes)) throw new Error('Script encoding is not valid UTF-8');
       return { source, sha256: createHash('sha256').update(bytes).digest('hex') };
-    });
+    }, signal);
   }
 
   /** Writes through a private temporary file and retains a private backup of an overwritten file. */
-  async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAuthorized: () => void = () => {}): Promise<string | undefined> {
+  async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAuthorized: () => void = () => {}, signal?: AbortSignal): Promise<string | undefined> {
     if (content.length > 1_048_576) throw new Error('Structured writes are limited to 1 MiB');
     let effects: 'none' | 'possible' = 'none';
-    try { return await this.withSftp(hostId, async (sftp) => {
+    try { return await this.withSftp(hostId, async (sftp, assertActive) => {
+      const check = () => { assertActive(); assertAuthorized(); };
+      check();
       await this.checkSafeParent(sftp, absolutePath);
       const existing = await this.lstatOptional(sftp, absolutePath);
-      if (existing?.isSymbolicLink() || existing?.isDirectory()) throw new Error('Target must be a regular file, not a symlink or directory');
+      if (existing && (!existing.isFile() || existing.isSymbolicLink())) throw new Error('Target must be a regular file, not a symlink or directory');
       if (existing && existing.size > 1_048_576) throw new Error('Existing file is too large for a managed backup');
       const backup = existing ? `${absolutePath}.cloudhelm-backup-${randomUUID()}` : undefined;
       if (backup) {
-        const original = await this.readSftpFile(sftp, absolutePath);
-        effects = 'possible';
-        await this.writeSftpFile(sftp, backup, original, 0o600, assertAuthorized);
+        const original = await readBoundedSftpFile(sftp, absolutePath, 1_048_576, check);
+        check(); effects = 'possible';
+        await this.writeSftpFile(sftp, backup, original, 0o600, check);
       }
       const temporary = `${absolutePath}.cloudhelm-new-${randomUUID()}`;
       try {
-        effects = 'possible';
-        await this.writeSftpFile(sftp, temporary, content, existing ? existing.mode & 0o777 : 0o600, assertAuthorized);
+        check(); effects = 'possible';
+        await this.writeSftpFile(sftp, temporary, content, existing ? existing.mode & 0o777 : 0o600, check);
         await new Promise<void>((resolve, reject) => {
-          assertAuthorized();
+          check();
           sftp.ext_openssh_rename(temporary, absolutePath, (error) => error ? reject(error) : resolve());
         });
       } catch (error) {
-        await this.unlinkOptional(sftp, temporary, assertAuthorized).catch(() => undefined);
+        await this.unlinkOptional(sftp, temporary, check).catch(() => undefined);
         throw error;
       }
       return backup;
-    }); } catch (error) {
+    }, signal); } catch (error) {
       throw new RemoteFileError(effects, !!error && typeof error === 'object' && 'code' in error && (error.code === 3 || error.code === 'EACCES' || error.code === 'EPERM'), error instanceof Error ? error.message : undefined);
     }
   }
 
   /** Deletes regular files only, preserving a separate recovery copy. */
-  async deleteFile(hostId: string, absolutePath: string, assertAuthorized: () => void = () => {}): Promise<string> {
+  async deleteFile(hostId: string, absolutePath: string, assertAuthorized: () => void = () => {}, signal?: AbortSignal): Promise<string> {
     let effects: 'none' | 'possible' = 'none';
-    try { return await this.withSftp(hostId, async (sftp) => {
+    try { return await this.withSftp(hostId, async (sftp, assertActive) => {
+      const check = () => { assertActive(); assertAuthorized(); };
+      check();
       await this.checkSafeParent(sftp, absolutePath);
       const existing = await this.lstatOptional(sftp, absolutePath);
-      if (!existing || existing.isDirectory() || existing.isSymbolicLink()) throw new Error('Only an existing regular file can be deleted');
+      if (!existing || !existing.isFile() || existing.isSymbolicLink()) throw new Error('Only an existing regular file can be deleted');
       if (existing.size > 1_048_576) throw new Error('File is too large for a managed backup');
       const backup = `${absolutePath}.cloudhelm-backup-${randomUUID()}`;
-      effects = 'possible';
-      await this.writeSftpFile(sftp, backup, await this.readSftpFile(sftp, absolutePath), 0o600, assertAuthorized);
+      const original = await readBoundedSftpFile(sftp, absolutePath, 1_048_576, check);
+      check(); effects = 'possible';
+      await this.writeSftpFile(sftp, backup, original, 0o600, check);
       await new Promise<void>((resolve, reject) => {
-        assertAuthorized();
+        check();
         sftp.unlink(absolutePath, (error) => error ? reject(error) : resolve());
       });
       return backup;
-    }); } catch (error) {
+    }, signal); } catch (error) {
       throw new RemoteFileError(effects, !!error && typeof error === 'object' && 'code' in error && (error.code === 3 || error.code === 'EACCES' || error.code === 'EPERM'), error instanceof Error ? error.message : undefined);
     }
   }
 
-  private async withSftp<T>(hostId: string, action: (sftp: SFTPWrapper) => Promise<T>): Promise<T> {
+  private async withSftp<T>(hostId: string, action: (sftp: SFTPWrapper, assertActive: () => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const client = this.connections.get(hostId);
     if (!client) throw new Error('Host is not connected');
-    const sftp = await new Promise<SFTPWrapper>((resolve, reject) => {
-      client.sftp((error, instance) => error ? reject(error) : resolve(instance));
-    });
-    try { return await action(sftp); }
-    finally { sftp.end(); }
+    return withSftpSession(client, action, { signal, isCurrent: () => this.connections.get(hostId) === client });
   }
 
   private async checkSafeParent(sftp: SFTPWrapper, absolutePath: string): Promise<void> {
@@ -381,12 +384,6 @@ export class SshTransport {
         else if ('code' in error && error.code === 2) resolve(undefined);
         else reject(error);
       });
-    });
-  }
-
-  private async readSftpFile(sftp: SFTPWrapper, remotePath: string): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      sftp.readFile(remotePath, (error, data) => error ? reject(error) : resolve(data));
     });
   }
 

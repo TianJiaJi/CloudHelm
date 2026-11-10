@@ -40,6 +40,16 @@ describe('structured operation authorization continuity', () => {
     expect(f.writeFile).toHaveBeenCalledOnce();
   });
 
+  it('propagates cancellation to the private SFTP action rather than only checking between callbacks', async () => {
+    const f = fixture(), controller = new AbortController();
+    const write: ProposedOperation = { id: 'write', kind: 'write-file', path: '/srv/app/file', content: 'new', scope: f.scope };
+    await f.executor.execute(write, operationFingerprint(write), controller.signal);
+    expect(f.writeFile.mock.calls[0]?.[4]).toBe(controller.signal);
+    const remove: ProposedOperation = { id: 'delete', kind: 'delete-path', path: '/srv/app/file', scope: f.scope };
+    await f.executor.execute(remove, operationFingerprint(remove), controller.signal);
+    expect(f.deleteFile.mock.calls[0]?.[3]).toBe(controller.signal);
+  });
+
   it('passes the same authorization capability to command execution', async () => {
     const f = fixture(); const options = { readOnly: true, isAuthorized: () => true };
     f.commands.execute.mockResolvedValue({ operationId: 'read', status: 'succeeded', stdoutTail: '' });
