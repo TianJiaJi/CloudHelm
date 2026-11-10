@@ -19,9 +19,24 @@ export function customModelLimits(selection: ModelSelection): { contextWindow: n
   return { contextWindow, maxTokens };
 }
 
+/** Keep the old Azure identity separate: no key migration, account fallback or
+ * transcript rewriting when Pi renames its provider. The API id did not change. */
+function compatibleBuiltinModels(): MutableModels {
+  const catalog = builtinModels();
+  const azure = catalog.getProvider('azure');
+  const legacyId = 'azure-openai-responses';
+  if (azure && !catalog.getProvider(legacyId)) {
+    const models = azure.getModels().filter((model) => model.api === 'azure-openai-responses')
+      .map((model) => ({ ...model, provider: legacyId }));
+    catalog.setProvider({ ...azure, id: legacyId, name: 'Azure OpenAI（旧配置兼容）',
+      getModels: () => models, getAllModels: () => models });
+  }
+  return catalog;
+}
+
 /** The visible API-key catalog comes from the same Pi registry used at runtime. */
 export function listModelProviders(): Array<{ id: string; name: string; defaultBaseUrl?: string; models: Array<{ id: string; name: string }> }> {
-  const catalog = builtinModels();
+  const catalog = compatibleBuiltinModels();
   const providers = catalog.getProviders().filter((provider) => provider.auth.apiKey && catalog.getModels(provider.id).length);
   return [...providers.map((provider) => {
     const models = catalog.getModels(provider.id);
@@ -34,7 +49,7 @@ export function listModelProviders(): Array<{ id: string; name: string; defaultB
 }
 
 export function createModelCatalog(selection: ModelSelection): MutableModels {
-  const models = builtinModels();
+  const models = compatibleBuiltinModels();
   if (selection.provider !== 'cloudhelm-custom') {
     const provider = models.getProvider(selection.provider);
     if (provider && selection.baseUrl) {

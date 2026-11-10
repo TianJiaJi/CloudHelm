@@ -14,7 +14,7 @@ export function recoveryContextMessage(operations: readonly OperationView[], rea
     : reason === 'verify'
       ? 'No unresolved potentially mutating operation remains. Do not call record_reconciled_result for already handled targets or create checks merely to clear them again. Complete the original answer from existing observations, stating any uncertainty.'
     : reason === 'report'
-      ? 'a historical round is missing report notes. Keep its operation membership, answer using existing observations and state uncertainty. Backend now assembles a basic report automatically; optional version=3 submit_verification can add goal expectations. Do not execute extra checks or repeat completed changes merely to fill a report.'
+      ? 'a historical round has report bookkeeping only, not unfinished remote work. Answer using existing observations and state uncertainty. No report tool, extra checks or replay is required; backend retains the original operation records.'
       : reason === 'interrupted'
         ? 'the user explicitly resumed after stopping this turn. Check the interruption and observed results, avoid automatically replaying any stopped operation, and answer from existing evidence if the original question is already resolved.'
         : 'the model response was interrupted or failed. Continue from the recorded observations to complete the original answer without repeating a successful remote action; prior safety refusals remain binding.';

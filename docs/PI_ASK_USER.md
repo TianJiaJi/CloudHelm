@@ -4,7 +4,7 @@ CloudHelm 内置 `@cloudhelm/pi-ask-user`，模型工具名为 `ask_user`。实�
 
 ## 加载方式
 
-扩展位于 `packages/adapters/src/pi-extensions/ask-user/`，包含标准 Pi `package.json` 清单和默认 `ExtensionAPI` 工厂，通过 `pi.registerTool` 注册工具。桌面发行版把工厂编译进 utility process，通过 Pi 0.99.1 官方 `DefaultResourceLoader.extensionFactories` 加载，由同一个原生 `AgentSession` 管理注册、执行和持久化。每次建立或恢复对话都会创建独立实例；更新应用并重启后自动使用新插件，无须手动安装。不是向用户的全局 Pi 目录安装，也不自动发现第三方插件。
+扩展位于 `packages/adapters/src/pi-extensions/ask-user/`，包含标准 Pi `package.json` 清单和默认 `ExtensionAPI` 工厂，通过 `pi.registerTool` 注册工具。桌面发行版把工厂编译进 utility process，通过 Pi 1.5.0 官方 `DefaultResourceLoader.extensionFactories` 加载，由同一个原生 `AgentSession` 管理注册、执行和持久化。每次建立或恢复对话都会创建独立实例；更新应用并重启后自动使用新插件，无须手动安装。不是向用户的全局 Pi 目录安装，也不自动发现第三方插件。
 
 加载器使用隔离的临时目录和内存设置；不读取用户或项目的 Pi 扩展、提示词、模型配置或凭据。只注册内置 `ask_user` 与生命周期控制扩展，加载失败则本轮失败，不静默禁用。此移植版依赖 CloudHelm 的事件桥接与 React 卡片，不包含上游 Pi TUI 界面。
 

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
-  decideSafety, inspectScriptSafety, isEffectFreeQuery, operationFingerprint, scriptFilePath,
+  decideSafety, validProcessControl, inspectScriptSafety, isEffectFreeQuery, operationFingerprint, scriptFilePath,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
-  type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
+  type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
   type SafetyDecision, type SafetySettings, type ScriptInspector, type TerminalLease
 } from '@cloudhelm/core';
 
@@ -21,6 +21,8 @@ export interface SafetyGateDependencies {
   executor: OperationExecutor;
   audit: OperationAudit;
   lease: TerminalLease;
+  /** Task activity may continue only for an exact already-started background operation. */
+  isOperationActive?(operation: ProposedOperation): boolean;
   settings(hostId: string): SafetySettings;
 }
 
@@ -29,13 +31,19 @@ export class SafetyGate {
 
   constructor(private readonly deps: SafetyGateDependencies) {}
 
-  async execute(proposed: ProposedOperation, signal?: AbortSignal, manualReview = false): Promise<GateOutcome> {
+  async execute(proposed: ProposedOperation, signal?: AbortSignal, manualReview = false,
+    observer?: Pick<ExecutionOptions, 'onProcessStarted'>): Promise<GateOutcome> {
     if (this.inFlight.has(proposed.id)) throw new Error('Operation is already in progress');
     this.inFlight.add(proposed.id);
     try {
       const operation = structuredClone(proposed);
       const fingerprint = operationFingerprint(operation);
       await this.deps.audit.proposed(operation, fingerprint);
+      if (!validProcessControl(operation)) {
+        const decision = { verdict: 'error', ruleId: 'invalid-process-control', reason: 'Process control does not match its exact review binding; nothing sent' } as const;
+        await this.deps.audit.decided(operation.id, decision, fingerprint);
+        return { decision };
+      }
 
       let analysis: CommandAnalysis | undefined;
       if (operation.kind === 'command') {
@@ -115,6 +123,7 @@ export class SafetyGate {
         try {
           const current = this.deps.settings(operation.scope.hostId);
           return this.deps.lease.isAgentOwner(operation.scope.terminalId)
+            && this.deps.isOperationActive?.(operation) !== false
             && this.deps.lease.currentGeneration(operation.scope.terminalId) === operation.scope.terminalGeneration
             && current.revision === operation.scope.policyRevision
             && (operation.scope.conversationRevision === undefined || current.conversationRevision === operation.scope.conversationRevision)
@@ -171,7 +180,7 @@ export class SafetyGate {
         return { decision: safety };
       }
       let result: OperationResult;
-      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, isAuthorized: stillCurrent }); }
+      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, isAuthorized: stillCurrent, onProcessStarted: observer?.onProcessStarted }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       }

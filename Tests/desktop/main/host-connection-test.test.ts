@@ -26,7 +26,7 @@ describe('unsaved host connection tests', () => {
     expect(JSON.stringify(result)).not.toContain('credential');
   });
 
-  it.each([{ address: 'another.test' }, { username: 'root' }, { port: 2222 }, { auth: 'private-key' as const }, { privateKeyPath: '/different/key' }])(
+  it.each([{ address: 'another.test' }, { username: 'root' }, { port: 2222 }, { auth: 'private-key' as const, privateKeyPath: '/different/key' }, { privateKeyPath: '/different/key' }])(
     'does not reuse stored credentials after destination or authentication changes: %j', async (change) => {
       const { tester, run, input, source } = setup();
       input.host = { ...input.host, ...change };

@@ -14,6 +14,7 @@ export class SuSession implements CommandTransport {
   private ready = false;
   private closed = false;
   private challenge?: string;
+  private authenticationAttempts = 0;
   private readonly generation: number;
   private failConnect?: (code: PrivilegeFeedback['code']) => void;
   private readonly abort = () => this.failConnect ? this.failConnect('cancelled') : this.close();
@@ -52,7 +53,9 @@ export class SuSession implements CommandTransport {
             if (event.type === 'ready' && event.uid === 0 && !this.ready) {
               current(); this.signal.throwIfAborted(); this.ready = true; this.challenge = undefined;
               settled = true; this.failConnect = undefined; clearTimeout(timer); resolve();
-            } else if (event.type === 'auth' && !this.ready && !this.challenge && /^[1-3]$/u.test(event.id)) {
+            } else if (event.type === 'auth' && !this.ready && !this.challenge && /^[1-3]$/u.test(event.id)
+              && Number(event.id) === this.authenticationAttempts + 1) {
+              this.authenticationAttempts++;
               this.challenge = event.id;
               void authenticate(event.id).then((answer) => {
                 if (this.closed || this.ready || this.challenge !== event.id) return;
@@ -62,7 +65,7 @@ export class SuSession implements CommandTransport {
               }).catch((error) => fail(error instanceof PrivilegeError ? error.feedback.code : 'authentication-unconfirmed'));
             } else if (event.type === 'output' && this.ready && typeof event.data === 'string' && this.active) {
               this.active.push(Buffer.from(event.data));
-            } else if (event.type === 'error' && ['timeout', 'unsupported', 'cancelled', 'authentication-unconfirmed', 'transport-unavailable'].includes(event.code)) {
+            } else if (event.type === 'error' && ['timeout', 'unsupported', 'cancelled', 'authentication-unconfirmed', 'transport-unavailable', 'attempts-exhausted'].includes(event.code)) {
               fail(event.code); return;
             } else { fail(); return; }
           } catch { fail(); return; }

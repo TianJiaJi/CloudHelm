@@ -43,7 +43,7 @@ export function createReconciliationTool(deps: {
       if (['running', 'proposed', 'approved'].includes(operation.status)) return reply('original-still-running',
         'The original operation has not settled. Do not clear it or replay it; wait or explicitly stop it, then establish its actual outcome.');
       if (!operationOutcomeResolvable(operation)) return reply('target-not-resolvable',
-        'This target does not require uncertain-effect reconciliation. A classified query or operation with no effects needs no reconciliation; a known success may instead need submit_verification. Do not run new checks merely to clear it.');
+        'This target does not require uncertain-effect reconciliation. A classified query or operation with no effects needs no reconciliation; a known success needs no reconciliation or report submission. Do not run new checks merely to clear it.');
       if (!value.evidenceOperationIds.length || value.evidenceOperationIds.length > 20
         || new Set(value.evidenceOperationIds).size !== value.evidenceOperationIds.length) return reply('evidence-missing', 'Supply 1–20 distinct eligible existing evidence IDs.');
       const evidence = value.evidenceOperationIds.map((id) => operations.find((item) => item.id === id));

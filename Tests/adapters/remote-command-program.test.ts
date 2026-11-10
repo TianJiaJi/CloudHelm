@@ -16,7 +16,7 @@ async function fixture() {
   const directory = await mkdtemp('/tmp/ch-proc-'); directories.push(directory);
   const program = path.join(directory, 'process.py');
   await writeFile(program, remoteCommandProgram, { mode: 0o700 });
-  const events: Array<{ type: string; id?: string; data?: string; code?: number }> = [];
+  const events: Array<{ type: string; id?: string; data?: string; code?: number; pid?: number; status?: string }> = [];
   const child = spawn('python3', [program, '--serve']); children.push(child);
   let pending = ''; let stderr = '';
   child.stdout.on('data', (data: Buffer) => {
@@ -72,6 +72,9 @@ describe.skipIf(process.platform === 'win32')('real process transport without co
     expect(display).toContain('@'); expect(display).toContain(path.basename(f.directory));
     expect(display).toContain('stty size\r\n');
     expect(result.output).not.toContain('stty');
+    const starts = f.events.filter((event) => event.type === 'process-started');
+    expect(starts).toHaveLength(1); expect(starts[0]!.pid).toBeGreaterThan(0);
+    expect(f.events.indexOf(starts[0]!)).toBeLessThan(f.events.findIndex((event) => event.type === 'data'));
   });
   it('preserves arguments, cwd, stdout, stderr, and exit code without terminal markers', async () => {
     const f = await fixture();
@@ -95,10 +98,22 @@ describe.skipIf(process.platform === 'win32')('real process transport without co
 
   it('supports ordinary interactive input separately from credentials', async () => {
     const f = await fixture();
-    f.launch(['python3', '-c', 'print("Continue?", flush=True); print("answer=" + input())']);
+    f.launch(['python3', '-c', 'import signal\ncount=0\ndef interrupted(signum, frame):\n global count\n count+=1\n print("interrupt-observed", flush=True)\nsignal.signal(signal.SIGINT, interrupted)\nprint("Continue?", flush=True)\nprint("answer=" + input())\nprint("interrupts=" + str(count))']);
     await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('Continue?'))).toBe(true), { timeout: 15000 });
+    const pid = f.events.find((event) => event.type === 'process-started')!.pid;
+    const interrupt = { type: 'signal', signal: 'SIGINT', pid, id: 'a'.repeat(32) };
+    f.send(interrupt);
+    await vi.waitFor(() => expect(f.events.some((event) => event.data?.includes('interrupt-observed'))).toBe(true));
+    f.send(interrupt);
+    await vi.waitFor(() => expect(f.events.filter((event) => event.type === 'signal-result')).toHaveLength(2));
+    expect(f.events.filter((event) => event.type === 'signal-result')).toEqual([
+      { type: 'signal-result', id: interrupt.id, pid, status: 'sent' }, { type: 'signal-result', id: interrupt.id, pid, status: 'sent' }
+    ]);
+    expect(f.events.some((event) => event.type === 'exit')).toBe(false);
     f.send({ type: 'input', data: Buffer.from('y\n').toString('base64') });
-    expect(await f.complete()).toMatchObject({ code: 0, output: expect.stringContaining('answer=y') });
+    const result = await f.complete();
+    expect(result).toMatchObject({ code: 0, output: expect.stringContaining('answer=y') });
+    expect(result.output).toContain('interrupts=1');
   });
 
   it('delivers sudo passwords only to askpass, never to the payload PTY or output', async () => {

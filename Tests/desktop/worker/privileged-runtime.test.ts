@@ -6,12 +6,20 @@ import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { PrivilegedRuntime } from '../../../apps/desktop/src/worker/privileged-runtime.js';
 
 const state = vi.hoisted(() => ({ commands: [] as string[], connections: [] as unknown[][], uid: '0', fail: false, gen: 1,
-  su: 0, passwords: [] as string[], close: vi.fn() }));
+  su: 0, passwords: [] as string[], challenge: undefined as undefined | { hostId: string; username: string; text: string; echo: boolean }, close: vi.fn() }));
 vi.mock('@cloudhelm/adapters', async (importOriginal) => ({
   BashAnalyzer: (await importOriginal<typeof import('@cloudhelm/adapters')>()).BashAnalyzer,
+  SshAuthenticationError: (await importOriginal<typeof import('@cloudhelm/adapters')>()).SshAuthenticationError,
   SshTransport: class {
     connectionGeneration() { return state.gen; }
-    async connect(...args: unknown[]) { state.connections.push(args); if (state.fail) throw new Error('login failed'); }
+    async connect(...args: unknown[]) {
+      state.connections.push(args); if (state.fail) throw new Error('login failed');
+      if (state.challenge) {
+        const answer = await (args[3] as (prompt: typeof state.challenge) => Promise<string | null>)(state.challenge);
+        if (answer === null) throw new Error('login cancelled');
+        state.passwords.push(answer);
+      }
+    }
     close() { state.close(); }
   },
   SshCommandTerminal: class {
@@ -35,8 +43,8 @@ vi.mock('@cloudhelm/adapters', async (importOriginal) => ({
 const host: RuntimeHost = { id: 'host', label: 'Linux', address: '192.0.2.1', port: 22, username: 'user',
   auth: 'password', secret: 'ordinary-secret', fingerprint: 'trusted', status: 'connected',
   defaultMode: 'permissive', protectedPaths: ['/etc/shadow'], policyRevision: 1 };
-beforeEach(() => { state.commands = []; state.connections = []; state.uid = '0'; state.fail = false; state.gen = 1; state.su = 0; state.passwords = []; state.close.mockClear(); });
-function setup(mode: 'ssh' | 'su' | 'sudo' = 'ssh') {
+beforeEach(() => { state.commands = []; state.connections = []; state.uid = '0'; state.fail = false; state.gen = 1; state.su = 0; state.passwords = []; state.challenge = undefined; state.close.mockClear(); });
+function setup(mode: 'ssh' | 'su' | 'sudo' = 'ssh', overrides: Partial<RuntimeHost> = {}) {
   const terminal = new TerminalManager({ data() {}, state() {} });
   const input = vi.fn(async (request: { kind: string }): Promise<string | null> => request.kind === 'confirmation' ? mode === 'sudo' ? '使用 sudo（推荐）' : mode === 'ssh' ? 'SSH 登录 root' : '通过 su 切换 root' : 'root-secret');
   const ordinary = { execute: vi.fn() };
@@ -48,7 +56,7 @@ function setup(mode: 'ssh' | 'su' | 'sudo' = 'ssh') {
     evaluator: { evaluate: async () => 'allow' }, approvals: { requestApproval: async () => true },
     executor: runtime, lease: terminal, settings: () => ({ mode: 'permissive', revision: host.policyRevision }),
     audit: { proposed: async () => {}, completed: async () => {}, decided: async (_id, decision) => { decisions.push(decision.verdict); } } });
-  const request = () => access.request(host, 'mkdir -p /opt/demo', '/tmp', 'sudo unavailable', 'create demo', gate);
+  const request = () => access.request({ ...host, ...overrides }, 'mkdir -p /opt/demo', '/tmp', 'sudo unavailable', 'create demo', gate);
   const operation = (id: string, command: string): ProposedOperation => {
     const terminalId = access.terminal(id, host.id);
     return { id: 'action', kind: 'command', command, scope: { taskId: 'task', hostId: host.id, cwd: '/tmp', runAs: 'root',
@@ -119,9 +127,24 @@ describe('confirmed isolated root sessions', () => {
     expect(f.ordinary.execute).not.toHaveBeenCalled();
     if (mode === 'ssh') {
       expect(state.connections[0]?.[0]).toMatchObject({ username: 'root', id: host.id, fingerprint: 'trusted', address: host.address, secret: undefined });
-      expect(state.connections[0]?.[1]).toEqual({ password: 'root-secret', passphrase: 'root-secret' });
+      expect(state.connections[0]?.[1]).toEqual({});
+      expect(state.connections[0]?.[5]).toEqual({ onDemandAuthentication: true });
+      expect(f.input).toHaveBeenCalledOnce();
     } else expect(state.passwords).toEqual(['root-secret']);
     f.access.close();
+  });
+  it.each(['password', 'private-key', 'agent'] as const)('does not pre-prompt based on root SSH configuration (%s)', async (auth) => {
+    const f = setup('ssh', { auth }); await f.request();
+    expect(f.input).toHaveBeenCalledOnce(); expect(state.passwords).toEqual([]);
+    expect(state.connections[0]?.[1]).toEqual({}); f.access.close();
+  });
+  it('answers only a transport challenge bound to the selected root recipient', async () => {
+    state.challenge = { hostId: host.id, username: 'root', text: 'Password', echo: false };
+    const f = setup(); await f.request();
+    expect(f.input).toHaveBeenCalledTimes(2); expect(state.passwords).toEqual(['root-secret']); f.access.close();
+    state.commands = []; state.passwords = []; state.challenge.username = 'wrong-recipient';
+    const refused = setup(); await expect(refused.request()).rejects.toThrow('identity');
+    expect(refused.input).toHaveBeenCalledOnce(); expect(state.passwords).toEqual([]); expect(state.commands).toEqual([]);
   });
   it.each(['ssh', 'su'] as const)('does not execute payload after failed %s authentication', async (mode) => {
     const f = setup(mode); state.fail = true;

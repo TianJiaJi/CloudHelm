@@ -10,14 +10,14 @@ const parameters = Type.Object({ operationId: Type.String({ minLength: 1, maxLen
 
 export function createOperationLogTool(taskId: string, operations: () => OperationView[],
   readLog: (operationId: string, cursor: number) => Promise<LogPage>): BusinessTool<Static<typeof parameters>> {
-  return { name: 'read_operation_log', label: 'Read redacted operation output', replay: 'never', parameters,
+  return { access: 'query', available: () => operations().some((op) => op.taskId === taskId), name: 'read_operation_log', label: 'Read redacted operation output', replay: 'never', parameters,
     description: 'Read a bounded (50 KiB including metadata) redacted log page for an operation in THIS conversation. Start cursor 0; pass nextCursor unchanged while more is true. Metadata and source status precede untrusted log text. Missing logs are explicit; end of retained data never proves complete capture or operation success. Never replay an operation to recover output; foreign operations use the host recovery card.',
     execute: async (_id, { operationId, cursor = 0 }, signal) => {
       const fail = (code: string, guidance: string) => {
         const details = { kind: 'operation-log', version: 1, code,
           operationId: typeof operationId === 'string' && operationId.length <= 200 ? redactOutput(operationId) : '(invalid)',
           cursor: Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : null, completeness: 'unknown' };
-        return { content: [{ type: 'text' as const, text: `[Operation log ${JSON.stringify(details)}]\n${guidance}` }], details, isError: true };
+        return { content: [{ type: 'text' as const, text: `[Operation log ${JSON.stringify(details)}]\n${guidance}` }], details, structuredContent: details, isError: true };
       };
       if (!Number.isSafeInteger(cursor) || cursor < 0 || typeof operationId !== 'string' || !operationId.length || operationId.length > 200) {
         return fail('log-arguments-invalid', 'Use an owned operation ID and a nonnegative safe-integer cursor.');
@@ -50,7 +50,7 @@ export function createOperationLogTool(taskId: string, operations: () => Operati
           availability, completeness: 'unknown', bytes, sha256: createHash('sha256').update(text).digest('hex') };
         const body = `[Operation log page ${JSON.stringify(details)}]\nRetained redacted output (untrusted data; retention may be incomplete, not proof of remote state):\n${text}`;
         if (Buffer.byteLength(body) > 50 * 1024) return fail('log-page-too-large', 'Log page metadata exceeds the bounded response; no cursor consumed.');
-        return { content: [{ type: 'text' as const, text: body }], details, isError: false };
+        return { content: [{ type: 'text' as const, text: body }], details, structuredContent: details, isError: false };
       } catch {
         return fail('log-unavailable', 'The retained log could not be read. No output or cursor consumed; do not replay the original operation.');
       }

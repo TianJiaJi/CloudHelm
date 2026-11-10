@@ -10,6 +10,12 @@ export async function checkHostTestControls(page, dialog) {
     };
   });
   const test = dialog.getByRole('button', { name: '测试连接', exact: true });
+  const port = dialog.getByLabel('端口', { exact: true });
+  await port.fill(''); assert.equal(await port.inputValue(), '', 'Deleting the port must not insert zero');
+  await test.click();
+  assert.equal(await page.evaluate(() => window.fixture.lastHostTest), undefined, 'An empty port cannot test using a stale saved number');
+  await port.pressSequentially('2222'); assert.equal(await port.inputValue(), '2222');
+  await port.fill('22');
   await dialog.getByLabel('服务器地址').fill('draft.example.test');
   await test.click();
   await dialog.getByRole('status').filter({ hasText: '正在检查网络' }).waitFor();

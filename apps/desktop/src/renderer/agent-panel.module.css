@@ -71,10 +71,21 @@
 .planList { margin: 6px 0 0; padding: 0; list-style: none; max-height: min(160px, 22vh); overflow-y: auto; scrollbar-width: thin; }
 .planList li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; color: var(--muted); line-height: 20px; overflow-wrap: anywhere; }
 .planList li[data-state=running] { color: var(--text); }
-.planList li[data-state=done] .stepMark { color: var(--success); }
+.planList li[data-state=done] .stepMark { color: var(--muted); }
 .planList li[data-state=blocked] .stepMark { color: light-dark(#975a17, #dfb27e); }
 .stepTitle { flex: 1; min-width: 0; }
 .stepMark { flex: none; display: inline-grid; place-items: center; width: 13px; height: 13px; border: 1px solid var(--border); border-radius: 50%; font-size: 10px; line-height: 1; }
+.turn { min-width: 0; }
+.turnProcess { margin: 2px 0 16px; color: var(--muted); font-size: 11px; }
+.turnProcess > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-height: 28px; cursor: pointer; list-style: none; }
+.turnProcess > summary::-webkit-details-marker { display: none; }
+.turnProcess > summary > svg { flex: none; transition: transform .14s ease; }
+.turnProcess[open] > summary > svg { transform: rotate(90deg); }
+.turnProcess > summary > small { font-size: inherit; }
+.turnProcess > summary:hover { color: var(--text); }
+.turnProcessBody { margin: 6px 0 12px 5px; padding: 6px 0 0 12px; border-left: 1px solid var(--border); }
+.turnProcessBody > button { color: var(--muted); font-size: 11px; padding: 5px 0; }
+.turnProcessBody .planDock { margin-bottom: 12px; border: 0; border-radius: 5px; }
 .historyMenu { max-width: min(320px, calc(100vw - 24px)); }
 .menuLabel { padding: 8px 10px; font-size: 11px; color: var(--muted); }
 .menuEmpty { padding: 0 10px; color: var(--muted); font-size: 12px; }

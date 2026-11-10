@@ -37,5 +37,5 @@ export async function checkViewportLayout(page, screenshot) {
   }
   await screenshot('viewport-long-reply.png');
   await page.evaluate(() => window.fixture.inject({ type: 'snapshot', value: window.fixture.beforeLayout }));
-  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  await page.getByRole('button', { name: '生产服务器 · 人工 · 已绑定', exact: true }).click();
 }

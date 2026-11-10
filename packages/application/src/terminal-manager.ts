@@ -1,12 +1,16 @@
 import { CommandNotStartedError } from '@cloudhelm/core';
 import { randomUUID } from 'node:crypto';
 import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
-import { operationFingerprint } from '@cloudhelm/core';
+import { operationFingerprint, validProcessControl } from '@cloudhelm/core';
 import { OperationOutputCapture } from './operation-output-capture.js';
 
 type Owner = 'agent' | 'human' | 'suspended' | 'closed';
 
 interface PendingCommand {
+  generation: number;
+  pid?: number;
+  isAuthorized(): boolean;
+  onProcessStarted?: (event: { pid: number }) => void;
   capture: OperationOutputCapture;
   failure?: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege'>;
   settle(result: OperationResult): void;
@@ -30,9 +34,11 @@ interface TerminalRecord {
 }
 
 export interface TerminalEvents {
+  cwd?(terminalId: string, directory: string): void;
   command?(terminalId: string, generation: number, event: { phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }): void;
   data(terminalId: string, data: string, operationId?: string): void;
   completed?(result: OperationResult): void;
+  processStarted?(terminalId: string, operationId: string, generation: number, pid: number): void;
   state(terminalId: string, owner: Owner): void;
 }
 
@@ -49,16 +55,29 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     };
     this.terminals.set(terminal.id, terminal);
     channel.onCommand?.((event) => { terminal.commandRunning = event.phase === 'start'; this.events.command?.(terminal.id, terminal.generation, event); });
+    channel.onCwd?.((directory) => {
+      if (terminal.owner !== 'human' || terminal.taskId || !directory.startsWith('/') || directory.length > 4096 || /[\u0000-\u001f\u007f]/u.test(directory)) return;
+      terminal.home = directory; this.events.cwd?.(terminal.id, directory);
+    });
     channel.onData((data) => this.receive(terminal, data));
     channel.onDisplay?.((data) => this.events.data(terminal.id, data));
     channel.onClose(() => this.closeRecord(terminal));
     channel.onExecutionFailure?.((failure) => { if (terminal.pending) terminal.pending.failure = failure; });
+    channel.onProcessStarted?.((event) => {
+      const pending = terminal.pending;
+      if (!pending || !pending.isAuthorized() || terminal.owner !== 'agent' || terminal.generation !== pending.generation
+        || !Number.isSafeInteger(event.pid) || event.pid < 1 || event.pid > 2147483647) return;
+      pending.pid = event.pid;
+      this.events.processStarted?.(terminal.id, pending.operationId, pending.generation, event.pid);
+      if (terminal.pending === pending && pending.isAuthorized()) pending.onProcessStarted?.(event);
+    });
     channel.onExit?.((code) => this.complete(terminal, code));
     this.events.state(terminal.id, terminal.owner);
     return terminal.id;
   }
 
   currentGeneration(id: string): number { return this.terminals.get(id)?.generation ?? -1; }
+  stateOf(id: string): Owner | undefined { return this.terminals.get(id)?.owner; }
   isAgentOwner(id: string): boolean { return this.terminals.get(id)?.owner === 'agent'; }
   workingDirectory(id: string): string { return this.require(id).home; }
   hostOf(id: string): string | undefined { return this.terminals.get(id)?.hostId; }
@@ -157,6 +176,23 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     try { terminal.channel.write('\u0003'); } catch (error) { terminal.pending.stopRequested = false; throw error; } finally { this.suspend(id); }
   }
 
+  /** Exact-operation signal delivery. The caller must pass a current control grant;
+   * this method grants no authority and never treats acknowledgement as process exit. */
+  interruptOperation(operation: ProposedOperation, fingerprint: string, isAuthorized: () => boolean): Promise<'sent' | 'already-exited'> {
+    const control = operation.kind === 'command' ? operation.processControl : undefined;
+    if (!control || !validProcessControl(operation) || operationFingerprint(operation) !== fingerprint || !isAuthorized())
+      throw new Error('Process control authorization expired');
+    const terminal = this.require(operation.scope.terminalId), pending = terminal.pending;
+    if (!pending || terminal.owner !== 'agent' || pending.operationId !== control.targetOperationId
+      || pending.pid !== control.pid || pending.generation !== operation.scope.terminalGeneration
+      || terminal.generation !== operation.scope.terminalGeneration || terminal.hostId !== operation.scope.hostId
+      || terminal.taskId !== operation.scope.taskId || pending.stopRequested || !terminal.channel.interrupt)
+      throw new Error('Process control recipient changed or stop was already requested');
+    const acknowledgement = terminal.channel.interrupt(control.pid);
+    pending.stopRequested = true;
+    return acknowledgement;
+  }
+
   stopTaskCommands(taskId: string): void {
     const errors: unknown[] = [];
     for (const terminal of this.terminals.values()) if (terminal.taskId === taskId && terminal.pending) {
@@ -172,6 +208,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
   async execute(operation: ProposedOperation, fingerprint: string, signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
     const terminal = this.require(operation.scope.terminalId);
     if (operation.kind !== 'command') throw new Error('Structured file operations require a separate audited executor');
+    if (operation.processControl) throw new Error('Process control cannot be executed as a shell command');
     if (terminal.taskId !== operation.scope.taskId || terminal.hostId !== operation.scope.hostId
       || terminal.owner !== 'agent' || terminal.generation !== operation.scope.terminalGeneration
       || operationFingerprint(operation) !== fingerprint || signal?.aborted || terminal.pending || options?.isAuthorized?.() === false) {
@@ -181,12 +218,15 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     return new Promise<OperationResult>((resolve) => {
       let completeRemote!: (state: 'exited' | 'unknown') => void;
       const remoteCompletion = new Promise<'exited' | 'unknown'>((done) => { completeRemote = done; });
-      const pending: PendingCommand = { capture: new OperationOutputCapture(), operationId: operation.id, settle: resolve,
+      const current = () => !signal?.aborted && terminal.owner === 'agent'
+        && terminal.generation === operation.scope.terminalGeneration && options?.isAuthorized?.() !== false;
+      const pending: PendingCommand = { generation: operation.scope.terminalGeneration, isAuthorized: current, onProcessStarted: options?.onProcessStarted,
+        capture: new OperationOutputCapture(), operationId: operation.id, settle: resolve,
         remoteCompletion, completeRemote, reported: false };
       terminal.pending = pending;
       this.events.command?.(terminal.id, terminal.generation, { phase: 'start', command: operation.command });
       signal?.addEventListener('abort', () => {
-        if (terminal.pending !== pending) return;
+        if (terminal.pending !== pending || terminal.owner !== 'agent' || terminal.generation !== pending.generation) return;
         terminal.generation++;
         terminal.owner = 'suspended';
         this.events.state(terminal.id, 'suspended');
@@ -196,10 +236,8 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
             logRef: terminal.id, remoteCompletion });
         }
       }, { once: true });
-      const current = () => !signal?.aborted && terminal.owner === 'agent'
-        && terminal.generation === operation.scope.terminalGeneration && options?.isAuthorized?.() !== false;
       if (!terminal.channel.onDisplay) this.events.data(terminal.id, `$ ${operation.command}\r\n`);
-      void terminal.channel.execute!(operation.command, operation.scope.cwd, current).catch((error: unknown) => {
+      void terminal.channel.execute!(operation.command, operation.scope.cwd, current, { sudoAuthorization: operation.privilege === 'root' }).catch((error: unknown) => {
         this.receive(terminal, error instanceof Error ? error.message : 'Command transport failed');
         if (error instanceof CommandNotStartedError && terminal.pending === pending) {
           pending.failure = { failureKind: 'unsupported', effects: 'none' };

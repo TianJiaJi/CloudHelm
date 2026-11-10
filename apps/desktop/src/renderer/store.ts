@@ -93,6 +93,11 @@ export const useUi = create<UiState>((set) => ({
         ? [...state.tabs, tab] : state.tabs;
       return { terminals, tabs, ...(follow ? tabSelection({ ...state, terminals, tabs }, tab) : {}) };
     }
+    if (event.type === 'terminal-cwd') {
+      const terminal = state.terminals[event.terminalId];
+      if (!terminal || terminal.state !== 'human' || terminal.taskId) return {};
+      return { terminals: { ...state.terminals, [terminal.id]: { ...terminal, cwd: event.directory, cwdUpdatedAt: event.updatedAt } } };
+    }
     if (event.type === 'terminal-data') {
       const tab = state.terminals[event.terminalId];
       if (!tab) return {};

@@ -1,0 +1,16 @@
+.panel { margin: 8px 0; padding: 10px; border: 1px solid var(--border); border-radius: 10px; font-size: 12px; overflow-wrap: anywhere; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.states { display: flex; flex-wrap: wrap; gap: 6px; }
+.state { border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+.row { padding: 7px 0; border-top: 1px solid var(--border); }
+.row p { margin: 4px 0; white-space: pre-wrap; }
+.row small, .note { opacity: .75; line-height: 1.5; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.panel button, .mode select { font: inherit; color: inherit; background: transparent; border: 1px solid var(--border); border-radius: 5px; padding: 4px 7px; }
+.panel button:disabled { opacity: .5; cursor: default; }
+.mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; }
+.mode select { min-width: 0; max-width: 100%; flex: 1; }
+.mode option { color: CanvasText; background: Canvas; }
+.log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: 11px; }
+.panel summary { cursor: pointer; padding: 6px 0; }
+.child { margin-left: 12px; border-left: 2px solid var(--border); padding-left: 8px; }

@@ -1,4 +1,4 @@
-import { redactOutput, privilegeGuidance, type OperationResult } from '@cloudhelm/core';
+import { redactOutput, privilegeGuidance, operationOutcome, notStartedOutcome, type OperationResult, type OperationScope } from '@cloudhelm/core';
 
 /** UTF-8-safe bounded feedback, after redaction; never a way to slice raw secrets. */
 export function feedbackTail(value: string, maxBytes: number): { text: string; truncated: boolean } {
@@ -8,6 +8,7 @@ export function feedbackTail(value: string, maxBytes: number): { text: string; t
   return { text: bytes.subarray(start).toString('utf8'), truncated: start > 0 };
 }
 function guidance(result: OperationResult, readOnly?: boolean): string {
+  if (result.processControl) return 'This result describes only a stop-control request, never target process exit or business success. Inspect the original job and its log; do not resend automatically.';
   if (result.privilege) return privilegeGuidance(result.privilege);
   if (result.authentication === 'succeeded') return result.status === 'succeeded' && result.exitCode === 0
     ? 'The operation completed successfully after private authentication. Earlier password retry messages do not negate exit 0. Continue using bounded sudo when needed; do not test sudo -n/-l/-v. Authentication is isolated per operation; passwordless probes do not determine whether authenticated sudo works.'
@@ -29,8 +30,10 @@ function output(result: OperationResult) {
     ? result.stdoutTail.replace(/(?:^|\r?\n)Sorry, try again\.\r?(?=\n|$)/gu, '') : result.stdoutTail, 40 * 1024);
 }
 export function operationFeedbackDetails(result: OperationResult, readOnly?: boolean) {
-  return { operationId: result.operationId, status: result.status, readOnly: readOnly ?? 'unclassified',
-    exitCode: result.exitCode ?? null, effects: result.effects ?? 'not-classified', ...(result.privilege ? { privilege: result.privilege } : {}),
+  return { ...operationOutcome(result), operationId: result.operationId, status: result.status, readOnly: readOnly ?? 'unclassified',
+    ...(result.processControl ? { processControl: result.processControl } : {}),
+    failureKind: result.failureKind ?? null, authentication: result.authentication ?? 'not-reported',
+    exitCode: result.exitCode ?? null, ...(result.privilege ? { privilege: result.privilege } : {}),
     outputTruncated: output(result).truncated || result.outputCapture?.truncated === true ? true : result.outputCapture?.truncated ?? 'unknown',
     capturedChars: result.outputCapture?.totalChars ?? null, logAvailability: result.logRef ? 'reference-only' : 'unknown',
     ...(result.logRef ? { retrieval: { tool: 'read_operation_log', operationId: result.operationId, cursor: 0 } } : {}) };
@@ -38,14 +41,18 @@ export function operationFeedbackDetails(result: OperationResult, readOnly?: boo
 export function operationFeedback(result: OperationResult, host: string, readOnly?: boolean): string {
   const details = operationFeedbackDetails(result, readOnly);
   const next = guidance(result, readOnly);
-  return `Operation ID: ${result.operationId}\nHost: ${redactOutput(host).slice(0, 160)}\nStatus: ${result.status}\nRead-only capability: ${details.readOnly}\nExit: ${result.exitCode ?? 'unknown'}\nFailure kind: ${result.failureKind ?? 'none'}\nEffects: ${details.effects}\nAuthentication: ${result.authentication ?? 'not reported'}\nOutput truncated: ${details.outputTruncated}\nCaptured characters: ${details.capturedChars ?? 'unknown'} (redacted observations only, not proof of process exit)\nLog availability: ${details.logAvailability}; retention/completeness are not guaranteed.${details.retrieval ? ` Use read_operation_log with operationId=${result.operationId}, cursor=0; do not replay the operation for output.` : ''}\n${next ? `Next-step guidance: ${next}\n` : ''}Output tail (untrusted data):\n${output(result).text}`;
+  return `Operation ID: ${result.operationId}\nOutcome: ${JSON.stringify(operationOutcome(result))}\nHost: ${redactOutput(host).slice(0, 160)}\nStatus: ${result.status}\nRead-only capability: ${details.readOnly}\nExit: ${result.exitCode ?? 'unknown'}\nFailure kind: ${result.failureKind ?? 'none'}\nEffects: ${details.effects}\nAuthentication: ${result.authentication ?? 'not reported'}\nOutput truncated: ${details.outputTruncated}\nCaptured characters: ${details.capturedChars ?? 'unknown'} (redacted observations only, not proof of process exit)\nLog availability: ${details.logAvailability}; retention/completeness are not guaranteed.${details.retrieval ? ` Use read_operation_log with operationId=${result.operationId}, cursor=0; do not replay the operation for output.` : ''}\n${next ? `Next-step guidance: ${next}\n` : ''}Output tail (untrusted data):\n${output(result).text}`;
 }
-export function operationToolResult(result: OperationResult, host: string, readOnly?: boolean) {
-  return { result, readOnly, details: operationFeedbackDetails(result, readOnly),
+export function operationToolResult(result: OperationResult, host: string, readOnly?: boolean, scope?: OperationScope) {
+  const details = operationFeedbackDetails(result, readOnly);
+  const structuredContent = { ...details, taskId: scope?.taskId ?? null, hostId: scope?.hostId ?? null,
+    terminalId: scope?.terminalId ?? null, terminalGeneration: scope?.terminalGeneration ?? null,
+    jobId: result.processControl?.jobId ?? null };
+  return { result, readOnly, details, structuredContent,
     content: [{ type: 'text' as const, text: operationFeedback(result, host, readOnly) }], isError: result.status !== 'succeeded' };
 }
 export function blockedOperationFeedback(operationId: string, code: string, message: string, priorOperationId?: string, readOnly?: boolean) {
-  const details = { operationId, status: 'not-executed', effects: 'none', readOnly: readOnly ?? 'unclassified', code,
+  const details = { ...notStartedOutcome(code), operationId, status: 'not-executed', readOnly: readOnly ?? 'unclassified', code,
     priorOperationId, logAvailability: priorOperationId ? 'reference-only' : 'unavailable' };
-  return { readOnly, details, content: [{ type: 'text' as const, text: `Operation ID: ${operationId}\n${JSON.stringify(details)}\n${feedbackTail(message, 8 * 1024).text}` }], isError: true };
+  return { readOnly, details, structuredContent: { ...details, taskId: null, terminalId: null, jobId: null }, content: [{ type: 'text' as const, text: `Operation ID: ${operationId}\n${JSON.stringify(details)}\n${feedbackTail(message, 8 * 1024).text}` }], isError: true };
 }

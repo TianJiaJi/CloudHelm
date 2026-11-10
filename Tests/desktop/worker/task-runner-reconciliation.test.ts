@@ -52,12 +52,8 @@ it.each(['evidence', 'risk-accepted', 'acceptance-race'] as const)('restores %s 
     }
     if (requests === 3) {
       expect(fixtureMessageText(messages.find((message) => message.tool_call_id === 'resolve')!)).toContain('outcome-recorded');
-      return { calls: [{ id: 'report', name: 'submit_verification', arguments: { version: 3, summary: '确认测试文件存在',
-        recovery: ['恢复前保留现有文件副本'], checks: [{ kind: 'model-assessment', target: '/tmp/config', expected: '文件存在',
-          observed: 'stat返回文件元数据', evidenceOperationId: checkId, status: 'passed' }] } }] };
     }
-    expect(requests).toBe(4);
-    expect(fixtureMessageText(messages.find((message) => message.tool_call_id === 'report')!)).toContain('Notes recorded.');
+    expect(requests).toBe(3);
     if (mode === 'acceptance-race') {
       // The main-process commit was delayed while the worker assessed the old outcome.
       expect(serial.reconcile(host.id, original.id)).toBe(true);
@@ -106,7 +102,7 @@ it.each(['evidence', 'risk-accepted', 'acceptance-race'] as const)('restores %s 
     await runner.resume();
     expect(fixture.errors).toEqual([]);
     expect(channel.commands).toEqual(mode !== 'risk-accepted' ? ['stat /tmp/config'] : []);
-    expect(requests).toBe(mode !== 'risk-accepted' ? 4 : 1);
+    expect(requests).toBe(mode !== 'risk-accepted' ? 3 : 1);
     expect(reconcile).toHaveBeenCalledTimes(mode === 'acceptance-race' ? 2 : 1);
     expect(original.reconciliation?.kind).toBe(mode !== 'risk-accepted' ? 'evidence' : undefined);
     expect(original.status).toBe(mode !== 'risk-accepted' ? 'succeeded' : 'unknown');
@@ -114,7 +110,7 @@ it.each(['evidence', 'risk-accepted', 'acceptance-race'] as const)('restores %s 
       .toMatchObject({ report: { facts: { impact: 'risk-accepted', riskOperationIds: ['original'] } } });
     expect(events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered', resumeReason: undefined });
     expect(events.filter((event) => event.type === 'verification-state').at(-1))
-      .toMatchObject({ value: { status: 'unverified', operationIds: ['original'] } });
+      .toMatchObject({ value: undefined });
     await expect(runner.resume()).rejects.toThrow('没有可自动继续');
   } finally { runner.dispose(); await fixture.close(); await rm(directory, { recursive: true, force: true }); }
 });

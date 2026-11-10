@@ -1,4 +1,14 @@
-import { openIntegratedShell } from './shell-integration.js';
+import { openSshControlPipe } from './ssh-control-pipe.js';
+import { runFixedSshCommand } from './ssh-fixed-exec.js';
+import { probeHostEnvironment } from './host-environment-probe.js';
+import { onDemandAuthHandler, type SshLoginChallenge } from './ssh-authentication.js';
+export { SshAuthenticationError } from './ssh-authentication.js';
+export type { SshLoginPrompt, SshLoginChallenge } from './ssh-authentication.js';
+import { openSshProxy } from './ssh-proxy.js';
+import type { Socket } from 'node:net';
+import type { SshConnectionSettings, SshCredentials } from '@cloudhelm/core';
+import { startManualKeepalive } from './manual-session.js';
+import { openIntegratedShell, type ManualShellOptions } from './shell-integration.js';
 import { redactOutput } from '@cloudhelm/core';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -28,51 +38,50 @@ export interface SshHost {
   privateKeyPath?: string;
   jumpHostId?: string;
   fingerprint?: string;
+  connection?: SshConnectionSettings;
 }
 
-export interface AuthMaterial {
-  password?: string;
-  passphrase?: string;
-}
+export type AuthMaterial = SshCredentials;
 
-export interface SshLoginPrompt {
-  hostId: string;
-  username: string;
-  text: string;
-  echo: boolean;
-}
+export interface SshConnectOptions { onDemandAuthentication?: boolean }
 
-export type SshLoginChallenge = (prompt: SshLoginPrompt) => Promise<string | null>;
-
-async function connectClient(host: SshHost, secret: AuthMaterial, socket?: ClientChannel, challenge?: SshLoginChallenge, signal?: AbortSignal): Promise<Client> {
+async function connectClient(host: SshHost, secret: AuthMaterial, socket?: ClientChannel, challenge?: SshLoginChallenge, signal?: AbortSignal, onDemand = false): Promise<Client> {
   signal?.throwIfAborted();
+  if (host.auth === 'agent') throw new Error('SSH Agent 已停用；请选择密码或私钥认证并重新保存主机');
+  onDemand ||= !!host.connection?.authOrder;
   let observed: string | undefined;
   const config: ConnectConfig = {
     host: host.address, port: host.port, username: host.username, sock: socket,
     // A keyboard-interactive challenge can remain open while the user reads the
     // server prompt and enters an OTP. Its UI request expires after two minutes.
-    readyTimeout: challenge ? 150_000 : 20_000,
-    keepaliveInterval: 15_000, keepaliveCountMax: 3, tryKeyboard: !!challenge,
+    readyTimeout: host.connection?.timeoutMs ?? (challenge ? 150_000 : 20_000),
+    keepaliveInterval: host.connection?.keepaliveIntervalMs ?? 15_000,
+    keepaliveCountMax: host.connection?.keepaliveCountMax ?? 3, tryKeyboard: !!challenge,
+    algorithms: host.connection?.algorithms ? {
+      serverHostKey: host.connection.algorithms.hostKey,
+      cipher: host.connection.algorithms.cipher,
+      kex: host.connection.algorithms.kex
+    } as ConnectConfig['algorithms'] : undefined,
     hostVerifier(key: Buffer) {
       observed = `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/u, '')}`;
       return observed === host.fingerprint;
     }
   };
-  if (host.auth === 'agent') {
-    const agent = process.env.SSH_AUTH_SOCK;
-    if (!agent) throw new Error('SSH Agent is unavailable');
-    config.agent = agent;
-  } else if (host.auth === 'private-key') {
+  if (!onDemand && host.auth === 'private-key') {
     if (!host.privateKeyPath) throw new Error('Private key path is required');
     config.privateKey = await readFile(host.privateKeyPath);
     if (secret.passphrase) config.passphrase = secret.passphrase;
-  } else {
+  } else if (!onDemand) {
     if (!secret.password) throw new Error('SSH password is required');
     config.password = secret.password;
   }
+  const proxySocket: Socket | undefined = !socket && host.connection?.proxy?.enabled
+    ? await openSshProxy(host.connection.proxy, host.address, host.port, secret.proxyPassword, host.connection.timeoutMs, signal) : undefined;
+  if (proxySocket) config.sock = proxySocket;
   return new Promise((resolve, reject) => {
     const client = new Client();
-    if (challenge) client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
+    let settled = false;
+    if (challenge && !onDemand) client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
       void (async () => {
         const answers: string[] = [];
         for (const prompt of prompts) {
@@ -84,13 +93,20 @@ async function connectClient(host: SshHost, secret: AuthMaterial, socket?: Clien
       })().catch(() => finish([]));
     });
     const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
       signal?.removeEventListener('abort', abort);
       client.on('error', () => {});
       client.end();
+      proxySocket?.destroy();
       reject(observed && observed !== host.fingerprint ? new HostKeyError(observed, host.fingerprint) : error);
     };
     const abort = () => fail(new Error('SSH connection timed out'));
+    if (onDemand) config.authHandler = onDemandAuthHandler({ host, material: secret, challenge, fail,
+      assertActive: () => { signal?.throwIfAborted(); if (settled) throw new Error('SSH authentication ended'); } });
     client.once('ready', () => {
+      if (settled) { client.end(); return; }
+      settled = true;
       signal?.removeEventListener('abort', abort);
       client.removeListener('error', fail);
       client.on('error', () => client.end());
@@ -121,43 +137,61 @@ async function forwardSocket(client: Client, host: SshHost, signal?: AbortSignal
 
 export class SshTransport {
   private readonly connections = new Map<string, Client>();
+  private readonly identities = new Map<string, string>();
+  private readonly instanceId = randomUUID();
   private readonly generations = new Map<string, number>();
 
   constructor(private readonly onDisconnected: (hostId: string) => void = () => {}) {}
 
-  async connect(host: SshHost, secret: AuthMaterial, jump?: { host: SshHost; secret: AuthMaterial }, challenge?: SshLoginChallenge, signal?: AbortSignal): Promise<void> {
+  async connect(host: SshHost, secret: AuthMaterial, jump?: { host: SshHost; secret: AuthMaterial }, challenge?: SshLoginChallenge, signal?: AbortSignal, options?: SshConnectOptions): Promise<void> {
     signal?.throwIfAborted();
     this.disconnect(host.id);
     let socket: ClientChannel | undefined;
-    if (jump) {
+    if (jump && !host.connection?.proxy?.enabled) {
       let jumpClient = this.connections.get(jump.host.id);
       if (!jumpClient) {
-        jumpClient = await connectClient(jump.host, jump.secret, undefined, challenge, signal);
+        jumpClient = await connectClient(jump.host, jump.secret, undefined, challenge, signal, options?.onDemandAuthentication);
         if (signal?.aborted) { jumpClient.end(); signal.throwIfAborted(); }
-        this.registerConnection(jump.host.id, jumpClient);
+        this.registerConnection(jump.host.id, jumpClient, jump.host.username);
       }
       socket = await forwardSocket(jumpClient, host, signal);
     }
     let client: Client;
-    try { client = await connectClient(host, secret, socket, challenge, signal); }
+    try { client = await connectClient(host, secret, socket, challenge, signal, options?.onDemandAuthentication); }
     catch (error) { socket?.end(); throw error; }
     if (signal?.aborted) { client.end(); signal.throwIfAborted(); }
-    this.registerConnection(host.id, client);
+    this.registerConnection(host.id, client, host.username);
   }
 
-  private registerConnection(hostId: string, client: Client): void {
+  private registerConnection(hostId: string, client: Client, loginAs: string): void {
     if (this.connections.has(hostId)) this.disconnect(hostId);
     this.connections.set(hostId, client);
+    this.identities.set(hostId, loginAs);
     this.generations.set(hostId, (this.generations.get(hostId) ?? 0) + 1);
     client.once('close', () => {
       if (this.connections.get(hostId) !== client) return;
       this.connections.delete(hostId);
+      this.identities.delete(hostId);
       this.generations.set(hostId, (this.generations.get(hostId) ?? 0) + 1);
       this.onDisconnected(hostId);
     });
   }
 
   isConnected(hostId: string): boolean { return this.connections.has(hostId); }
+  connectionId(hostId: string): string | null {
+    return this.isConnected(hostId) ? `${this.instanceId}:${this.connectionGeneration(hostId)}` : null;
+  }
+  matchesConnection(hostId: string, loginAs: string, connectionId: string): boolean {
+    return this.connectionId(hostId) === connectionId && this.identities.get(hostId) === loginAs;
+  }
+  async readEnvironment(hostId: string, loginAs: string, signal?: AbortSignal) {
+    const client = this.connections.get(hostId), generation = this.connectionGeneration(hostId);
+    if (!client || this.identities.get(hostId) !== loginAs) throw new Error('Host metadata identity unavailable');
+    const data = await probeHostEnvironment(client, signal);
+    if (this.connections.get(hostId) !== client || this.connectionGeneration(hostId) !== generation)
+      throw new Error('Host metadata connection changed');
+    return data;
+  }
   private readonly commandPreflights = new Map<string, { generation: number; promise: Promise<void> }>();
 
   private async checkCommandEnvironment(hostId: string): Promise<void> {
@@ -182,27 +216,15 @@ export class SshTransport {
   async execFixed(hostId: string, command: string): Promise<{ exitCode: number; output: string }> {
     const client = this.connections.get(hostId);
     if (!client) throw new Error('Host is not connected');
-    return new Promise((resolve, reject) => {
-      client.exec(command, (error, channel) => {
-        if (error) { reject(error); return; }
-        let output = '';
-        let exitCode = -1;
-        const timer = setTimeout(() => { channel.close(); reject(new Error('远端环境检查超时；业务命令未发送')); }, 15_000);
-        channel.on('error', (error: Error) => { clearTimeout(timer); reject(error); });
-        channel.on('data', (data: Buffer) => { output = (output + data.toString('utf8')).slice(-4096); });
-        channel.stderr.on('data', (data: Buffer) => { output = (output + data.toString('utf8')).slice(-4096); });
-        channel.on('exit', (code: number) => { exitCode = code; });
-        channel.on('close', () => { clearTimeout(timer); resolve({ exitCode, output }); });
-      });
-    });
+    const generation = this.connectionGeneration(hostId);
+    return runFixedSshCommand(client, command, () => this.connections.get(hostId) === client && this.connectionGeneration(hostId) === generation);
   }
 
   async openPipe(hostId: string, command: string): Promise<ClientChannel> {
     const client = this.connections.get(hostId);
     if (!client) throw new Error('Host is not connected');
-    return new Promise((resolve, reject) => {
-      client.exec(command, (error, channel) => error ? reject(error) : resolve(channel));
-    });
+    const generation = this.connectionGeneration(hostId);
+    return openSshControlPipe(client, command, () => this.connections.get(hostId) === client && this.connectionGeneration(hostId) === generation);
   }
 
   /** Installs only the fixed process transport, never model-authored scripts or secrets. */
@@ -233,10 +255,17 @@ export class SshTransport {
     await this.execFixed(hostId, `rm -f -- ${script}; rmdir -- ${path.posix.dirname(script)}`);
   }
 
-  async integratedShell(hostId: string, cols = 100, rows = 30) {
+  startManualKeepalive(hostId: string, options: ManualShellOptions, canRun: () => boolean, notice: (message: string) => void): () => void {
     const client = this.connections.get(hostId);
     if (!client) throw new Error('Host is not connected');
-    return openIntegratedShell(client, cols, rows);
+    options.assertAuthorized();
+    return startManualKeepalive(client, options.settings.session, options.assertAuthorized, canRun, notice);
+  }
+
+  async integratedShell(hostId: string, cols = 100, rows = 30, options?: ManualShellOptions) {
+    const client = this.connections.get(hostId);
+    if (!client) throw new Error('Host is not connected');
+    return openIntegratedShell(client, cols, rows, options);
   }
 
   async shell(hostId: string, cols = 100, rows = 30): Promise<ClientChannel> {
@@ -377,6 +406,7 @@ export class SshTransport {
     const client = this.connections.get(hostId);
     if (!client) return;
     this.connections.delete(hostId);
+    this.identities.delete(hostId);
     this.generations.set(hostId, (this.generations.get(hostId) ?? 0) + 1);
     client.end();
     this.onDisconnected(hostId);

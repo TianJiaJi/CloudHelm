@@ -32,6 +32,17 @@ const tier: Array<[ReviewMode, 'ask' | 'evaluate']> = [
   ['permissive', 'ask']
 ];
 
+describe('X11 authentication privacy', () => {
+  it.each(modes)('keeps X11 credential reads forbidden even in %s mode', (mode) => {
+    for (const [name, args] of [['cat', ['/home/user/.Xauthority']], ['cat', ['$XAUTHORITY']],
+      ['base64', ['$HOME/.Xauthority']], ['xxd', ['/run/user/1000/gdm/Xauthority']],
+      ['xauth', ['list']], ['xauth', ['nextract', '-', ':0']]] as const) {
+      expect(decideSafety(command(`${name} ${args.join(' ')}`), settings(mode), analysis([call(name, [...args])])))
+        .toMatchObject({ verdict: 'deny', ruleId: 'credential-resource' });
+    }
+  });
+});
+
 describe('three-tier review matrix', () => {
   it.each(modes)('low-risk mkdir is allowed in %s', (mode) => {
     const operation = command('mkdir -p /home/tian/test');

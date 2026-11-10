@@ -37,11 +37,17 @@ export function requestBusinessFacts(task: TaskView, operations: OperationView[]
       source: op.privilege.source, businessCommand: op.privilege.businessCommand, recovery: op.privilege.recovery } : {}), method: op.privilege?.method ?? 'sudo',
       scope: 'operation-only', loginAs: op.loginAs === undefined ? null : redactOutput(op.loginAs).slice(0, 128),
       runAs: op.runAs === undefined ? null : redactOutput(op.runAs).slice(0, 128), authentication: op.authentication } : undefined;
-    return { operationId: op.id, hostId: op.hostId, kind: op.kind, status: op.status,
+    const executionJob = op.executionJob ? { jobId: op.executionJob.jobId, status: op.executionJob.status,
+      connectionId: op.executionJob.connectionId, terminalId: op.executionJob.terminalId,
+      terminalGeneration: op.executionJob.terminalGeneration, pid: op.executionJob.pid, processSequence: op.executionJob.processSequence,
+      observedAt: op.executionJob.updatedAt, exitObserved: op.executionJob.exitObserved, exitCode: op.executionJob.exitCode,
+      stopRequestId: op.executionJob.stopRequestId, unknownReason: op.executionJob.unknownReason,
+      source: 'backend-transport-observation', health: 'not-established' } : undefined;
+    return { operationId: op.id, hostId: op.hostId, kind: op.kind, status: op.status, executionJob,
     readOnly: op.readOnly ?? null, effects: op.effects, exitCode: op.exitCode, createdAt: op.createdAt, privilege,
     sourceVersion: digest([op.id, op.hostId, op.kind, op.status, op.createdAt, op.readOnly, op.effects, op.exitCode,
       op.reconciledAt, op.reconciliation?.kind, op.reconciliation?.outcome, op.reconciliation?.evidenceOperationIds,
-      op.outputCapture, privilege, digest(redactOutput(op.outputTail ?? ''))]),
+      op.outputCapture, privilege, executionJob, digest(redactOutput(op.outputTail ?? ''))]),
     output: { truncated: op.outputCapture?.truncated ?? null,
       totalChars: op.outputCapture?.totalChars ?? null, tailChars: op.outputCapture?.tailChars ?? null,
       retrieval: { tool: 'read_operation_log', operationId: op.id, cursor: 0 }, availability: 'reauthorize-on-read; retention-not-guaranteed' } };
@@ -61,6 +67,7 @@ export function requestBusinessFacts(task: TaskView, operations: OperationView[]
     authority: 'untrusted index, not approval; full intent at SafetyGate' };
   if (Buffer.byteLength(JSON.stringify(intentIndex), 'utf8') > NEXT_INPUT_FACT_TOKENS * 2) throw new Error('意图索引超出安全上限，请缩小范围');
   const facts = { version: 1, taskId: task.id, intentIndex,
+    historySearch: { tool: 'query_operation_history', recordedCount: current.length },
     authoritativeOperations: state, inFlight: index.map(source), latestChanges: changes,
     recentResults: current.slice(-12).map(source), omittedOlderResults: Math.max(0, current.length - 12) };
   if (Buffer.byteLength(JSON.stringify(facts), 'utf8') > 49152) throw new Error('业务事实索引超出安全上下文上限，不会省略未决状态');

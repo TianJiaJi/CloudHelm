@@ -1,6 +1,6 @@
 import { InteractionCoordinator, SudoCredentialCache, type InteractionSink, type TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, SshTransport } from '@cloudhelm/adapters';
-import { describeSudoOutcome, isSudoStatusProbe, isSudo, operationFingerprint, type ExecutionOptions, type InputRequest, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
+import { canOfferSuFallback, describeSudoOutcome, isSudoStatusProbe, isSudo, operationFingerprint, type ExecutionOptions, type InputRequest, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 import { aptHasNoRemovals, inputPlan } from './operation-input-plan.js';
 
 /** The reviewed command remains unchanged. Only the process transport owns sudo's credential channel. */
@@ -88,7 +88,7 @@ export class OperationInputBridge implements OperationExecutor {
           const sent = this.terminal.answerAuthentication(terminalId, operation.id, challenge.id, answer);
           waiting = undefined;
           if (!sent) cancel();
-          else { dropAnswer(); lastAnswer = Buffer.from(answer); }
+          else { dropAnswer(); if (operation.executionMode !== 'background') lastAnswer = Buffer.from(answer); }
           return sent;
         }
       };
@@ -120,10 +120,11 @@ export class OperationInputBridge implements OperationExecutor {
     try {
       const observed = await this.terminal.execute(operation, fingerprint, signal, options);
       const result = describeSudoOutcome(analysis, interrupted ? { ...observed, privilege: interrupted, authenticationAttempts: attempts, requiresUserAction: true } : observed, attempts);
-      if (result.privilege && result.privilege.recovery !== 'private-input') result.requiresUserAction = true;
+      const alternative = operation.privilege === 'root' && canOfferSuFallback(result);
+      if (result.privilege && result.privilege.recovery !== 'private-input') result.requiresUserAction = !alternative;
       if (result.authentication === 'succeeded' && lastAnswer && current()) this.credentials.remember(binding, lastAnswer);
       if (result.authentication === 'failed' || result.status === 'unknown' || result.status === 'handed-over') this.credentials.clearTask(taskId);
-      if (result.authentication === 'failed') this.terminal.suspend(terminalId);
+      if (result.authentication === 'failed' && !alternative) this.terminal.suspend(terminalId);
       return result;
     } catch (error) {
       this.credentials.clearTask(taskId);

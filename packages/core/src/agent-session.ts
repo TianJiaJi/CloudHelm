@@ -11,8 +11,15 @@ export interface SessionProfile {
 }
 export interface BusinessTool<T = never> {
   name: string; label: string; description: string; parameters: object; replay: 'never';
+  /** Explicit query capability, never inferred from annotations or a command string. Defaults to model-only. */
+  access?: 'query' | 'model-only';
+  deferred?: boolean;
+  /** Offline authorization projection for discovery; execute must still recheck its recipient. */
+  available?(): boolean;
   execute(id: string, args: T, signal?: AbortSignal): Promise<{
     content: Array<{ type: 'text'; text: string }>; details: unknown; isError?: boolean;
+    /** Explicit public data only. Private renderer details are never promoted automatically. */
+    structuredContent?: unknown;
   }>;
 }
 export interface SessionStorage { directory: string; id: string; restore: boolean }
@@ -40,17 +47,24 @@ export interface SessionUsage {
   source: 'provider' | 'estimate' | 'unknown'; updatedAt: number;
 }
 export type SessionEvent =
+  | { type: 'lifecycle'; value: import('./agent-lifecycle.js').AgentLifecycleObservation }
   | { type: 'reasoning-progress'; value: ReasoningProgress | null }
   | { type: 'activity' }
   | { type: 'thinking'; value: ThinkingView }
   | { type: 'text'; value: SessionText }
   | { type: 'usage'; value: SessionUsage }
-  | { type: 'tool-start'; id: string; name: string; args: unknown }
-  | { type: 'tool-end'; id: string; name: string; isError: boolean }
+  | { type: 'tool-start'; id: string; name: string; args: unknown; parentToolCallId?: string }
+  | { type: 'tool-end'; id: string; name: string; isError: boolean; parentToolCallId?: string; durationMs?: number }
   | { type: 'response'; attempt?: ModelRequestAttempt; status?: string }
   | { type: 'turn-end' }
   | { type: 'compaction'; status: 'running' | 'complete' | 'failed'; error?: string };
+export type QueuedSessionInput = Pick<import('./conversation-input.js').ConversationInput, 'id' | 'kind' | 'text' | 'document'>;
 export interface SessionOptions {
+  inputSelected?(input: QueuedSessionInput): void | Promise<void>;
+  inputDelivered?(id: string, entryId: string): void | Promise<void>;
+  inputHistoryAllowed?(id: string): boolean;
+  /** Validates bounded query-cache references only; never grants tool execution. */
+  queryReferenceAllowed?(id: string): boolean;
   thinkingLevel?: ThinkingLevel; profile: SessionProfile; systemPrompt: string; tools: BusinessTool[];
   /** Backend-owned, per-request system prompt projection; never derive it from conversation messages. */
   currentSystemPrompt?(): string;
@@ -85,6 +99,8 @@ export interface ConversationSession {
   /** Host-initiated continuation, never projected as a user message. */
   resumeWithContext(text: string): Promise<void>;
   steer(text: string, document?: import('./message-content.js').MessageDocument): Promise<void>;
+  queueInput?(input: QueuedSessionInput): void;
+  cancelQueuedInput?(id: string): boolean;
   context(text: string): Promise<void>;
   select(profile: SessionProfile): void;
   setThinking(level: ThinkingLevel): void;

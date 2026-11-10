@@ -1,3 +1,8 @@
+import { AgentActivityStore } from './agent-activity-store.js';
+import { ConversationInputStore } from './conversation-input-store.js';
+import { recoverOperation } from './operation-recovery.js';
+import { createHostSettings, editHostSettings, readHostCredentials } from './host-settings.js';
+import type { HostCredentialsPatch } from '@cloudhelm/contracts';
 import { customModelLimits, modelThinking } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
@@ -11,7 +16,7 @@ import { recordVerificationReport } from './verification-records.js';
 import { rebuildRecordedVerification } from './rebuild-verification.js';
 import { verificationReason } from '../worker/verification-facts.js';
 import { createBudgetRequestHandler } from './request-budget-broker.js';
-import { HostDraftSchema, TaskIntentStateSchema, isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
+import { TaskIntentStateSchema, isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
 
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number; credentialRevision?: string }
@@ -43,6 +48,7 @@ export class AppState {
   private readonly approvals = new Map<string, AppSnapshot['approvals'][number]>();
   private readonly inputs = new Map<string, AppSnapshot['inputs'][number]>();
   private readonly clarifications = new Map<string, ClarificationRequest>();
+  private readonly agentActivity = new AgentActivityStore();
   private readonly reasoningProgress: NonNullable<AppSnapshot['reasoningProgress']> = {};
   private readonly execution: NonNullable<AppSnapshot['execution']> = {};
   private readonly contextUsage: NonNullable<AppSnapshot['contextUsage']> = {};
@@ -54,6 +60,7 @@ export class AppState {
   private readonly retentionTimer: ReturnType<typeof setInterval>;
   private profile: ProfileRecord;
   private closed = false;
+  private readonly inputStore: ConversationInputStore;
   private revalidatePreparations?: () => void;
 
   constructor(private readonly store: SqliteStore, private readonly emit: (event: AppEvent) => void) {
@@ -65,17 +72,14 @@ export class AppState {
         ? { ...task, localScopes: task.localScopes ?? [], reviewModesByHost: task.reviewModesByHost ?? {}, reviewRevision: task.reviewRevision ?? 1, status: 'recovering' }
         : { ...task, localScopes: task.localScopes ?? [], reviewModesByHost: task.reviewModesByHost ?? {}, reviewRevision: task.reviewRevision ?? 1,
           ...(task.status === 'waiting-user' ? { status: 'paused' as const } : {}) });
+    this.inputStore = new ConversationInputStore(store, (id) => !this.closed && this.tasks.has(id));
     for (const request of store.list<ClarificationRequest>('clarifications')) {
       const restored = request.status === 'pending' ? { ...request, status: 'expired' as const } : request;
       this.clarifications.set(restored.id, restored);
       if (restored !== request) store.put('clarifications', restored.id, restored);
     }
     for (const operation of store.list<OperationView>('operations')) this.operations.set(operation.id,
-      // A stored in-flight state can no longer be observed after restart: treat it as
-      // an unknown outcome so it stays blocking but is resolvable through recovery.
-      operation.status === 'approved' || operation.status === 'running' || operation.status === 'proposed'
-        ? { ...operation, manualReviewAvailable: false, status: 'unknown', reason: 'Application exited before outcome was recorded' }
-        : { ...operation, manualReviewAvailable: false });
+      recoverOperation(operation, 'Application exited before outcome was recorded'));
     for (const task of this.tasks.values()) this.execution[task.id] = { model: 'idle', stopping: false, canStop: false,
       remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown' && !op.reconciledAt) ? 'unknown' : 'idle' };
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));
@@ -85,10 +89,10 @@ export class AppState {
       completion: (id) => {
         const task = this.getTask(id); const execution = this.execution[id];
         const operations = [...this.operations.values()].filter((operation) => operation.taskId === id);
-        return { answered: task.status === 'answered' && !task.resumeReason,
+        return { answered: task.status === 'answered' && (!task.resumeReason || task.resumeReason === 'report'),
           unresolved: operations.some((operation) => operationNeedsVerification(operation)
             || (['proposed', 'approved', 'running', 'unknown'].includes(operation.status) && !operation.reconciledAt)),
-          reportPending: task.resumeReason === 'report' || (task.verificationState?.status === 'unverified' && !task.report),
+          reportPending: false, // Report coverage never keeps an execution budget open.
           modelIdle: execution?.model === 'idle', remoteIdle: execution?.remote === 'idle' };
       } });
     store.cleanupLogs();
@@ -125,8 +129,12 @@ export class AppState {
     })(input);
   }
 
+  commitInput(value: import('@cloudhelm/contracts').StoredConversationInput): void { this.inputStore.commit(value); this.publish(); }
+  queuedInputs(taskId: string): import('@cloudhelm/contracts').StoredConversationInput[] { return this.inputStore.list(taskId); }
+
   snapshot(): AppSnapshot {
     return {
+      queuedInputs: this.inputStore.snapshot(), agentActivity: this.agentActivity.snapshot(),
       reasoningProgress: { ...this.reasoningProgress }, execution: { ...this.execution }, contextUsage: { ...this.contextUsage }, contextCompaction: { ...this.contextCompaction },
       hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
@@ -135,18 +143,13 @@ export class AppState {
     };
   }
 
-  addHost(draft: HostDraft): HostView {
-    if (!Value.Check(HostDraftSchema, draft)) throw new Error('Invalid host settings');
-    if (draft.jumpHostId && (!this.hosts.has(draft.jumpHostId) || this.getHost(draft.jumpHostId).archived
-      || this.getHost(draft.jumpHostId).jumpHostId)) {
-      throw new Error('Choose an existing direct SSH host as the single jump host');
-    }
-    const host: HostView = { ...draft, id: randomUUID(), status: 'disconnected', protectedPaths: [],
-      protectedReadPaths: [], protectedWritePaths: [], defaultMode: 'ask', policyRevision: 1 };
-    this.hosts.set(host.id, host);
-    this.store.put('hosts', host.id, host);
-    this.publish();
-    return host;
+  private hostSettingsContext() {
+    return { hosts: this.hosts, store: this.store, encrypt: (value: string) => this.encryptSecret(value),
+      secret: (key: string) => this.secret(key), publish: () => this.publish() };
+  }
+
+  addHost(draft: HostDraft, credentials?: HostCredentialsPatch): HostView {
+    return createHostSettings(this.hostSettingsContext(), draft, credentials);
   }
 
   getHost(id: string): HostView {
@@ -155,39 +158,8 @@ export class AppState {
     return host;
   }
 
-  editHost(id: string, draft: HostDraft, newSecret?: string): HostView {
-    if (!Value.Check(HostDraftSchema, draft)) throw new Error('Invalid host settings');
-    if (draft.jumpHostId && (!this.hosts.has(draft.jumpHostId) || this.getHost(draft.jumpHostId).archived
-      || this.getHost(draft.jumpHostId).jumpHostId)) throw new Error('Choose an active direct host as the jump host');
-    const previous = this.getHost(id);
-    if (previous.archived) throw new Error('An archived host revision cannot be edited');
-    const connectionChanged = previous.address !== draft.address || previous.port !== draft.port
-      || previous.username !== draft.username || previous.auth !== draft.auth
-      || previous.privateKeyPath !== draft.privateKeyPath || previous.jumpHostId !== draft.jumpHostId || !!newSecret;
-    if (!connectionChanged) {
-      const renamed = { ...previous, label: draft.label };
-      this.hosts.set(id, renamed);
-      this.store.put('hosts', id, renamed);
-      this.publish();
-      return renamed;
-    }
-    let ciphertext: string | undefined;
-    if (newSecret) {
-      if (!safeStorage.isEncryptionAvailable()) throw new Error('OS credential encryption is unavailable');
-      ciphertext = safeStorage.encryptString(newSecret).toString('base64');
-    } else if (previous.auth === draft.auth) ciphertext = this.store.get<string>('secrets', `host:${id}`);
-    const replacement: HostView = {
-      ...previous, ...draft, previousHostId: previous.id, id: randomUUID(), archived: false, status: 'disconnected', policyRevision: 1,
-      fingerprint: previous.address === draft.address && previous.port === draft.port ? previous.fingerprint : undefined
-    };
-    const archived = { ...previous, archived: true };
-    this.hosts.set(id, archived);
-    this.hosts.set(replacement.id, replacement);
-    this.store.put('hosts', id, archived);
-    this.store.put('hosts', replacement.id, replacement);
-    if (ciphertext) this.store.put('secrets', `host:${replacement.id}`, ciphertext);
-    this.publish();
-    return replacement;
+  editHost(id: string, draft: HostDraft, newSecret?: string, credentials?: HostCredentialsPatch): HostView {
+    return editHostSettings(this.hostSettingsContext(), id, draft, newSecret, credentials);
   }
 
   getTask(id: string): TaskView {
@@ -217,7 +189,8 @@ export class AppState {
 
   assertDeletable(id: string): TaskView {
     const task = this.getTask(id);
-    if (isActiveTaskStatus(task.status) || this.execution[id]?.canStop || this.execution[id]?.stopping) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
+    if (this.inputStore.list(id).some((value) => value.status === 'queued' || value.status === 'delivering')
+      || isActiveTaskStatus(task.status) || this.execution[id]?.canStop || this.execution[id]?.stopping) throw new Error('对话仍在进行中，请先停止或等待结束后再删除');
     if ([...this.operations.values()].some((op) => op.taskId === id && operationNeedsVerification(op))) {
       throw new Error('远端结果尚未核验，请先保留操作记录并确认结果后再删除');
     }
@@ -261,6 +234,8 @@ export class AppState {
       for (const part of message.document?.parts ?? []) if (part.type === 'reference') this.store.removeReference(part.reference.id);
     }
     this.store.removeWhere('message-receipts', 'conversationId', id);
+    this.inputStore.removeTask(id);
+    this.agentActivity.remove(id);
     this.tasks.delete(id);
     for (const [key, operation] of [...this.operations]) if (operation.taskId === id) this.operations.delete(key);
     for (const [key, approval] of [...this.approvals]) if (approval.taskId === id) this.approvals.delete(key);
@@ -297,7 +272,8 @@ export class AppState {
 
   runtimeHost(id: string): RuntimeHost {
     const host = this.getHost(id);
-    return { ...host, secret: this.secret(`host:${id}`) };
+    const credentials = readHostCredentials(host, (key) => this.secret(key));
+    return { ...host, credentials, secret: host.auth === 'password' ? credentials.password : host.auth === 'private-key' ? credentials.passphrase : undefined };
   }
 
   saveSecret(id: string, value: string): void {
@@ -508,7 +484,8 @@ export class AppState {
   }
 
   readOperationLog(taskId: string, operationId: string, cursor: number) {
-    if (this.operations.get(operationId)?.taskId !== taskId) throw new Error('Operation is outside the conversation');
+    if (typeof taskId !== 'string' || !taskId || taskId.length > 200 || typeof operationId !== 'string' || !operationId || operationId.length > 200
+      || !this.tasks.has(taskId) || this.operations.get(operationId)?.taskId !== taskId) throw new Error('Operation is outside the conversation');
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error('Invalid log cursor');
     this.flushLogs();
     return this.store.readLogPage(`operation:${operationId}`, cursor);
@@ -577,6 +554,16 @@ export class AppState {
     return updated;
   }
 
+  commitOperation(operation: OperationView): void {
+    const task = this.tasks.get(operation.taskId), prior = this.operations.get(operation.id);
+    if (this.closed || !task || !task.hostIds.includes(operation.hostId)
+      || prior && (prior.taskId !== operation.taskId || prior.hostId !== operation.hostId)) throw new Error('Operation persistence scope unavailable');
+    const job = operation.executionJob;
+    if (job && (job.taskId !== operation.taskId || job.hostId !== operation.hostId || job.operationId !== operation.id))
+      throw new Error('Operation job binding changed');
+    this.record({ type: 'operation', value: structuredClone(operation) });
+  }
+
   record(event: AppEvent | { type: 'approval-open'; value: AppSnapshot['approvals'][number] }
     | { type: 'approval-close'; id: string } | { type: 'operation'; value: OperationView }
     | { type: 'input-open'; value: InputRequestView } | { type: 'input-close'; id: string }
@@ -584,6 +571,9 @@ export class AppState {
     | { type: 'host-status'; hostId: string; status: HostView['status'] }): void {
     if (this.closed) return;
     switch (event.type) {
+      case 'agent-lifecycle':
+        if (!this.tasks.has(event.taskId) || !this.agentActivity.accept(event.taskId, event.value)) return;
+        break;
       case 'operation': {
         const operation = retainOperationResolution(this.operations.get(event.value.id), event.value);
         if (operation.logRef && ['succeeded', 'failed'].includes(operation.status)) {
@@ -656,6 +646,13 @@ export class AppState {
         else if (!this.logFlushTimer) this.logFlushTimer = setTimeout(() => this.flushLogs(), 500);
         break;
       }
+      case 'terminal-cwd': {
+        const terminal = this.terminals.get(event.terminalId);
+        if (terminal?.state === 'human' && !terminal.taskId && event.directory.startsWith('/') && !/[\u0000-\u001f\u007f]/u.test(event.directory)) {
+          this.terminals.set(terminal.id, { ...terminal, cwd: event.directory, cwdUpdatedAt: event.updatedAt });
+        }
+        break;
+      }
       case 'terminal-state': {
         if (event.state === 'closed') this.terminals.delete(event.terminalId);
         else this.terminals.set(event.terminalId, { ...this.terminals.get(event.terminalId), id: event.terminalId, hostId: event.hostId, taskId: event.taskId, state: event.state });
@@ -725,6 +722,8 @@ export class AppState {
   }
 
   runtimeStopped(): void {
+    this.agentActivity.runtimeStopped();
+    if (!this.closed) this.inputStore.invalidate();
     for (const value of Object.values(this.reasoningProgress)) value.reasoning = { ...value.reasoning, status: 'interrupted' };
     for (const [id, value] of Object.entries(this.execution)) this.execution[id] = {
       model: 'idle', remote: value.remote === 'idle' ? 'idle' : 'unknown', stopping: false, canStop: false
@@ -737,8 +736,8 @@ export class AppState {
     }
     for (const terminal of this.terminals.values()) this.record({ type: 'terminal-state', terminalId: terminal.id,
       hostId: terminal.hostId, taskId: terminal.taskId, state: 'closed' });
-    for (const operation of this.operations.values()) if (['running', 'approved'].includes(operation.status)) {
-      this.record({ type: 'operation', value: { ...operation, status: 'unknown', reason: '运行进程退出，远端结果待核验。' } });
+    for (const operation of this.operations.values()) if (operation.executionJob || ['proposed', 'running', 'approved'].includes(operation.status)) {
+      this.record({ type: 'operation', value: recoverOperation(operation, '运行进程退出，远端结果待核验。') });
     }
     for (const task of this.tasks.values()) if (task.session && ['running', 'waiting-review', 'human-control', 'paused'].includes(task.status)) {
       this.record({ type: 'task-status', taskId: task.id, status: 'recovering', summary: '运行进程已停止，请重新打开 CloudHelm 后核验远端状态。' });

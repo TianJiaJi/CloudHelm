@@ -214,6 +214,11 @@ export class SqliteStore {
       .onConflictDoUpdate({ target: [records.bucket, records.id], set: { value: JSON.stringify(value), updatedAt: Date.now() } }).run();
   }
 
+  /** Commit a host revision and its already-encrypted credentials together. */
+  commitHostSettings(changes: Array<{ bucket: 'hosts' | 'secrets'; id: string; value: unknown }>): void {
+    this.raw.transaction(() => { for (const { bucket, id, value } of changes) this.put(bucket, id, value); }).immediate();
+  }
+
   /** Compare the whole read set and atomically commit records plus version receipts.
    * Analysis is done before this synchronous transaction, never inside it. */
   commitDataRepair(repair: DataRepair): void {

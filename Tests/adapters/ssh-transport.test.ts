@@ -77,6 +77,21 @@ describe('SFTP commit authorization', () => {
 });
 
 describe('SSH connection generations', () => {
+  it('binds pool allocation to the actual login and worker/connection instance', async () => {
+    const ssh = new SshTransport();
+    await ssh.connect(host, { password: 'synthetic-test' });
+    const first = ssh.connectionId(host.id)!;
+    expect(ssh.matchesConnection(host.id, host.username, first)).toBe(true);
+    expect(ssh.matchesConnection(host.id, 'root', first)).toBe(false);
+    await ssh.connect(host, { password: 'synthetic-test' });
+    expect(ssh.matchesConnection(host.id, host.username, first)).toBe(false);
+    const restarted = new SshTransport(); await restarted.connect(host, { password: 'synthetic-test' });
+    expect(restarted.connectionId(host.id)).not.toBe(first);
+    ssh.disconnect(host.id);
+    expect(ssh.matchesConnection(host.id, host.username, first)).toBe(false);
+    ssh.close(); restarted.close();
+  });
+
   it('invalidates only the active connection and ignores stale close events', async () => {
     const disconnected = vi.fn(); const ssh = new SshTransport(disconnected);
     await ssh.connect(host, { password: 'synthetic-test' }); const old = state.clients[0]!;

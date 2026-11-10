@@ -1,6 +1,10 @@
 import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, ReviewSelection, ResumeReason, TaskStatus, TaskView } from './index.js';
 
-export interface RuntimeHost extends HostView { secret?: string }
+export interface RuntimeHost extends HostView { secret?: string; credentials?: import('./host-settings.js').HostCredentials }
+/** Compatibility mapping is purpose-bound; a key passphrase is never a login password. */
+export function runtimeSshCredentials(host: RuntimeHost): import('./host-settings.js').HostCredentials {
+  return host.credentials ?? (host.auth === 'password' ? { password: host.secret } : host.auth === 'private-key' ? { passphrase: host.secret } : {});
+}
 export type RuntimeHostTestResult = Exclude<HostConnectionTestResult, { status: 'trust-required' }>
   | { status: 'trust-required'; stage: 'host' | 'jump'; fingerprint: string; expectedFingerprint?: string };
 export interface RuntimeReviewProfile { selection: ReviewSelection; provider: string; modelId: string; baseUrl?: string; apiKey?: string; revision: number }
@@ -38,9 +42,10 @@ export type RuntimeCall =
   | { method: 'stop-terminal'; terminalId: string }
   | { method: 'resize'; terminalId: string; cols: number; rows: number }
   | { method: 'list-remote'; hostId: string; path: string }
-  | { method: 'start-task'; intent?: string; document?: import('./message-content.js').MessageDocument; initialMessage?: string; thinkingLevel?: import('./index.js').ThinkingLevel; task: TaskView; hosts: RuntimeHost[]; profile: RuntimeProfile; priorOperations?: OperationView[]; sessionDirectory: string; restored?: boolean }
+  | { method: 'start-task'; intent?: string; document?: import('./message-content.js').MessageDocument; initialMessage?: string; thinkingLevel?: import('./index.js').ThinkingLevel; task: TaskView; hosts: RuntimeHost[]; profile: RuntimeProfile; priorOperations?: OperationView[]; priorInputs?: import('./conversation-input.js').StoredConversationInput[]; sessionDirectory: string; restored?: boolean }
   | { method: 'authorize-task'; taskId: string; hosts: RuntimeHost[]; localScopes: LocalScope[]; prepared?: PreparedContext & { text: string } }
-  | { method: 'task-message'; intent?: string; taskId: string; text: string; preparedRevision?: string; document?: import('./message-content.js').MessageDocument }
+  | { method: 'cancel-queued-input'; taskId: string; inputId: string }
+  | { method: 'task-message'; queueMode?: import('./conversation-input.js').ConversationInputKind; intent?: string; taskId: string; text: string; preparedRevision?: string; document?: import('./message-content.js').MessageDocument }
   | { method: 'decide-approval'; approvalId: string; approved: boolean }
   | { method: 'answer-input'; requestId: string; answer: string }
   | { method: 'cancel-input'; requestId: string }
@@ -53,6 +58,10 @@ export type RuntimeMessage =
   | import('./request-budget-runtime.js').BudgetRequestMessage
   | { budgetResult: import('./request-budget-runtime.js').BudgetResult }
   | { diagnostic: import('./diagnostics.js').DiagnosticRecord }
+  | { commitOperation: { id: string; value: OperationView } }
+  | { operationCommitResult: { id: string; taskId: string; operationId: string; committed: boolean } }
+  | { commitInput: { id: string; value: import('./conversation-input.js').StoredConversationInput } }
+  | { inputCommitResult: { id: string; taskId: string; inputId: string; committed: boolean } }
   | { readLog: { id: string; taskId: string; operationId: string; cursor: number } }
   | { logResult: { id: string; value?: LogPage; error?: string } }
   | { id: string; call: RuntimeCall }

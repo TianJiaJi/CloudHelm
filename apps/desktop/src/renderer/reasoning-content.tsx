@@ -19,8 +19,6 @@ export function ReasoningContent({ value, startedAt, now }: { value?: ReasoningV
   const elapsed = value.status === 'streaming' && startedAt !== undefined && now !== undefined
     ? Math.max(0, Math.floor((now - startedAt) / 1000)) : undefined;
   return <section className={styles.card} aria-label={label}>
-    <details className={styles.group} open>
-    <summary className={styles.groupTitle}><Icon name="chevron" size={10} />思考过程</summary>
     <button type="button" className={styles.toggle} aria-label={`${open ? '收起' : '展开'}${label}`} aria-expanded={open} aria-controls={contentId} onClick={() => setOpen(!open)}
       title="仅展示模型接口返回的内容，可能是摘要；不代表完整内部思维链">
       <span className={styles.chevron} data-open={open}><Icon name="chevron" size={12} /></span>
@@ -37,6 +35,5 @@ export function ReasoningContent({ value, startedAt, now }: { value?: ReasoningV
         : value.status === 'interrupted' ? '响应已中断，没有收到可展示的思考内容。' : '此响应未返回可展示的思考内容。'}</p>}
       {value.redacted && <p className={styles.empty}>部分内容未由模型接口公开。</p>}
     </div>}
-    </details>
   </section>;
 }

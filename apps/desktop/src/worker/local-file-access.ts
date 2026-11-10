@@ -29,6 +29,8 @@ function sameFile(left: BigIntStats, right: BigIntStats): boolean {
 export class LocalFileAccess {
   private readonly cursorKey = randomBytes(32);
   constructor(private readonly scopes: LocalScope[]) {}
+  /** Offline discovery metadata only; each actual read/list still rechecks the selected recipient. */
+  get hasScopes(): boolean { return this.scopes.length > 0; }
 
   findScope(requested: string): LocalScope | undefined {
     return this.scopes.find((scope) => scope.kind === 'file' ? requested === scope.path : inside(requested, scope.path));

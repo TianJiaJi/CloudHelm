@@ -21,6 +21,8 @@ import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOper
  */
 export class HostSerialExecutor implements OperationExecutor {
   private readonly tails = new Map<string, Promise<void>>();
+  /** Hold raw exit observations until authentication/decorators finish validating the result. */
+  private readonly backgroundObservations = new Map<string, OperationResult | undefined>();
   private readonly unsettled = new Map<string, Map<string, Promise<'exited' | 'unknown'> | null>>();
 
   constructor(private readonly downstream: OperationExecutor) {}
@@ -33,6 +35,8 @@ export class HostSerialExecutor implements OperationExecutor {
 
   /** Late PTY evidence can arrive after the model/tool already stopped. */
   observe(hostId: string, result: OperationResult): void {
+    const key = JSON.stringify([hostId, result.operationId]);
+    if (this.backgroundObservations.has(key)) { this.backgroundObservations.set(key, result); return; }
     const pending = this.unsettled.get(hostId);
     if (!pending?.has(result.operationId)) return;
     const unresolved = result.status === 'unknown' || result.status === 'handed-over'
@@ -56,6 +60,15 @@ export class HostSerialExecutor implements OperationExecutor {
     return true;
   }
 
+  canControlOperation(hostId: string, operationId: string): boolean {
+    if (this.tails.has(hostId)) return false;
+    const pending = this.unsettled.get(hostId);
+    return !pending?.size || pending.size === 1 && !!pending.get(operationId);
+  }
+
+  /** Observation only: manual scheduled maintenance must not collide with Agent work. */
+  hasPendingOrUnresolved(hostId: string): boolean { return this.tails.has(hostId) || this.unsettled.has(hostId); }
+
   private track(hostId: string, operationId: string, completion: Promise<'exited' | 'unknown'> | null): void {
     const operations = this.unsettled.get(hostId) ?? new Map();
     operations.set(operationId, completion);
@@ -76,6 +89,24 @@ export class HostSerialExecutor implements OperationExecutor {
     const tail = previous.then(() => current);
     this.tails.set(hostId, tail);
     await previous;
+    const releaseQueue = () => { release(); if (this.tails.get(hostId) === tail) this.tails.delete(hostId); };
+    const observationKey = JSON.stringify([hostId, operation.id]);
+    let yielded = false, completeBackground: ((state: 'unknown') => void) | undefined;
+    const background = operation.kind === 'command' && operation.executionMode === 'background';
+    const executionOptions: ExecutionOptions | undefined = background ? { ...options, onProcessStarted: (event) => {
+      if (!yielded) {
+        yielded = true;
+        if (!options?.readOnly) {
+          this.backgroundObservations.set(observationKey, undefined);
+          const completion = new Promise<'exited' | 'unknown'>((resolve) => { completeBackground = resolve; });
+          this.track(hostId, operation.id, completion);
+        }
+        // Publish/persist before admitting diagnostic work. If the observer fails,
+        // downstream fails closed and the finally path releases only the queue, not the write lock.
+        options?.onProcessStarted?.(event);
+        releaseQueue();
+      } else options?.onProcessStarted?.(event);
+    } } : options;
     try {
       if (signal?.aborted || options?.isAuthorized?.() === false) {
         return { operationId: operation.id, status: 'failed', effects: 'none', stdoutTail: 'Authorization expired while waiting for the host write lock; no operation was sent' };
@@ -86,18 +117,25 @@ export class HostSerialExecutor implements OperationExecutor {
           stdoutTail: `Another command on this host has an unresolved remote outcome (${blockedBy}); verify it before further Agent writes` };
       }
       let result: OperationResult;
-      try { result = await this.downstream.execute(operation, fingerprint, signal, options); }
+      try { result = await this.downstream.execute(operation, fingerprint, signal, executionOptions); }
       catch (error) {
         if (!options?.readOnly) this.track(hostId, operation.id, null);
         throw error;
       }
+      const late = this.backgroundObservations.get(observationKey);
+      this.backgroundObservations.delete(observationKey);
       const unresolved = result.status === 'unknown' || result.status === 'handed-over'
         || (result.status === 'failed' && result.effects === 'possible');
-      if (!options?.readOnly && unresolved) this.track(hostId, operation.id, result.remoteCompletion ?? null);
+      if (!options?.readOnly && unresolved) {
+        this.track(hostId, operation.id, result.remoteCompletion ?? null);
+        if (late && ['unknown', 'handed-over'].includes(result.status)) this.observe(hostId, late);
+      }
+      else if (yielded && !options?.readOnly) this.observe(hostId, result);
       return result;
     } finally {
-      release();
-      if (this.tails.get(hostId) === tail) this.tails.delete(hostId);
+      this.backgroundObservations.delete(observationKey);
+      completeBackground?.('unknown');
+      releaseQueue();
     }
   }
 }

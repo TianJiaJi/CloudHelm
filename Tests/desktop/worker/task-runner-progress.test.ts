@@ -14,9 +14,11 @@ it.each(['new-pages', 'same-page', 'plans'] as const)('uses real observation pro
   const fixture = await openAiFixture(async () => {
     count++;
     if (mode === 'new-pages' && count === 13) return { text: '已读到12页不同资料。' };
-    return { calls: [{ id: `new-call-${count}`, name: mode === 'plans' ? 'update_plan' : 'read_selected_text_file',
+    // Selected reads are now deferred. Invoke through the authorized native query surface;
+    // keep the same request/progress expectations, including repeated-page stagnation.
+    return { calls: [{ id: `new-call-${count}`, name: mode === 'plans' ? 'update_plan' : 'codemode',
       arguments: mode === 'plans' ? { steps: [{ id: `step-${count}`, title: `Reworded plan ${count}`, status: 'pending' }] }
-        : { path: file, offset: mode === 'new-pages' ? count : 1, limit: 1 } }] };
+        : { code: `return await tools.read_selected_text_file(${JSON.stringify({ path: file, offset: mode === 'new-pages' ? count : 1, limit: 1 })});` } }] };
   });
   const events: Parameters<TaskSignals['event']>[0][] = [];
   const task: TaskView = { id: 'progress-task', goal: '阅读已选资料', hostIds: [], localScopes: [{ path: file, kind: 'file' }],

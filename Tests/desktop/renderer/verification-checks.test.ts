@@ -20,6 +20,6 @@ it('keeps an honest failed report unverified without a phantom continue-verifica
     modelId: 'fixture', requestCount: 1, requestLimit: 100, createdAt: 1, updatedAt: 1,
     report: value, verificationState: { status: 'unverified', reasonCode: 'checks-failed', operationIds: ['write'] } };
   const markup = renderToStaticMarkup(createElement(VerificationCard, { conversation, report() {} }));
-  expect(markup).toContain('已登记 · 有未验证项'); expect(markup).toContain('接口检查未通过');
+  expect(markup).toContain('历史报告 · 模型判断'); expect(markup).toContain('接口检查未通过');
   expect(markup).not.toContain('>继续核验<'); expect(markup).not.toContain('>已核验<');
 });

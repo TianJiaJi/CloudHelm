@@ -8,6 +8,8 @@ const server = new WorkerServer((message) => parent.postMessage(message));
 
 parent.on('message', (event) => {
   const message = event.data as RuntimeMessage;
+  if ('inputCommitResult' in message) { server.resolveInputCommit(message.inputCommitResult); return; }
+  if ('operationCommitResult' in message) { server.resolveOperationCommit(message.operationCommitResult); return; }
   if ('logResult' in message) { server.resolveLog(message.logResult); return; }
   if ('budgetResult' in message) { server.resolveBudget(message.budgetResult); return; }
   if (!('call' in message)) return;

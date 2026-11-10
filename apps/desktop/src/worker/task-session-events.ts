@@ -10,6 +10,11 @@ export function taskSessionEvents(taskId: string, hooks: {
 }): (event: SessionEvent) => void {
   let lastResponse: string | undefined;
   return (event) => {
+    if (event.type === 'lifecycle') {
+      hooks.event({ type: 'agent-lifecycle', taskId, value: event.value });
+      if (event.value.kind === 'run' && event.value.status === 'settled') hooks.diagnostic({ event: 'model.settled',
+        status: event.value.aborted ? 'aborted' : 'settled', durationMs: event.value.durationMs });
+    }
     if (event.type === 'reasoning-progress') hooks.event({ type: 'reasoning-progress', taskId, value: event.value });
     if (event.type === 'thinking') hooks.event({ type: 'thinking', taskId, value: event.value });
     if (event.type === 'activity') hooks.activity();

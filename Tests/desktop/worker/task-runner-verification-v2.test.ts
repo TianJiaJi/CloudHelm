@@ -4,25 +4,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TerminalManager } from '@cloudhelm/application';
 import type { RawTerminal } from '@cloudhelm/core';
-import type { OperationView, TaskView, VerificationSubmissionV3 } from '@cloudhelm/contracts';
+import type { OperationView, TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
-import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
+import { openAiFixture } from './openai-sse-fixture.js';
 const channel: RawTerminal = { write() { throw new Error('No real shell'); }, resize() {}, close() {}, onData() {}, onClose() {} };
-it.each(['passed', 'failed', 'inconclusive'] as const)('records %s checks through native tools and finishes honestly without repeating changes', async (status) => {
+it.each(['passed', 'failed', 'inconclusive'] as const)('explains %s observations without report tools or repeating changes', async (status) => {
   const directory = await mkdtemp(join(tmpdir(), 'cloudhelm-v2-report-'));
   let requests = 0;
   const fixture = await openAiFixture(async (request) => {
     requests++;
     if (requests === 1) return { calls: [{ id: 'create', name: 'run_remote', arguments: { hostId: 'host', command: 'mkdir -p /srv/report-fixture' } }] };
     if (requests === 2) return { calls: [{ id: 'inspect', name: 'run_remote', arguments: { hostId: 'host', command: 'stat /srv/report-fixture' } }] };
-    if (requests === 3) {
-      const id = (callId: string) => /Operation ID: ([^\n]+)/u.exec(fixtureMessageText(request.messages.find((message) => message.tool_call_id === callId)!))![1]!;
-      const check: NonNullable<VerificationSubmissionV3['checks']>[number] = { kind: 'model-assessment', target: '目录状态', expected: '目录存在',
-        observed: status === 'passed' ? 'stat成功返回' : '本次stat未取得符合目标的结果', evidenceOperationId: id('inspect'), status };
-      return { calls: [{ id: 'report', name: 'submit_verification', arguments: { version: 3, summary: '如实登记目录检查，不证明其他业务目标',
-        recovery: ['按审核后单独处理，未自动执行恢复'], checks: [check] } }] };
-    }
+    expect(request.tools!.some((tool) => tool.function.name === 'submit_verification')).toBe(false);
     return { text: status === 'passed' ? '目录检查通过，不代表应用健康。' : '检查未全部通过，不声称目标已完成，也不重复写入。' };
   });
   const task: TaskView = { id: 'report-fixture', goal: '创建目录并检查', hostIds: ['host'], localScopes: [], status: 'draft',
@@ -41,23 +35,24 @@ it.each(['passed', 'failed', 'inconclusive'] as const)('records %s checks throug
     undefined, undefined, { id: task.id, directory, restore });
   let runner = make(task);
   try {
-    await runner.start(); expect(fixture.errors).toEqual([]); expect(requests).toBe(4); expect(execute).toHaveBeenCalledTimes(2);
+    await runner.start(); expect(fixture.errors).toEqual([]); expect(requests).toBe(3); expect(execute).toHaveBeenCalledTimes(2);
     const report = events.filter((event) => event.type === 'work-report' && event.report).at(-1);
-    expect(report).toMatchObject({ report: { version: 3, goalChecks: expect.arrayContaining([expect.objectContaining({ status, authority: 'model' })]) } });
+    expect(report).toMatchObject({ report: { version: 3, facts: { registration: 'automatic', operations: expect.any(Array) } } });
+    expect(task.report?.goalChecks?.some((check) => check.authority === 'model')).toBe(false);
     const verification = events.filter((event) => event.type === 'verification-state').at(-1);
-    expect(verification).toMatchObject({ value: { status: 'unverified' } });
+    expect(verification).toMatchObject({ value: undefined });
     expect(events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered', resumeReason: undefined });
-    await expect(runner.resume()).rejects.toThrow('没有可自动继续'); expect(requests).toBe(4);
+    await expect(runner.resume()).rejects.toThrow('没有可自动继续'); expect(requests).toBe(3);
     if (status !== 'passed') {
       const indexed = new Map<string, OperationView>(); for (const event of events) if (event.type === 'operation') indexed.set(event.value.id, event.value);
       const file = join(directory, (await readdir(directory)).find((name) => name.endsWith('.jsonl'))!);
       const beforeRestore = await readFile(file, 'utf8');
       runner.dispose();
       runner = make(structuredClone(task), [...indexed.values()], true); await runner.start(true);
-      await expect(runner.resume()).rejects.toThrow('没有可自动继续'); expect(requests).toBe(4);
+      await expect(runner.resume()).rejects.toThrow('没有可自动继续'); expect(requests).toBe(3);
       runner.message('现在仅解释检查限制，不要重复变更');
       await vi.waitFor(() => expect({ requests, failure: events.filter((event) => event.type === 'task-status').at(-1)?.summary })
-        .toEqual({ requests: 5, failure: undefined }), { timeout: 15000 });
+        .toEqual({ requests: 4, failure: undefined }), { timeout: 15000 });
       await vi.waitFor(() => expect(events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered' }));
       expect(execute).toHaveBeenCalledTimes(2);
       expect(events.filter((event) => event.type === 'verification-state').at(-1)).toMatchObject({ value: undefined });

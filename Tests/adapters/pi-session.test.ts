@@ -70,7 +70,7 @@ describe('native Pi session compatibility', () => {
     expect(system(1)).not.toContain('Stale initial host: first');
     expect(system(1)).not.toContain('Current authorized host: first');
     expect(system(1).match(/Current authorized host:/gu)).toHaveLength(1);
-    expect(f.fixture.requests[1]?.tools?.map((tool) => tool.function.name).sort()).toEqual(['ask_user', 'observe']);
+    expect(f.fixture.requests[1]?.tools?.map((tool) => tool.function.name).sort()).toEqual(['ask_user', 'codemode', 'observe', 'tool_search']);
   });
 
   it('executes parallel model tool calls one at a time so reviews and commands never overlap', async () => {
@@ -120,7 +120,7 @@ describe('native Pi session compatibility', () => {
       tools: [{ name: 'observe', label: 'Observe', description: 'Observe once', parameters: Type.Object({}), replay: 'never', execute }] });
     await f.session.prompt('first user intent');
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(f.fixture.requests[0]?.tools?.map((tool) => tool.function.name).sort()).toEqual(['ask_user', 'observe']);
+    expect(f.fixture.requests[0]?.tools?.map((tool) => tool.function.name).sort()).toEqual(['ask_user', 'codemode', 'observe', 'tool_search']);
     const projected = f.events.filter((event) => event.type === 'text').map((event) => event.value);
     expect(projected.map((message) => message.role)).toEqual(['user', 'agent']);
     expect(projected.every((message) => !!message.entryId)).toBe(true);

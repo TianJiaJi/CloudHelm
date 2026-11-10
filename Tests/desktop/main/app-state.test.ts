@@ -36,6 +36,7 @@ class MemoryStore {
   removeLogs(terminalId: string): void { this.removedLogs.push(terminalId); }
   cleanupLogs(): void {}
   appendLog(): void {}
+  readLogPage = vi.fn((_id: string, cursor: number) => ({ text: 'owned operation output', nextCursor: cursor + 1, more: false }));
 }
 
 const openStates: AppState[] = [];
@@ -58,6 +59,55 @@ function conversation(state: AppState): TaskView {
 afterEach(() => {
   encryption.available = true;
   for (const state of openStates.splice(0)) state.close();
+});
+
+it('commits only an existing conversation/host binding and propagates storage failure', () => {
+  const f = setup(), task = f.state.createTask('Synthetic persistence', [], 'fixture', []);
+  task.hostIds = ['host'];
+  const value: import('@cloudhelm/contracts').OperationView = { id: 'durable-op', taskId: task.id, hostId: 'host',
+    kind: 'command', preview: 'synthetic', status: 'running', createdAt: 1 };
+  f.state.commitOperation(value);
+  expect(f.store.get('operations', value.id)).toMatchObject(value);
+  expect(() => f.state.commitOperation({ ...value, hostId: 'foreign' })).toThrow('scope');
+  expect(() => f.state.commitOperation({ ...value, taskId: 'foreign' })).toThrow('scope');
+  const put = vi.spyOn(f.store, 'put').mockImplementationOnce(() => { throw new Error('storage failed'); });
+  expect(() => f.state.commitOperation({ ...value, id: 'failed-write' })).toThrow('storage failed');
+  put.mockRestore(); f.state.close();
+  expect(() => f.state.commitOperation(value)).toThrow('scope');
+});
+
+it('reads only the requested owned operation log and rejects invalid recipients/cursors before storage', () => {
+  const { state, store } = setup();
+  const task = state.createTask('Synthetic log', [], 'fixture', []); task.hostIds = ['host'];
+  state.commitOperation({ id: 'op-log', taskId: task.id, hostId: 'host', kind: 'command', preview: 'synthetic', status: 'succeeded', createdAt: 1, logRef: 'reused-terminal' });
+  expect(state.readOperationLog(task.id, 'op-log', 12)).toEqual({ text: 'owned operation output', nextCursor: 13, more: false });
+  expect(store.readLogPage).toHaveBeenCalledExactlyOnceWith('operation:op-log', 12);
+  for (const cursor of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) expect(() => state.readOperationLog(task.id, 'op-log', cursor)).toThrow('cursor');
+  for (const [owner, id] of [['foreign', 'op-log'], [task.id, 'reused-terminal'], [undefined, undefined], [task.id, 'x'.repeat(201)]]) {
+    expect(() => state.readOperationLog(owner as string, id as string, 0)).toThrow('outside');
+  }
+  expect(store.readLogPage).toHaveBeenCalledTimes(1);
+  state.deleteTask(task.id);
+  expect(() => state.readOperationLog(task.id, 'op-log', 0)).toThrow('outside');
+});
+
+it('restores pre-1.0 Azure settings without moving credentials or falling back to the renamed provider', () => {
+  const store = new MemoryStore();
+  const legacy = { provider: 'azure-openai-responses', modelId: 'gpt-4', baseUrl: 'https://legacy.example.test', credentialRevision: 'old-revision' };
+  store.put('settings', 'model-profile', legacy);
+  store.put('settings', 'model-provider:azure-openai-responses', legacy);
+  const encrypted = Buffer.from('encrypted:synthetic-legacy-key').toString('base64');
+  store.put('secrets', 'model-key:azure-openai-responses', encrypted);
+  const { state } = setup(store);
+  expect(state.runtimeProfile()).toMatchObject({ ...legacy, apiKey: 'synthetic-legacy-key' });
+  const task = conversation(state);
+  expect(setup(store).state.conversationProfile(task)).toMatchObject({ ...legacy, apiKey: 'synthetic-legacy-key' });
+  expect(state.modelProviderSettings('azure')).toMatchObject({ hasKey: false });
+  expect(() => state.runtimeProfile({ provider: 'azure', modelId: 'gpt-4' })).toThrow('API Key');
+  expect(store.get('secrets', 'model-key:azure-openai-responses')).toBe(encrypted);
+  expect(store.get('secrets', 'model-key:azure')).toBeUndefined();
+  expect(store.get('settings', 'model-provider:azure')).toBeUndefined();
+  expect(store.get('settings', 'model-profile')).toEqual(legacy);
 });
 
 it('persists explicit continuation reasons and clears them on completion', () => {

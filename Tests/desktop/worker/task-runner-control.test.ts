@@ -76,12 +76,51 @@ describe('stop and explicit continuation', () => {
     } finally { await f.fixture.close(); }
   });
 
+  it('reuses an idle Agent terminal across explicit ordinary turns without inheriting a human shell', async () => {
+    const f = await setup();
+    try {
+      await f.runner.start();
+      const id = f.sessions[0]!.id;
+      expect(f.terminal.isAgentOwner(id)).toBe(true);
+      f.control.replayNext = true;
+      f.runner.message('再读取一次当前磁盘状态');
+      await vi.waitFor(() => {
+        expect(f.requests()).toBe(4);
+        expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered' });
+      }, { timeout: 15_000 });
+      expect(f.openTerminal).toHaveBeenCalledOnce();
+      expect(f.sessions[0]!.channel.commands).toEqual(['df -h', 'df -h']);
+      expect(f.sessions[0]!.channel.writes).toEqual([]);
+      expect(f.terminal.currentGeneration(id)).toBe(1);
+      expect(f.clearCredentials).toHaveBeenCalled();
+    } finally { f.runner.pause(); await f.fixture.close(); }
+  });
+
+  it('allocates a new terminal after explicit manual input and still tracks the retired human terminal', async () => {
+    const f = await setup();
+    try {
+      await f.runner.start();
+      const old = f.sessions[0]!.id;
+      f.runner.terminalInput(old, 'pwd\\n');
+      f.control.replayNext = true; f.runner.message('检查当前磁盘');
+      await vi.waitFor(() => {
+        expect(f.requests()).toBe(4);
+        expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered' });
+      }, { timeout: 15_000 });
+      expect(f.openTerminal).toHaveBeenCalledTimes(2);
+      expect(f.terminal.stateOf(old)).toBe('human'); expect(f.runner.ownsTerminal(old)).toBe(true);
+      expect(f.sessions[0]!.channel.commands).toEqual(['df -h']);
+      expect(f.sessions[0]!.channel.writes).toEqual(['pwd\\n']);
+      expect(f.sessions[1]!.channel.commands).toEqual(['df -h']);
+    } finally { f.runner.pause(); await f.fixture.close(); }
+  });
+
   it('automatically records a completed change without forcing a report continuation or replay', async () => {
     const f = await setup(true, 'mkdir -p /srv/service');
     try {
       await f.runner.start();
       expect(f.events.filter((event) => event.type === 'task-status').at(-1)).toMatchObject({ status: 'answered', resumeReason: undefined });
-      expect(f.events.filter((event) => event.type === 'verification-state').at(-1)).toMatchObject({ value: { status: 'unverified', reasonCode: 'goals-not-checked' } });
+      expect(f.events.filter((event) => event.type === 'verification-state').at(-1)).toMatchObject({ value: undefined });
       expect(f.events.filter((event) => event.type === 'work-report').at(-1)).toMatchObject({ report: { facts: { registration: 'automatic', goals: 'not-checked' } } });
       await expect(f.runner.resume()).rejects.toThrow('没有可自动继续');
       expect(f.requests()).toBe(2);

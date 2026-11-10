@@ -67,8 +67,11 @@ describe('native semantic compaction', () => {
     const pending = new Promise<FixtureResponse>((resolve) => { release = resolve; });
     const f = await setup(async () => pending);
     const run = f.session.prompt('continue');
+    let earlyFailure = '';
+    void run.catch((error: unknown) => { earlyFailure = error instanceof Error ? error.message : String(error); });
     const failed = expect(run).rejects.toThrow();
-    await vi.waitFor(() => expect(f.fixture.requests).toHaveLength(1), { timeout: 15_000 });
+    await vi.waitFor(() => expect(f.fixture.requests,
+      `Native startup: ${earlyFailure}; connections=${f.fixture.connections}; authorized=${f.requests.length}`).toHaveLength(1), { timeout: 15_000 });
     expect(f.session.isStreaming).toBe(true);
     await expect(f.session.prompt('concurrent prompt')).rejects.toThrow('正在处理');
     let settled = false;

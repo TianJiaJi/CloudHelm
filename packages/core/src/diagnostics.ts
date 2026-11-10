@@ -4,7 +4,7 @@ export interface DiagnosticEvent {
   authentication?: string; authenticationAttempts?: number; failureKind?: string; effects?: string;
   event: string;
   level?: 'debug' | 'info' | 'error';
-  taskId?: string; hostId?: string; operationId?: string; requestId?: string;
+  taskId?: string; hostId?: string; operationId?: string; requestId?: string; parentToolCallId?: string;
   text?: string; command?: string; cwd?: string; path?: string; role?: string;
   tool?: string; status?: string; ruleId?: string; runAs?: string; loginAs?: string;
   sessionId?: string; sha256?: string; model?: string; provider?: string;
@@ -17,7 +17,7 @@ export interface DiagnosticEvent {
 const textFields = ['event', 'taskId', 'hostId', 'operationId', 'requestId', 'text', 'command', 'cwd', 'path',
   'role', 'tool', 'status', 'ruleId', 'runAs', 'loginAs', 'sessionId', 'sha256', 'model', 'provider', 'authentication', 'failureKind', 'effects'] as const;
 const numericFields = ['durationMs', 'request', 'exitCode', 'size', 'authenticationAttempts', 'attempt', 'policyRevision', 'evidenceOmitted'] as const;
-const metadataFields = ['roundId', 'logicalRequestId', 'purpose', 'transport', 'resumeReason', 'reconciliationKind', 'classification', 'errorCode'] as const;
+const metadataFields = ['parentToolCallId', 'roundId', 'logicalRequestId', 'purpose', 'transport', 'resumeReason', 'reconciliationKind', 'classification', 'errorCode'] as const;
 
 /** Explicit allowlist; never pass a runtime call, credentials, or a model response through here. */
 export function safeDiagnostic(input: DiagnosticEvent): DiagnosticEvent {

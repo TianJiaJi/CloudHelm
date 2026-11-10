@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
-import { DesktopProcess, cleanupDesktopSmoke, forceKill, withTimeout } from './desktop-process.mjs';
+import { DesktopProcess, cleanupDesktopSmoke, forceKill, processRunning, withTimeout } from './desktop-process.mjs';
 
 async function fixture() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'cloudhelm-process-test-'));
@@ -89,6 +89,20 @@ describe('desktop smoke process lifecycle', () => {
       await expect(forceKill(4242)).resolves.toBeUndefined();
       kill.mockImplementation(() => { throw Object.assign(new Error('kill UNKNOWN'), { code: 'UNKNOWN' }); });
       await expect(forceKill(4242)).rejects.toThrow('kill UNKNOWN');
+    } finally { kill.mockRestore(); }
+  });
+
+  it('checks kernel liveness without treating access denial as observed exit', () => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      expect(processRunning(4242)).toBe(true);
+      expect(kill).toHaveBeenCalledWith(4242, 0);
+      kill.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+      expect(processRunning(4242)).toBe(false);
+      kill.mockImplementation(() => { throw Object.assign(new Error('denied'), { code: 'EPERM' }); });
+      expect(processRunning(4242)).toBe(true);
+      kill.mockImplementation(() => { throw new Error('unexpected'); });
+      expect(() => processRunning(4242)).toThrow('unexpected');
     } finally { kill.mockRestore(); }
   });
 

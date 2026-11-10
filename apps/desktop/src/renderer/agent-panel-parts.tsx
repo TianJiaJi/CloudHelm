@@ -1,4 +1,5 @@
-import type { AppSnapshot, OperationView, PlanStep, TaskView } from '@cloudhelm/contracts';
+import { jobNeedsAttention } from './execution-workspace-view.js';
+import { operationNeedsVerification, type AppSnapshot, type OperationView, type PlanStep, type TaskView } from '@cloudhelm/contracts';
 import { useId, useState } from 'react';
 import { MenuItem, MenuSurface } from './menu-surface.js';
 import { useMenuAnchor } from './composer-controls.js';
@@ -36,7 +37,7 @@ export function AgentPanelHeader({ snapshot, conversation, hostId }: {
 /** Only successful, ordinary operations may be visually condensed. Failures,
  * authentication feedback and uncertain outcomes keep their full existing UI. */
 export function canCondenseOperation(operation: OperationView): boolean {
-  return operation.status === 'succeeded' && !operation.privilege && !operation.reconciliation;
+  return operation.status === 'succeeded' && !operation.privilege && !operation.reconciliation && !jobNeedsAttention(operation);
 }
 
 export function OperationActivity({ operation, report }: { operation: OperationView; report(error: string): void }): React.JSX.Element {
@@ -49,22 +50,26 @@ export function OperationActivity({ operation, report }: { operation: OperationV
 }
 
 /** Plan contents and completion counts are projections of backend PlanStep values. */
-export function AgentPlan({ steps }: { steps: PlanStep[] }): React.JSX.Element | null {
+export function AgentPlan({ steps, operations = [] }: { steps: PlanStep[]; operations?: OperationView[] }): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false);
   const listId = useId();
   if (!steps.length) return null;
   const done = steps.filter((step) => step.status === 'done').length;
   const active = steps.find((step) => step.status === 'running');
   const blocked = steps.some((step) => step.status === 'blocked');
-  const label = blocked ? '计划受阻' : active ? '正在进行' : done === steps.length ? '计划已完成' : '执行计划';
+  const executing = operations.some((operation) => ['proposed', 'approved', 'running'].includes(operation.status));
+  const uncertain = operations.some((operation) => operationNeedsVerification(operation)
+    || operation.status === 'unknown' && !operation.reconciledAt);
+  const label = executing ? '操作尚未结束' : uncertain ? '执行结果待核对' : blocked ? '计划受阻'
+    : active ? '正在进行' : done === steps.length ? '步骤已处理' : '执行计划';
   return <section className={styles.planDock} aria-label="执行计划">
     <button type="button" className={styles.planToggle} aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}>
-      <Icon name={done === steps.length ? 'check' : 'plan'} size={14} /><span className={styles.planLabel}>{label}</span><small>{done}/{steps.length}</small>
+      <Icon name="plan" size={14} /><span className={styles.planLabel}>{label}</span><small>{done}/{steps.length}</small>
       <span className={styles.planPreview} title={active?.title ?? steps.find((step) => step.status !== 'done')?.title ?? steps.at(-1)?.title}>{active?.title ?? steps.find((step) => step.status !== 'done')?.title ?? steps.at(-1)?.title}</span>
       <span className={styles.planChevron} data-open={expanded}><Icon name="chevron" size={12} /></span>
     </button>
-    <ol id={listId} className={styles.planList} hidden={!expanded}>{steps.map((step) => <li key={step.id} data-state={step.status}>
-      <span className={styles.stepMark} aria-label={step.status === 'done' ? '已完成' : step.status === 'running' ? '进行中' : step.status === 'blocked' ? '受阻' : '待执行'}>{step.status === 'done' ? '✓' : step.status === 'blocked' ? '!' : '·'}</span><span className={styles.stepTitle}>{step.title}</span>
+    <ol id={listId} className={styles.planList} hidden={!expanded}>{steps.map((step, index) => <li key={step.id} data-state={step.status}>
+      <span className={styles.stepMark} aria-label={step.status === 'done' ? '步骤已处理' : step.status === 'running' ? '进行中' : step.status === 'blocked' ? '受阻' : '待执行'}>{step.status === 'blocked' ? '!' : index + 1}</span><span className={styles.stepTitle}>{step.title}</span>
     </li>)}</ol>
   </section>;
 }

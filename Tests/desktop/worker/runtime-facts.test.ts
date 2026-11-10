@@ -67,6 +67,6 @@ describe('authoritative bounded runtime facts', () => {
     const observed = operation('old', { status: 'succeeded', reconciledAt: 3,
       reconciliation: { kind: 'evidence', at: 3, outcome: 'succeeded', evidenceOperationIds: ['check'], explanation: 'observed result' } });
     expect(runtimeFacts([observed]).references[0]?.reconciliation).toMatchObject({ kind: 'evidence', outcome: 'succeeded' });
-    expect(recoveryContextMessage([observed], 'report')).toContain('Backend now assembles a basic report automatically');
+    expect(recoveryContextMessage([observed], 'report')).toContain('No report tool, extra checks or replay is required');
   });
 });

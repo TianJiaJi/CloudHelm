@@ -1,5 +1,6 @@
+import { terminalPresentation } from './execution-workspace-view.js';
 import { draftFor, insertTerminalReference, useMessageDrafts } from './message-drafts.js';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { HostView, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus } from '@cloudhelm/contracts';
 import { useUi, type WorkspaceTab } from './store.js';
@@ -195,7 +196,7 @@ export function App(): React.JSX.Element {
     if (tab.kind === 'files') return `${hostName(tab.hostId)} · 文件`;
     if (tab.kind === 'report') return 'AI 对话详情';
     const terminal = terminals[tab.terminalId];
-    return `${hostName(tab.hostId)}${terminal?.replacementTerminalId ? ' · 人工' : terminal?.taskId ? ' · AI' : ''}`;
+    return `${hostName(tab.hostId)}${terminal && snapshot ? ` · ${terminalPresentation(terminal, snapshot).label}` : ''}`;
   }
 
   function hostActions(host: HostView): ContextMenuEntry[] {
@@ -279,11 +280,14 @@ export function App(): React.JSX.Element {
 
   const sensitiveInput = snapshot?.inputs.find((input) => (input.kind === 'secret' || input.kind === 'otp') && !hiddenInputs.includes(input.id));
   const hosts = snapshot?.hosts.filter((host) => !host.archived) ?? [];
+  const groups = [...new Set(hosts.map((host) => host.group?.trim() || ''))].sort((a, b) => a && b ? a.localeCompare(b) : a ? -1 : b ? 1 : 0);
   return <div className={styles.app} onContextMenu={handleContextMenu}>
     <aside className={styles.sidebar}>
       <div className={styles.brand}><span className={styles.brandIcon}><Icon name="terminal" size={18} /></span>CloudHelm</div>
       <div className={styles.sectionHead}><span>远程主机</span><button title="添加主机" aria-label="添加主机" onClick={() => navigate(() => setDialog({ kind: 'host' }))}><Icon name="plus" /></button></div>
-      <div className={styles.hostList}>{hosts.map((host) => {
+      <div className={styles.hostList}>{groups.map((group) => <Fragment key={group}>
+        {(group || groups.length > 1) && <h3 className={styles.hostGroupLabel}>{group || '未分组'}</h3>}
+        {hosts.filter((host) => (host.group?.trim() || '') === group).map((host) => {
         const lineage = hostLineage(host, snapshot?.hosts ?? []);
         const working = snapshot?.conversations.find((item) => item.hostIds.some((id) => lineage.includes(id)) && ['running', 'waiting-review', 'waiting-user', 'recovering', 'human-control'].includes(item.status));
         return <div className={`${styles.hostRow} ${activeHostId && lineage.includes(activeHostId) ? styles.selected : ''}`} key={host.id}
@@ -298,7 +302,7 @@ export function App(): React.JSX.Element {
             <MenuEntryList entries={hostActions(host)} />
           </AnchoredMenu>}
         </div>;
-      })}{!hosts.length && <button className={styles.addHostEmpty} onClick={() => navigate(() => setDialog({ kind: 'host' }))}><Icon name="plus" />添加第一台主机</button>}</div>
+      })}</Fragment>)}{!hosts.length && <button className={styles.addHostEmpty} onClick={() => navigate(() => setDialog({ kind: 'host' }))}><Icon name="plus" />添加第一台主机</button>}</div>
       <div className={styles.sectionHead}><span>AI 对话历史</span><button title="新的自由对话" aria-label="新的自由对话" onClick={() => navigate(() => useUi.getState().newConversation(null))}><Icon name="plus" /></button></div>
       <div className={styles.historyList}>{snapshot && <HistoryList hosts={snapshot.hosts} select={(id) => navigate(() => useUi.getState().selectConversation(id))} menu={conversationActions} />}</div>
       <div className={styles.sidebarFoot}><button className={settingsOpen ? styles.selected : ''} onClick={() => navigate(() => useUi.getState().setSettingsOpen(!settingsOpen))}><Icon name="settings" />设置</button><small>{appVersion ? `CloudHelm · ${appVersion}` : 'CloudHelm'}</small></div>
@@ -309,13 +313,13 @@ export function App(): React.JSX.Element {
         onContextMenu={(event) => openContextMenu(event, tabActions(tab), `${tabLabel(tab)} 标签操作`)}
         onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
         onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); event.stopPropagation(); navigate(() => closeTab(tab)); } }}>
-        <button className={styles.tabSelect} onClick={() => navigate(() => useUi.getState().selectTab(tab.id))}><Icon name={tab.kind === 'terminal' ? 'terminal' : tab.kind === 'files' ? 'folder' : 'chat'} size={14} /><span>{tabLabel(tab)}</span></button>
+        <button className={styles.tabSelect} title={tab.kind === 'terminal' && terminals[tab.terminalId] && snapshot ? terminalPresentation(terminals[tab.terminalId]!, snapshot).title : tabLabel(tab)} onClick={() => navigate(() => useUi.getState().selectTab(tab.id))}><Icon name={tab.kind === 'terminal' ? 'terminal' : tab.kind === 'files' ? 'folder' : 'chat'} size={14} /><span>{tabLabel(tab)}</span></button>
         <button className={styles.tabClose} aria-label={`关闭 ${tabLabel(tab)}`} title="关闭标签" onClick={() => navigate(() => closeTab(tab))}><Icon name="close" size={12} /></button>
       </div>)}</div>{activeHost && <button title="新终端" aria-label="新终端" onClick={() => navigate(() => void connectHost(activeHost.id, true))}><Icon name="plus" /></button>}
         {!agentPanelOpen && <button className={styles.panelButton} onClick={useUi.getState().toggleAgentPanel}><Icon name="chat" />AI 助手{pendingCount > 0 && <b>{pendingCount}</b>}</button>}</header>
       {settingsOpen && snapshot ? <ModelSettingsDialog current={snapshot.profile} close={() => useUi.getState().setSettingsOpen(false)} report={setError} registerNavigationGuard={registerNavigationGuard} />
         : activeTerminal ? <div className={styles.terminalArea}>
-          <div className={styles.terminalToolbar}><span><i className={`${styles.dot} ${styles.online}`} />{hostName(activeTerminal.hostId)} · {activeTerminal.taskId ? 'AI 专用终端' : 'SSH 终端'}</span>
+          <div className={styles.terminalToolbar}><span title={snapshot ? terminalPresentation(activeTerminal, snapshot).title : undefined}><i className={`${styles.dot} ${styles.online}`} />{hostName(activeTerminal.hostId)} · {snapshot ? terminalPresentation(activeTerminal, snapshot).label : 'SSH 终端'}</span>
             <TerminalControl key={activeTerminal.id} terminal={activeTerminal} report={reportTerminalError} />
             <button title="引用选区，或最后一条命令及其全部输出" onClick={quoteTerminal}>引用输出</button>
             <button onClick={() => useUi.getState().openFiles(activeTerminal.hostId)}><Icon name="folder" size={13} />文件</button>

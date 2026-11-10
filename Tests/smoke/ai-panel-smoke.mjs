@@ -1,5 +1,7 @@
 /* global window, document, structuredClone */
 import assert from 'node:assert/strict';
+import { checkExecutionWorkspace } from './check-execution-workspace.mjs';
+import { checkTurnFolding } from './check-turn-folding.mjs';
 import console from 'node:console';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -108,15 +110,19 @@ try {
   assert.equal(await thinkingToggle.getAttribute('aria-expanded'), 'true', 'Stream deltas must preserve the fold state');
   await thinkingToggle.click();
   assert.equal(await thinking.getByText(/随后核对监听端口与健康检查/u).count(), 0);
-  await thinking.locator('summary').click();
-  assert.equal(await thinkingToggle.isVisible(), false, 'The entire thinking process can also be folded');
+  assert.equal(await thinking.locator('summary').count(), 0, 'Thinking must have only one folding control');
+  assert.equal(await thinkingToggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(await thinkingToggle.isVisible(), true, 'The single control remains available when collapsed');
   await page.evaluate(() => {
     const snapshot = window.fixture.aiPanelSnapshot;
     snapshot.reasoningProgress[snapshot.conversations[0].id].reasoning.text += '\n新的增量不会重新打开已收起的思考组。';
     window.fixture.inject({ type: 'snapshot', value: structuredClone(snapshot) });
   });
-  assert.equal(await thinkingToggle.isVisible(), false, 'Stream deltas must not reopen the folded group');
-  await thinking.locator('summary').click();
+  assert.equal(await thinkingToggle.getAttribute('aria-expanded'), 'false', 'Stream deltas must not reopen collapsed thinking');
+  assert.equal(await thinking.getByText(/新的增量不会重新打开已收起的思考组/u).count(), 0);
+  await thinkingToggle.click();
+  await thinking.getByText(/新的增量不会重新打开已收起的思考组/u).waitFor();
+  await thinkingToggle.click();
   const plan = panel.getByRole('region', { name: '执行计划', exact: true });
   await plan.getByRole('button').click();
   await plan.getByText('汇总检查结果', { exact: true }).waitFor();
@@ -202,6 +208,8 @@ try {
   await panel.getByRole('button', { name: '历史对话', exact: true }).click();
   await page.getByRole('menu', { name: '历史对话', exact: true }).waitFor();
   await page.keyboard.press('Escape');
+  await checkTurnFolding(page, panel, (name) => page.screenshot({ path: path.join(output, name) }));
+  await checkExecutionWorkspace(page, panel, (name) => page.screenshot({ path: path.join(output, name) }));
   assert.deepEqual(errors, []);
   console.log(`AI panel smoke passed. Screenshots: ${output}`);
 } catch (error) {

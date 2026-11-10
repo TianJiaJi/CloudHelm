@@ -6,8 +6,8 @@ export async function checkMiddleClick(page, screenshot) {
   await page.getByRole('textbox', { name: '给 AI 的消息' }).waitFor();
   await page.getByRole('button', { name: /生产服务器 ubuntu@/ }).click();
   await page.getByRole('button', { name: /开发服务器 deployer@/ }).click();
-  const dev = page.getByRole('button', { name: '开发服务器', exact: true });
-  const prod = page.getByRole('button', { name: '生产服务器', exact: true });
+  const dev = page.getByRole('button', { name: '开发服务器 · 人工 · 已绑定', exact: true });
+  const prod = page.getByRole('button', { name: '生产服务器 · 人工 · 已绑定', exact: true });
   await dev.waitFor();
   const beforeClass = await dev.locator('..').getAttribute('class');
   await prod.click({ button: 'middle' });
@@ -31,7 +31,7 @@ export async function checkMiddleClick(page, screenshot) {
     window.fixture.inject({ type: 'snapshot', value: snapshot });
   });
   await page.getByRole('button', { name: '打开 AI 专用终端' }).click();
-  const ai = page.getByRole('button', { name: '开发服务器 · AI', exact: true });
+  const ai = page.getByRole('button', { name: '开发服务器 · AI · 操作', exact: true });
   await dev.click();
   await ai.click({ button: 'middle' });
   const confirm = page.getByRole('alertdialog', { name: '断开正在运行的 AI 终端？' });

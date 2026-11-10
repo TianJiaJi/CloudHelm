@@ -17,6 +17,6 @@ export function TerminalControl({ terminal, report }: { terminal: TerminalViewSt
     try { await capture(() => window.cloudhelm.stopOperation(terminal.taskId!), report); }
     finally { submitting.current = false; setBusy(false); }
   }
-  return <button type="button" disabled={busy} title="停止本轮 AI，并请求终止正在执行的命令；不会发起新对话"
+  return <button type="button" disabled={busy} title="停止本会话 AI，并请求停止本会话全部执行中的命令（含后台）；不会发起新对话，信号确认不代表进程退出"
     onClick={() => void stop()}>{busy ? '正在停止…' : '停止'}</button>;
 }

@@ -10,7 +10,7 @@
 | 界面 | React 19、CSS Modules、CSS 变量、Zustand |
 | 工程 | pnpm workspace、electron-vite、electron-builder |
 | 终端与 SSH | xterm.js 6、ssh2 1.17 |
-| 模型 | `@earendil-works/pi-ai`、`@earendil-works/pi-agent-core` 0.99.1 |
+| 模型 | `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` 1.5.0（固定版本） |
 | AI 审核 | Pi 分类接口调用 Vercel Gateway 的 `typesafe-ai/jev`，或当前模型独立审核 |
 | Shell 分析 | web-tree-sitter 与随应用分发的 Bash WASM |
 | 数据与校验 | SQLite、better-sqlite3、Drizzle、TypeBox |
@@ -95,6 +95,14 @@ Agent 终端通过结构化进程通道执行普通命令：字面量命令直�
 主进程校验引用的主机绑定，为每条消息生成独立引用实例；Application 的 `prepareMessage` 按模型容量、当前上下文、回复预留量决定是否压缩，Adapters 使用当前 Pi 模型进行无工具的独立总结。容量采用保守 UTF-8 估算，并在准备结束时复核会话增长；没有提供商级精确 tokenizer 的保证。超大原文分段再合并，不静默截断；失败或取消不派发部分消息。SQLite 发送回执记录 preparing/dispatching/sent/failed，结果不明的派发拒绝自动重放。
 
 迁移 0005 新增引用正文表，原文与可选总结按需读取，不放入全量界面快照。Pi 原生用户 entry ID 通过 `cloudhelm-message-document` 自定义记录关联结构化展示，模型实际收到展开后的内容；恢复标签不解析正文。终端关闭或重启后已发送引用仍可读取，旧纯文本消息保持兼容。引用及总结是资料，远端变更仍经过原有 SafetyGate。
+
+### 执行工作区与查询编排
+
+- `ConversationTerminalPool` 按会话／主机／登录／连接／终端代次管理有界租约。`ExecutionJobs` 独立保存可信启动、进程序号、停止请求和真实退出；`BackgroundOperations` 在可信 spawn 后脱离模型 abort，但保留精确执行租约与主机未决写锁。停止使用绑定进程及私有 nonce 的专用 SIGINT 协议，不把 `kill` 文本发给 Shell。
+- 操作提议、批准和 pending 记录先获得 Main SQLite 确认，再允许远端派发。队列入队、原生选择和历史回执亦先持久化并重查授权；取消／过期的恢复记录不重投递。后台事实进入后续已授权请求，不主动唤醒模型。
+- 工具结果仅显式公开有限 JSON；私人 `details` 不自动提升。官方搜索和 Codemode 都基于明确的 query capability、当前授权和执行时复核；修改／停止／提权／澄清为 model-only。官方 QuickJS 显式 `models:false`，每脚本 15 秒、32 调用、4 个在途查询，全进程最多 2 脚本。原生外层工具仍串行，内层并发只开放给有界只读查询；脚本缓存仅存授权引用／游标，成功且授权未变才提交。
+- `PiLifecycle` 只观察元数据，后台生成运行／调用标识，以宿主异步上下文绑定父子调用，不能靠复用的模型 call ID 或不存在的结束参数关联。`AgentActivityStore` 的活动记录不能批准、清除风险或修改作业；`agent_settled` 与远端退出不同。
+- Renderer 的执行工作区、终端用途、队列和费用都投影后端状态。`OperationLog` 通过接收方检查后的分页 IPC 读取 `operation:<id>`，不读取复用终端的混合缓冲区；背景读取错误内联呈现，不抢焦点。
 
 ### 会话与容量
 

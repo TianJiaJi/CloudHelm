@@ -23,10 +23,14 @@ export async function checkVerificationChecks(page, screenshot) {
   });
   await page.getByRole('button', { name: /检查项展示回归/u }).click();
   const panel = page.locator('aside[class*="agentPanel"]');
-  await panel.getByText('已登记 · 有未验证项', { exact: true }).waitFor();
-  for (const text of ['历史模型判断：通过 · 文件状态', '历史模型判断：失败 · 应用健康', '历史模型判断：无法确定 · 外部入口']) await panel.getByText(text, { exact: true }).waitFor();
-  await panel.getByText('观察：HTTP 503', { exact: true }).waitFor();
-  await panel.getByText(/other-write：需要私有环境中的人工检查/u).waitFor();
+  assert.equal(await panel.getByText('本轮结果', { exact: true }).count(), 0, 'No second result card');
+  assert.equal(await panel.getByText('历史报告 · 模型判断', { exact: true }).count(), 0, 'Evidence is not appended to the answer');
+  await panel.getByRole('button', { name: '展开对话详情', exact: true }).click();
+  const details = page.locator('section[class*="reportPage"]');
+  await details.getByText('历史报告 · 模型判断', { exact: true }).waitFor();
+  for (const text of ['历史模型判断：通过 · 文件状态', '历史模型判断：失败 · 应用健康', '历史模型判断：无法确定 · 外部入口']) await details.getByText(text, { exact: true }).waitFor();
+  await details.getByText('观察：HTTP 503', { exact: true }).waitFor();
+  await details.getByText(/other-write：需要私有环境中的人工检查/u).waitFor();
   assert.equal(await panel.getByRole('button', { name: '继续核验', exact: true }).count(), 0, 'An honest unverified report must not create an automatic continuation');
   await screenshot('verification-checks-dark.png');
   await page.emulateMedia({ colorScheme: 'light' }); await screenshot('verification-checks-light.png');
@@ -35,8 +39,8 @@ export async function checkVerificationChecks(page, screenshot) {
     delete report.version; delete report.checks; delete report.unverifiedChanges;
     window.fixture.inject({ type: 'snapshot', value: structuredClone(snapshot) });
   });
-  await panel.getByText('历史格式报告：未包含逐项检查，不自动赋予新版检查结论。', { exact: true }).waitFor();
-  assert.equal(await panel.getByText('历史模型判断：失败 · 应用健康', { exact: true }).count(), 0);
+  await details.getByText('历史格式报告：未包含逐项检查，不自动赋予新版检查结论。', { exact: true }).waitFor();
+  assert.equal(await details.getByText('历史模型判断：失败 · 应用健康', { exact: true }).count(), 0);
   await checkVerificationV3(page, panel, screenshot);
   await page.emulateMedia({ colorScheme: 'dark' }); await page.reload();
 }
@@ -63,22 +67,26 @@ async function checkVerificationV3(page, panel, screenshot) {
     window.fixture.callsBeforeRebuild = window.fixture.calls.length;
     window.fixture.inject({ type: 'snapshot', value: structuredClone(snapshot) });
   });
-  for (const text of ['后端自动整理', '执行完成；未启动的尝试之后已有成功运行',
-    '运行检查通过，输出已记录；业务输出要求未独立比较', '影响未独立评估，不否定已通过的目标检查', '执行观察：通过 · 脚本运行',
-    '本报告没有文件内容读回证据；ls 只能说明目录项，不能证明内容已核对。']) await panel.getByText(text, { exact: true }).waitFor();
-  await panel.getByRole('button', { name: '查看完整记录', exact: true }).click();
+  assert.equal(await panel.getByText('本轮结果', { exact: true }).count(), 0);
+  assert.equal(await panel.getByRole('button', { name: '继续核验', exact: true }).count(), 0);
   const details = page.locator('section[class*="reportPage"]');
-  await details.getByText('此前报告与修订（最近 1 份）', { exact: true }).click();
+  await details.getByText('执行证据', { exact: true }).waitFor();
+  await screenshot('result-no-duplicate-card.png');
+  await details.getByText('具体检查（1）', { exact: true }).click();
+  await details.getByText('执行观察：通过 · 脚本运行', { exact: true }).waitFor();
+  await details.getByText('已恢复的早期尝试（1）', { exact: true }).waitFor();
+  assert.equal(await details.getByText('影响未独立评估，不否定已通过的目标检查', { exact: true }).count(), 0);
+  await details.getByText('历史记录与修订（最近 1 份）', { exact: true }).click();
   await details.getByText('历史模型判断：失败 · 应用健康', { exact: true }).waitFor();
-  await panel.getByRole('button', { name: '仅按已有记录重新整理', exact: true }).click();
-  const pending = panel.getByRole('button', { name: '正在整理已有记录…', exact: true });
+  await details.getByRole('button', { name: '仅按已有记录重新整理', exact: true }).click();
+  const pending = details.getByRole('button', { name: '正在整理已有记录…', exact: true });
   await pending.waitFor(); assert.equal(await pending.isDisabled(), true);
   await pending.evaluate((element) => element.click());
   assert.equal(await page.evaluate(() => window.fixture.rebuildInvocations.length), 1, 'Duplicate clicks must not issue another rebuild');
   assert.equal(await page.evaluate(() => window.fixture.calls.length === window.fixture.callsBeforeRebuild), true,
     'Rebuilding a report must not start/send/resume a conversation');
   await page.evaluate(() => window.fixture.finishRebuild());
-  const ready = panel.getByRole('button', { name: '仅按已有记录重新整理', exact: true });
+  const ready = details.getByRole('button', { name: '仅按已有记录重新整理', exact: true });
   await ready.waitFor(); assert.equal(await ready.isEnabled(), true);
   await page.evaluate(() => { window.cloudhelm.rebuildVerificationReport = window.fixture.originalRebuild; });
   await page.emulateMedia({ colorScheme: 'dark' }); await screenshot('verification-v3-dark.png');

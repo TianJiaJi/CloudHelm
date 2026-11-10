@@ -25,6 +25,13 @@ function setup() {
 }
 
 describe('SafetyGate pre-commit authorization', () => {
+  it('rejects process control whose reviewed text does not match its bound signal', async () => {
+    const fixture = setup();
+    const result = await fixture.gate.execute({ ...operation, kind: 'command', command: 'df -h',
+      processControl: { kind: 'interrupt', jobId: 'job', targetOperationId: 'target', pid: 42, processSequence: 1, connectionId: 'connection:1' } });
+    expect(result.decision).toMatchObject({ verdict: 'error', ruleId: 'invalid-process-control' });
+    expect(fixture.requestApproval).not.toHaveBeenCalled(); expect(fixture.execute).not.toHaveBeenCalled();
+  });
   it('asks a human when the configured AI reviewer fails', async () => {
     const fixture = setup();
     const pending = fixture.gate.execute(operation);

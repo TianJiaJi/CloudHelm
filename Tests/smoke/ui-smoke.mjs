@@ -1,3 +1,4 @@
+import { checkModelButtonHover } from './check-model-button-hover.mjs';
 import { checkApprovalContrast } from './check-approval-contrast.mjs';
 import { checkMessageReferences } from './check-message-references.mjs';
 import { checkRequestBudget } from './check-request-budget.mjs';
@@ -11,6 +12,7 @@ import { checkComposer } from './check-composer.mjs';
 import { checkClarification } from './check-clarification.mjs';
 import { checkMiddleClick } from './check-middle-click.mjs';
 import assert from 'node:assert/strict';
+import { configureHostEditor, assertHostEditorSaved } from './check-host-editor.mjs';
 import { checkHostTestControls } from './host-test-ui-probe.mjs';
 import { checkConversationTimeline } from './check-conversation-timeline.mjs';
 import { checkViewportLayout } from './check-viewport-layout.mjs';
@@ -91,6 +93,22 @@ async function exerciseErrors() {
   await page.getByRole('alert').filter({ hasText: '系统凭据存储暂不可用' }).waitFor();
   assert.equal(await page.getByRole('alertdialog').count(), 0);
   await page.evaluate(() => Object.assign(window.cloudhelm, window.fixture.restoreErrorMethods));
+  const key = page.locator('input#model-api-key');
+  assert.equal(await key.inputValue(), '');
+  assert.equal(await key.getAttribute('placeholder'), '••••••••••••••••');
+  await page.getByText('已保存密钥 · 留空保留，输入新 Key 可替换。圆点仅表示已保存，不是密钥内容。', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '显示新输入的 API Key', exact: true }).isDisabled(), true);
+  await key.fill('fixture-replacement-api-key');
+  await page.getByRole('button', { name: '保存为默认', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: /^✓ 已保存为默认模型，新对话将使用此配置。$/u }).waitFor();
+  assert.equal(await key.inputValue(), '', 'A saved secret must be removed from the input value');
+  assert.equal(await key.getAttribute('placeholder'), '••••••••••••••••');
+  assert.equal((await calls()).filter((call) => call.kind === 'profile').at(-1).profile.apiKey, 'fixture-replacement-api-key');
+  await page.getByRole('button', { name: '保存为默认', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: /^✓ 已保存为默认模型，新对话将使用此配置。$/u }).waitFor();
+  assert.equal((await calls()).filter((call) => call.kind === 'profile').at(-1).profile.apiKey, undefined, 'Placeholder dots must never be submitted as a new secret');
+  await screenshot('saved-api-key-placeholder.png');
+  await checkModelButtonHover(page, screenshot);
   await page.getByRole('button', { name: '返回终端' }).click();
 }
 
@@ -99,13 +117,13 @@ async function exerciseConversation() {
   assert.equal(await page.getByText('创建任务').count(), 0);
   assert.equal(await page.getByText('新建任务').count(), 0);
   await page.getByRole('button', { name: /生产服务器 ubuntu@/ }).click();
-  await page.getByText('生产服务器 · SSH 终端').waitFor();
+  await page.locator('[class*="terminalToolbar"]').getByText('生产服务器 · 人工 · 已绑定', { exact: true }).waitFor();
   await page.getByRole('textbox', { name: '给 AI 的消息' }).fill('帮我把这个服务装成 Docker 并启动');
   await page.getByRole('button', { name: '发送消息' }).click();
   await page.getByText('正在处理', { exact: true }).first().waitFor();
   assert.equal((await calls()).find((call) => call.kind === 'start').input.hostId, 'prod');
   await page.evaluate(() => window.fixture.inject({ type: 'terminal-state', terminalId: 'agent1', hostId: 'prod', taskId: 'chat2', state: 'agent' }));
-  assert.equal(await page.getByText('生产服务器 · SSH 终端').count(), 1);
+  assert.equal(await page.locator('[class*="terminalToolbar"]').getByText('生产服务器 · 人工 · 已绑定', { exact: true }).count(), 1);
   await page.evaluate(() => window.fixture.decorate());
   await page.getByText('需要你确认安装系统依赖').waitFor();
   await page.getByText('待批准的完整操作').waitFor();
@@ -132,7 +150,7 @@ async function exerciseConversation() {
   await page.getByRole('textbox', { name: '给 AI 的消息' }).fill('草稿不会丢');
   await page.getByRole('button', { name: /开发服务器 deployer@/ }).click();
   assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).textContent(), '');
-  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  await page.getByRole('button', { name: '生产服务器 · 人工 · 已绑定', exact: true }).click();
   assert.equal(await page.getByRole('textbox', { name: '给 AI 的消息' }).textContent(), '草稿不会丢');
 }
 
@@ -162,7 +180,7 @@ async function exerciseNavigation() {
   await page.getByRole('menu', { name: '审核模型' }).getByRole('menuitem', { name: '当前对话模型（默认）' }).click();
   await page.getByRole('tab', { name: 'API Key' }).click();
   await page.locator('#model-base-url').fill('https://proxy.example.com/v1');
-  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  await page.getByRole('button', { name: '生产服务器 · 人工 · 已绑定', exact: true }).click();
   await page.getByRole('dialog', { name: '还有未保存的更改' }).waitFor();
   await page.getByRole('button', { name: '继续编辑' }).click();
   assert.equal(await page.locator('#model-base-url').inputValue(), 'https://proxy.example.com/v1');
@@ -171,7 +189,7 @@ async function exerciseNavigation() {
 }
 
 async function exerciseInputIsolation() {
-  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  await page.getByRole('button', { name: '生产服务器 · 人工 · 已绑定', exact: true }).click();
   await page.getByRole('button', { name: '打开 AI 专用终端' }).click();
   await page.evaluate(() => window.fixture.inject({ type: 'terminal-data', terminalId: 'agent1', data: '\u001b[6n' }));
   await page.waitForFunction(() => window.fixture.calls.some((call) => call.kind === 'protocol'));
@@ -182,7 +200,7 @@ async function exerciseInputIsolation() {
   const keyboardCalls = await calls();
   assert.ok(keyboardCalls.findIndex((call) => call.kind === 'stop-terminal') < keyboardCalls.findIndex((call) => call.kind === 'input'));
   await page.evaluate(() => window.fixture.running());
-  await page.getByRole('button', { name: '关闭 生产服务器 · AI', exact: true }).click();
+  await page.getByRole('button', { name: '关闭 生产服务器 · 人工 · 操作', exact: true }).click();
   await page.getByRole('alertdialog').waitFor();
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.evaluate(() => window.fixture.addInput());
@@ -237,6 +255,9 @@ async function exerciseAsyncErrors() {
     snapshot.conversations[0].report = { summary: '已经完成 Unauthorized 错误排查，服务正常。', access: [], evidenceOperationIds: [], changes: [], recovery: [] };
     window.fixture.inject({ type: 'snapshot', value: snapshot });
   });
+  assert.equal(await page.getByText('本轮结果', { exact: true }).count(), 0);
+  assert.equal(await page.getByText('已经完成 Unauthorized 错误排查，服务正常。', { exact: true }).isVisible(), false);
+  await page.getByRole('button', { name: '展开对话详情', exact: true }).click();
   await page.getByText('已经完成 Unauthorized 错误排查，服务正常。', { exact: true }).waitFor();
   assert.equal(await page.getByRole('alertdialog').count(), 0);
 }
@@ -250,7 +271,7 @@ async function exerciseHostControls() {
     window.fixture.inject({ type: 'snapshot', value: singleHost });
     window.fixture.originalPickKey = window.cloudhelm.selectPrivateKey;
     window.fixture.originalEditHost = window.cloudhelm.editHost;
-    window.cloudhelm.editHost = async (id, draft) => { window.fixture.savedHost = { id, draft }; };
+    window.cloudhelm.editHost = async (id, draft, secret, credentials) => { window.fixture.savedHost = { id, draft, secret, credentials }; };
   });
   const trigger = page.getByRole('button', { name: '生产服务器 更多操作' });
   await trigger.click();
@@ -279,6 +300,7 @@ async function exerciseHostControls() {
   await trigger.click();
   await page.getByRole('menuitem', { name: '编辑主机' }).click();
   const dialog = page.getByRole('dialog', { name: '编辑 SSH 主机' });
+  await dialog.getByRole('tab', { name: '身份验证', exact: true }).click();
   await dialog.getByLabel('认证方式').selectOption('private-key');
   const keyPath = dialog.getByLabel('私钥路径');
   await keyPath.fill('/Users/demo/.ssh/original');
@@ -289,7 +311,9 @@ async function exerciseHostControls() {
   await dialog.getByRole('button', { name: '选择文件' }).click();
   await dialog.getByRole('button', { name: '选择文件' }).waitFor();
   assert.equal(await keyPath.inputValue(), '/Users/demo/.ssh/server key', 'Cancel must preserve the selected path');
+  await configureHostEditor(page, dialog, screenshot);
   await checkHostTestControls(page, dialog);
+  await dialog.getByRole('tab', { name: '身份验证', exact: true }).click();
   await screenshot('host-private-key-dark.png');
   await page.emulateMedia({ colorScheme: 'light' });
   await page.setViewportSize({ width: 980, height: 640 });
@@ -305,6 +329,7 @@ async function exerciseHostControls() {
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
   assert.deepEqual(await page.evaluate(() => window.fixture.savedHost.draft.privateKeyPath), '/Users/demo/.ssh/server key');
   await dialog.waitFor({ state: 'detached' });
+  await assertHostEditorSaved(page);
   await page.evaluate(() => {
     window.cloudhelm.selectPrivateKey = window.fixture.originalPickKey;
     window.cloudhelm.editHost = window.fixture.originalEditHost;
@@ -333,8 +358,8 @@ try {
   await checkTerminalLayout(page, screenshot);
   await exerciseNavigation();
   await exerciseInputIsolation();
-  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
-  await page.getByRole('button', { name: '关闭 生产服务器', exact: true }).click();
+  await page.getByRole('button', { name: '生产服务器 · 人工 · 已绑定', exact: true }).click();
+  await page.getByRole('button', { name: '关闭 生产服务器 · 人工 · 已绑定', exact: true }).click();
   assert.equal((await calls()).filter((call) => call.kind === 'close').length, 1);
   await page.emulateMedia({ colorScheme: 'light' });
   await screenshot('main-light.png');

@@ -7,7 +7,7 @@ import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { openAiFixture } from './openai-sse-fixture.js';
 
 describe('AI denial manual review', () => {
-  it('rebinds a completed conversation to a new terminal and asks for one exact operation', async () => {
+  it.each([false, true])('requires fresh exact approval when reusing idle or replacing a human terminal (takeover: %s)', async (takeover) => {
     let turns = 0;
     let reviews = 0;
     const fixture = await openAiFixture(async (request) => {
@@ -48,13 +48,16 @@ describe('AI denial manual review', () => {
       expect(execute).not.toHaveBeenCalled();
       expect(reviews).toBe(1);
       expect(fixture.requests.find((request) => request.review)?.model).toBe('auditor');
-      expect(terminal.isAgentOwner(opened[0]!)).toBe(false);
+      expect(terminal.isAgentOwner(opened[0]!)).toBe(true);
+      if (takeover) runner.terminalInput(opened[0]!, 'pwd\n');
+      expect(terminal.isAgentOwner(opened[0]!)).toBe(!takeover);
       await runner.requestAiDenialReview(denied.value.id);
-      expect(openTerminal).toHaveBeenCalledTimes(2);
+      expect(openTerminal).toHaveBeenCalledTimes(takeover ? 2 : 1);
+      const approvedTerminal = opened[takeover ? 1 : 0]!;
       expect(requestApproval).toHaveBeenCalledOnce();
       expect(execute).toHaveBeenCalledOnce();
       expect(execute.mock.calls[0]![0]).toMatchObject({ command: 'python3 -c "print(1)"',
-        scope: { terminalId: opened[1], terminalGeneration: terminal.currentGeneration(opened[1]!) - 1 } });
+        scope: { terminalId: approvedTerminal, terminalGeneration: terminal.currentGeneration(approvedTerminal) - 1 } });
       expect(execute.mock.calls[0]![0].id).not.toBe(denied.value.id);
       await expect(runner.requestAiDenialReview(denied.value.id)).rejects.toThrow('不可复核');
       runner.setReviewProfile({ selection: { kind: 'model', provider: 'cloudhelm-custom', modelId: 'auditor-2' },

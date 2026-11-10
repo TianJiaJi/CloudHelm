@@ -4,7 +4,7 @@ import type { RawTerminal } from '@cloudhelm/core';
 import type { OperationView, TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
-import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
+import { openAiFixture } from './openai-sse-fixture.js';
 
 const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', port: 22, username: 'user', auth: 'agent',
   status: 'connected', defaultMode: 'ask', protectedPaths: [], policyRevision: 1 };
@@ -17,12 +17,9 @@ it.each(['passed', 'wrong-output', 'truncated', 'no-notes'] as const)('finishes 
   const expected = '*\n**\n***\n'; const output = scenario === 'wrong-output' ? 'wrong\n' : expected;
   const fixture = await openAiFixture(async (request) => {
     requests++;
-    if (requests === 1) return { calls: [{ id: 'run', name: 'run_remote', arguments: { hostId: 'host', command: 'python3 /srv/test.py' } }] };
-    if (requests === 2 && scenario !== 'no-notes') {
-      const operationId = /Operation ID: ([^\n]+)/u.exec(fixtureMessageText(request.messages.find((message) => message.tool_call_id === 'run')!))![1]!;
-      return { calls: [{ id: 'notes', name: 'submit_verification', arguments: { version: 3,
-        summary: '本次输出与影响分开记录', checks: [{ kind: 'run-output', operationId, expectedOutput: expected }] } }] };
-    }
+    expect(request.tools!.some((tool) => tool.function.name === 'submit_verification')).toBe(false);
+    if (requests === 1) return { calls: [{ id: 'run', name: 'run_remote', arguments: { hostId: 'host', command: 'python3 /srv/test.py',
+      ...(scenario !== 'no-notes' ? { outputExpectation: { expectedOutput: expected } } : {}) } }] };
     return { text: '根据已有记录说明输出结果和影响限制，不再重复运行。' };
   });
   const view = task(); const events: Parameters<TaskSignals['event']>[0][] = [];
@@ -35,12 +32,12 @@ it.each(['passed', 'wrong-output', 'truncated', 'no-notes'] as const)('finishes 
   try {
     await runner.start();
     expect(fixture.errors).toEqual([]);
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(requests).toBe(scenario === 'no-notes' ? 2 : 3);
+    expect(execute, `Native startup: requests=${requests}, status=${view.status}, summary=${view.summary ?? ''}`).toHaveBeenCalledTimes(1);
+    expect(requests).toBe(2);
     expect(view.status).toBe('answered'); expect(view.resumeReason).toBeUndefined();
     expect(view.report?.facts).toMatchObject({ execution: 'succeeded', impact: 'not-assessed',
       goals: scenario === 'passed' ? 'passed' : scenario === 'wrong-output' ? 'failed' : scenario === 'truncated' ? 'inconclusive' : 'execution-observed',
-      registration: scenario === 'no-notes' ? 'automatic' : 'submitted' });
+      registration: 'automatic' });
     expect(view.verificationRound).toMatchObject({ closed: true, operationIds: expect.any(Array) });
     expect(view.verificationRound?.operationIds).toHaveLength(1);
     await expect(runner.resume()).rejects.toThrow('没有可自动继续');
@@ -63,12 +60,14 @@ it('keeps a legacy missing-report round when an ordinary message asks to finish 
     // start(true) restores the runner to paused; emulate persisted answered/report at the dispatch boundary.
     Object.assign(runner, { status: 'answered', resumeReason: 'report', needsRecovery: false });
     const roundId = view.verificationRound!.id;
+    await expect(runner.resume()).rejects.toThrow('没有可自动继续');
+    expect(fixture.requests).toHaveLength(0); // Legacy report metadata never starts a model request.
     runner.message('请补一下验收报告');
     await vi.waitFor(() => expect(view.status).toBe('answered'), { timeout: 15000 });
     expect(fixture.errors).toEqual([]); expect(execute).not.toHaveBeenCalled();
     expect(view.verificationRound).toMatchObject({ id: roundId, operationIds: ['write'], closed: true });
     expect(view.report?.facts?.operations).toEqual([expect.objectContaining({ operationId: 'write' })]);
-    expect(view.verificationState?.operationIds).toContain('write');
+    expect(view.verificationState).toBeUndefined();
     expect(view.resumeReason).toBeUndefined();
   } finally { runner.dispose(); await fixture.close(); }
 });

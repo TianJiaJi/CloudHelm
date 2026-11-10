@@ -1,10 +1,10 @@
 import { MessagePreparations } from './message-preparations.js';
 import { ShellMarkerParser } from '@cloudhelm/adapters';
-import { StringDecoder } from 'node:string_decoder';
+import { createTerminalCodec } from '@cloudhelm/adapters';
 import { PrivilegedRuntime } from './privileged-runtime.js';
 import { safeDiagnostic } from '@cloudhelm/core';
 import { eventDiagnostic, reservationDiagnostic } from './diagnostic-events.js';
-import { HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
+import { HostEnvironmentRegistry, HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -16,38 +16,57 @@ import { assertCommittedRiskAcceptance } from './risk-acceptance.js';
 import { OperationInputBridge } from './operation-input-bridge.js';
 import { testModelConnection } from '@cloudhelm/adapters';
 import { FileOperationExecutor } from './file-operation-executor.js';
+import { ManualSessionAuthorization } from './manual-session-authorization.js';
+import { runtimeSshCredentials } from '@cloudhelm/contracts/runtime';
 import { testHostConnection } from './host-connection-test.js';
+import { InputCommitClient } from './input-commit-client.js';
+import { OperationCommitClient } from './operation-commit-client.js';
 import { RequestBudgetClient } from './request-budget-client.js';
 
 export class WorkerServer {
   private readonly budget: RequestBudgetClient;
+  private readonly operationCommits: OperationCommitClient;
+  private readonly inputCommits: InputCommitClient;
   private readonly deliveredMessages = new Set<string>();
   private readonly preparations: MessagePreparations;
   private readonly logRequests = new Map<string, { resolve(value: LogPage): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   private readonly ssh = new SshTransport((hostId) => {
+    this.manualSessions?.disconnect(hostId);
     for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(hostId)) {
       this.preparations.cancelTask(runner.task.id); runner.pause();
     }
     this.terminal.closeHost(hostId);
     this.post({ event: { type: 'host-status', hostId, status: 'disconnected' } });
   });
+  private readonly environment = new HostEnvironmentRegistry({
+    connectionId: (hostId) => this.ssh.connectionId(hostId),
+    read: (hostId, loginAs, signal) => this.ssh.readEnvironment(hostId, loginAs, signal)
+  });
+  private readonly manualSessions = new ManualSessionAuthorization({
+    generation: (hostId) => this.ssh.connectionGeneration(hostId), connected: (hostId) => this.ssh.isConnected(hostId),
+    input: (request, signal) => this.requestPrivateInput(request, signal)
+  });
   private readonly terminal: TerminalManager;
   private readonly executor: HostSerialExecutor;
   private readonly privileged: PrivilegedRuntime;
   private readonly commands: OperationInputBridge;
   private readonly hosts = new Map<string, RuntimeHost>();
+  private readonly connectionAttempts = new Map<string, AbortController>();
   private readonly interactions: InteractionCoordinator;
   private readonly tasks = new Map<string, TaskRunner>();
   private readonly pendingApprovals = new Map<string, { taskId: string; hostId: string; resolve(allowed: boolean): void }>();
   private readonly pendingInputs = new Map<string, { connectionId: string; expiresAt: number; resolve(answer: string | null): void; timeout: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly send: (message: RuntimeMessage) => void) {
+    this.inputCommits = new InputCommitClient((message) => this.post(message));
+    this.operationCommits = new OperationCommitClient((message) => this.post(message));
     this.budget = new RequestBudgetClient((message) => this.post(message), 30_000, (command, value) => {
       const diagnostic = reservationDiagnostic(command, value); if (diagnostic) this.send({ diagnostic });
     });
     this.preparations = new MessagePreparations(this.budget, (event) => this.post({ event }));
     this.terminal = new TerminalManager({
       command: (terminalId, generation, event) => this.post({ event: { type: 'terminal-command', terminalId, generation, ...event } }),
+      cwd: (terminalId, directory) => this.post({ event: { type: 'terminal-cwd', terminalId, directory, updatedAt: Date.now() } }),
       data: (terminalId, data, operationId) => this.post({ event: { type: 'terminal-data', terminalId, data, operationId } }),
       completed: (result) => {
         const hostId = result.logRef ? this.terminal.hostOf(result.logRef) : undefined;
@@ -150,9 +169,12 @@ export class WorkerServer {
       }
       case 'stop-operation': return this.tasks.get(call.taskId)?.stopOperation();
       case 'disconnect':
+        this.connectionAttempts.get(call.hostId)?.abort();
+        this.manualSessions.disconnect(call.hostId);
         for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(call.hostId)) runner.pause();
         this.terminal.closeHost(call.hostId);
         this.ssh.disconnect(call.hostId);
+        this.post({ event: { type: 'host-status', hostId: call.hostId, status: 'disconnected' } });
         return;
       case 'connect': return this.connect(call.host, call.jump);
       case 'test-host': return testHostConnection(call.host, call.jump);
@@ -206,7 +228,15 @@ export class WorkerServer {
         if (!call.restored) this.send({ diagnostic: safeDiagnostic({ event: 'chat', level: 'info', taskId: call.task.id, role: 'user', size: Buffer.byteLength(call.task.goal) }) });
         if (this.tasks.has(call.task.id)) throw new Error('Task is already active');
         const runner = new TaskRunner(call.task, call.hosts, call.profile, call.priorOperations ?? [], this.terminal, this.executor,
-          (hostId, taskId) => this.openTerminal(hostId, taskId), {
+          (hostId, taskId, binding) => this.openTerminal(hostId, taskId, binding), {
+            commitInput: (value) => {
+              if (value.taskId !== call.task.id) throw new Error('Input conversation binding changed');
+              return this.inputCommits.commit(value);
+            },
+            commitOperation: (operation) => {
+              if (operation.taskId !== call.task.id) throw new Error('Operation conversation binding changed');
+              return this.operationCommits.commit(operation);
+            },
             budget: (command, signal) => {
               if (!('taskId' in command) || command.taskId !== call.task.id) throw new Error('Budget conversation binding changed');
               return this.budget.request(command, signal);
@@ -225,7 +255,7 @@ export class WorkerServer {
                 path.posix.resolve(operation.scope.cwd, scriptPath));
               return inspected.sha256 === sha256;
             }
-          });
+          }, this.environment, call.priorInputs);
         this.tasks.set(call.task.id, runner);
         const start = runner.start(call.restored, call.thinkingLevel, call.document, call.initialMessage, call.intent);
         if (call.restored) {
@@ -250,11 +280,17 @@ export class WorkerServer {
         if (call.method === 'answer-clarification') return runner.answerClarification(call.requestId, call.answers);
         return runner.cancelClarification(call.requestId);
       }
+      case 'cancel-queued-input': {
+        const runner = this.tasks.get(call.taskId);
+        if (!runner) throw new Error('Input queue unavailable; no conversation was restored');
+        return runner.cancelQueuedInput(call.inputId);
+      }
       case 'task-message': {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('请先恢复对话');
         if (call.document && this.deliveredMessages.has(call.document.requestId)) return;
-        runner.message(call.text, call.document, call.intent, call.preparedRevision);
+        if (call.queueMode === undefined) await runner.message(call.text, call.document, call.intent, call.preparedRevision);
+        else await runner.message(call.text, call.document, call.intent, call.preparedRevision, call.queueMode);
         if (call.document) this.deliveredMessages.add(call.document.requestId);
         return;
       }
@@ -266,8 +302,11 @@ export class WorkerServer {
         this.post({ event: { type: 'approval-close', id: call.approvalId } });
         return;
       }
-      case 'answer-input': return this.pendingInputs.has(call.requestId)
-        ? this.answerInput(call.requestId, call.answer) : this.interactions.answer(call.requestId, call.answer);
+      case 'answer-input': {
+        if (this.pendingInputs.has(call.requestId)) return this.answerInput(call.requestId, call.answer);
+        if (!await this.interactions.answer(call.requestId, call.answer)) throw new Error('Input request expired');
+        return;
+      }
       case 'cancel-input': return this.pendingInputs.has(call.requestId)
         ? this.answerInput(call.requestId, null) : this.interactions.cancel(call.requestId);
       case 'pause-task': return this.tasks.get(call.taskId)?.pause();
@@ -293,6 +332,10 @@ export class WorkerServer {
       type: 'task-status', taskId: runner.task.id, status: 'failed', summary: error instanceof Error ? error.message : String(error)
     } }));
   }
+
+  resolveInputCommit(result: unknown): void { this.inputCommits.resolve(result); }
+
+  resolveOperationCommit(result: unknown): void { this.operationCommits.resolve(result); }
 
   resolveBudget(result: unknown): void { this.budget.resolve(result); }
 
@@ -329,38 +372,40 @@ export class WorkerServer {
   }
 
   private async connect(host: RuntimeHost, jump?: RuntimeHost): Promise<void> {
-    const connectionId = randomUUID();
+    if (this.connectionAttempts.has(host.id)) throw new Error('SSH connection is already in progress');
+    const connectionId = randomUUID(), controller = new AbortController();
+    this.connectionAttempts.set(host.id, controller);
     this.hosts.set(host.id, host);
     if (jump) this.hosts.set(jump.id, jump);
     try {
-      await this.ssh.connect(host as SshHost, { password: host.secret, passphrase: host.secret },
-        jump ? { host: jump as SshHost, secret: { password: jump.secret, passphrase: jump.secret } } : undefined,
-        (prompt) => this.requestLoginInput(connectionId, host, prompt));
+      await this.ssh.connect(host as SshHost, runtimeSshCredentials(host),
+        jump ? { host: jump as SshHost, secret: runtimeSshCredentials(jump) } : undefined,
+        (prompt) => this.requestLoginInput(connectionId, prompt.hostId === jump?.id ? jump : host, prompt, controller.signal), controller.signal, { onDemandAuthentication: true });
+      controller.signal.throwIfAborted();
+      await this.environment.refresh(host.id, host.username, controller.signal);
+      controller.signal.throwIfAborted();
       this.post({ event: { type: 'host-status', hostId: host.id, status: 'connected' } });
     } catch (error) {
-      this.post({ event: { type: 'host-status', hostId: host.id, status: error instanceof HostKeyError ? 'changed-key' : 'error' } });
+      this.post({ event: { type: 'host-status', hostId: host.id, status: controller.signal.aborted ? 'disconnected' : error instanceof HostKeyError ? 'changed-key' : 'error' } });
+      if (controller.signal.aborted) throw new Error('SSH 连接已取消');
       throw error;
     } finally {
-      for (const [id, pending] of this.pendingInputs) if (pending.connectionId === connectionId) this.answerInput(id, null);
+      controller.abort();
+      if (this.connectionAttempts.get(host.id) === controller) this.connectionAttempts.delete(host.id);
     }
   }
 
-  private requestLoginInput(connectionId: string, host: RuntimeHost, prompt: SshLoginPrompt): Promise<string | null> {
-    const id = randomUUID();
-    const expiresAt = Date.now() + 120_000;
+  private requestLoginInput(connectionId: string, host: RuntimeHost, prompt: SshLoginPrompt, signal: AbortSignal): Promise<string | null> {
+    if (prompt.hostId !== host.id || prompt.username !== host.username) return Promise.resolve(null);
     const kind = /otp|one.time|verification|验证码|动态码|令牌/u.test(prompt.text.toLowerCase()) ? 'otp'
       : prompt.echo ? 'text' : 'secret';
-    const request: InputRequestView = {
-      id, taskId: '', operationId: `ssh-login:${connectionId}`, hostId: host.id,
+    const request: Omit<InputRequestView, 'id' | 'expiresAt'> = {
+      taskId: '', operationId: `ssh-login:${connectionId}`, hostId: host.id,
       title: kind === 'otp' ? 'SSH 登录需要验证码' : kind === 'secret' ? 'SSH 登录需要身份验证' : 'SSH 登录需要输入',
       explanation: `正在连接 ${host.label}（${host.address}）并登录账户 ${prompt.username}。服务器通过 SSH 登录认证请求这项信息，回答仅发送给本次认证会话，AI 不会看到。服务器提示：${prompt.text.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 300)}`,
-      kind, expiresAt
+      kind
     };
-    this.post({ event: { type: 'input-open', value: request } });
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => this.answerInput(id, null), 120_000);
-      this.pendingInputs.set(id, { connectionId, expiresAt, resolve, timeout });
-    });
+    return this.requestPrivateInput(request, signal);
   }
 
   private answerInput(id: string, answer: string | null): void {
@@ -369,27 +414,50 @@ export class WorkerServer {
     this.pendingInputs.delete(id);
     clearTimeout(pending.timeout);
     this.post({ event: { type: 'input-close', id } });
-    pending.resolve(Date.now() < pending.expiresAt ? answer : null);
+    const current = Date.now() < pending.expiresAt;
+    pending.resolve(current ? answer : null);
+    if (!current && answer !== null) throw new Error('Input request expired');
   }
 
-  private async openTerminal(hostId: string, taskId?: string): Promise<string> {
+  private async openTerminal(hostId: string, taskId?: string, binding?: import('@cloudhelm/core').ExecutionTerminalBinding): Promise<string> {
+    const assertBinding = () => {
+      if (binding && (binding.hostId !== hostId || !this.ssh.matchesConnection(hostId, binding.loginAs, binding.connectionId)))
+        throw new Error('SSH 登录身份或连接代次已变化，终端未建立');
+    };
+    assertBinding();
     const probe = taskId ? await this.ssh.execFixed(hostId, 'pwd -P') : undefined;
     if (probe && (probe.exitCode !== 0 || !probe.output.trim().startsWith('/') || probe.output.trim().includes('\n'))) throw new Error('无法核验 Agent 登录目录');
+    assertBinding();
     if (taskId) return this.terminal.open(hostId, new SshCommandTerminal(this.ssh, hostId), taskId, probe!.output.trim());
-    const { channel, nonce } = await this.ssh.integratedShell(hostId);
+    const host = this.hosts.get(hostId);
+    if (!host) throw new Error('Host is not connected');
+    const decoder = createTerminalCodec(host.connection?.terminal?.encoding);
+    const grant = await this.manualSessions.authorize(host);
+    const options = { settings: grant.settings, signal: grant.signal, assertAuthorized: grant.assertCurrent, x11Cookie: runtimeSshCredentials(host).x11Cookie };
+    const { channel, nonce } = await this.ssh.integratedShell(hostId, 100, 30, options).catch((error: unknown) => { grant.close(); throw error; });
+    if (channel.destroyed || channel.readableEnded) { grant.close(); channel.close(); throw new Error('人工终端启动后即结束，请检查初始化命令'); }
+    channel.once('close', grant.close);
     let output = (_text: string) => {};
     let command = (_event: Parameters<NonNullable<RawTerminal['onCommand']>>[0] extends (event: infer E) => void ? E : never) => {};
-    const decoder = new StringDecoder('utf8');
-    const parser = new ShellMarkerParser(nonce, (text) => output(text), (event) => command(event));
+    let cwd = (_directory: string) => {};
+    const parser = new ShellMarkerParser(nonce, (text) => output(text), (event) => command(event), (directory) => cwd(directory), decoder.decode);
     const raw: RawTerminal = {
-      write: (data) => channel.write(data),
+      write: (data) => channel.write(decoder.encode(data)),
       resize: (cols, rows) => channel.setWindow(rows, cols, 0, 0),
       close: () => channel.end(),
+      onCwd: (listener) => { cwd = listener; },
       onCommand: (listener) => { command = listener; },
       onData: (listener) => { output = listener; channel.on('data', (data: Buffer) => parser.push(decoder.write(data))); },
       onClose: (listener) => { channel.on('close', () => { parser.push(decoder.end()); parser.finish(); listener(); }); }
     };
-    return this.terminal.open(hostId, raw, taskId, probe?.output.trim() || '/');
+    const terminalId = this.terminal.open(hostId, raw, undefined, '/');
+    try {
+      const stopKeepalive = this.ssh.startManualKeepalive(hostId, options,
+        () => !this.executor.hasPendingOrUnresolved(hostId) && ![...this.tasks.values()].some((runner) => runner.task.hostIds.includes(hostId) && !runner.canDelete),
+        (message) => output(`\r\n[CloudHelm] ${message}\r\n`));
+      channel.once('close', stopKeepalive);
+    } catch (error) { grant.close(); channel.close(); throw error; }
+    return terminalId;
   }
 
   private requestApproval(view: ApprovalView): Promise<boolean> {

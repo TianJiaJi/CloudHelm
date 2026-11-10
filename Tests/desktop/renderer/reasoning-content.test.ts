@@ -10,7 +10,9 @@ it.each(['thinking', 'summary'] as const)('renders %s reasoning collapsed by def
   expect(html).toContain('aria-expanded="false"');
   expect(html).not.toContain('private reasoning content');
   expect(html).toContain(kind === 'summary' ? '思考摘要' : '思考内容');
-  expect(html).toContain('思考过程');
+  expect(html).not.toContain('<details');
+  expect(html.match(/<button/gu)).toHaveLength(1);
+  expect(html).not.toContain('思考过程');
   expect(html).toContain(`aria-label="展开${kind === 'summary' ? '思考摘要' : '思考内容'}"`);
 });
 

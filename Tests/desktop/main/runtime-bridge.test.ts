@@ -14,9 +14,9 @@ vi.mock('electron', async () => {
 });
 afterEach(() => vi.useRealTimers());
 
-function setup(budget?: ConstructorParameters<typeof RuntimeBridge>[4]) {
+function setup(budget?: ConstructorParameters<typeof RuntimeBridge>[4], commit?: ConstructorParameters<typeof RuntimeBridge>[5], inputCommit?: ConstructorParameters<typeof RuntimeBridge>[6]) {
   const onEvent = vi.fn(); const readLog = vi.fn(() => ({ text: '', nextCursor: 0, more: false })); const stopped = vi.fn();
-  const bridge = new RuntimeBridge(onEvent, readLog, stopped, undefined, budget);
+  const bridge = new RuntimeBridge(onEvent, readLog, stopped, undefined, budget, commit, inputCommit);
   return { bridge, onEvent, readLog, stopped, child: fixture.child };
 }
 
@@ -45,6 +45,54 @@ describe('budget acknowledgments', () => {
     expect(committed.roundUsed).toBe(1);
     f.bridge.close(); f.child.emit('message', request);
     expect(authority).toHaveBeenCalledOnce(); expect(committed.roundUsed).toBe(1);
+  });
+});
+
+describe('operation persistence acknowledgments', () => {
+  const value = { id: 'op', taskId: 'task', hostId: 'host', kind: 'command', preview: 'synthetic', status: 'running', createdAt: 1 };
+  const query = { commitOperation: { id: 'commit', value } };
+  it('does not confuse a UI event with a durable authority', () => {
+    const f = setup(); f.child.emit('message', query);
+    expect(f.onEvent).not.toHaveBeenCalled();
+    expect(f.child.postMessage).toHaveBeenCalledWith({ operationCommitResult: { id: 'commit', taskId: 'task', operationId: 'op', committed: false } });
+    f.bridge.close();
+  });
+  it('acknowledges only after synchronous persistence and never retries a lost reply', () => {
+    const authority = vi.fn(), f = setup(undefined, authority);
+    f.child.postMessage.mockImplementation((message) => {
+      expect(authority).toHaveBeenCalledWith(value);
+      expect(message.operationCommitResult.committed).toBe(true);
+      throw new Error('channel closed');
+    });
+    expect(() => f.child.emit('message', query)).not.toThrow();
+    expect(authority).toHaveBeenCalledOnce(); expect(f.child.postMessage).toHaveBeenCalledOnce();
+    f.bridge.close();
+  });
+  it('fails closed without returning storage details', () => {
+    const f = setup(undefined, () => { throw new Error('private disk path'); });
+    f.child.emit('message', query);
+    expect(f.child.postMessage).toHaveBeenCalledWith({ operationCommitResult: { id: 'commit', taskId: 'task', operationId: 'op', committed: false } });
+    f.bridge.close();
+  });
+});
+
+describe('queued input commit acknowledgments', () => {
+  const value = { version: 1, id: 'input', taskId: 'task', kind: 'followUp', status: 'queued', text: 'prepared',
+    intent: 'user input', authorizationKey: 'scope', createdAt: 1, updatedAt: 1, expiresAt: 100 };
+  it('requires Main persistence rather than an event handler', () => {
+    const f = setup(); f.child.emit('message', { commitInput: { id: 'rpc', value } });
+    expect(f.onEvent).not.toHaveBeenCalled();
+    expect(f.child.postMessage).toHaveBeenCalledWith({ inputCommitResult: { id: 'rpc', taskId: 'task', inputId: 'input', committed: false } });
+    f.bridge.close();
+  });
+  it('confirms the exact recipient only after persistence', () => {
+    const commit = vi.fn(), f = setup(undefined, undefined, commit);
+    f.child.postMessage.mockImplementation((message) => {
+      expect(commit).toHaveBeenCalledWith(value);
+      expect(message).toEqual({ inputCommitResult: { id: 'rpc', taskId: 'task', inputId: 'input', committed: true } });
+    });
+    f.child.emit('message', { commitInput: { id: 'rpc', value } });
+    expect(commit).toHaveBeenCalledOnce(); f.bridge.close();
   });
 });
 

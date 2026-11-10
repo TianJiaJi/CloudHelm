@@ -126,6 +126,22 @@ try {
     assert.equal(decrypted, 'cloudhelm-smoke-bootstrap', 'Windows profile encryption must survive restart before crash testing');
   }
   page = await withTimeout(() => checkClarificationRuntime(page, async () => {
+    if (process.platform !== 'darwin') {
+      // Exercise the real window close event while a native clarification is pending.
+      // Replace only the confirmation dialog; no user credentials or remote commands.
+      const closure = await application.evaluate(async ({ BrowserWindow, dialog }) => {
+        const target = BrowserWindow.getAllWindows()[0], original = dialog.showMessageBox;
+        const prompts = [];
+        dialog.showMessageBox = async (options) => { prompts.push(options.title); return { response: 0, checkboxChecked: false }; };
+        try {
+          target.close(); await Promise.resolve(); await Promise.resolve();
+          return { prompts, destroyed: target.isDestroyed() };
+        } finally { dialog.showMessageBox = original; }
+      });
+      assert.deepEqual(closure, { prompts: ['退出 CloudHelm'], destroyed: false }, 'Cancel must preserve the actual window, not just the database');
+      const pending = await page.evaluate(async () => (await window.cloudhelm.snapshot()).clarifications.filter((item) => item.status === 'pending').length);
+      assert.equal(pending, 1, 'Canceling window closure must not settle or cancel the pending native tool');
+    }
     // Crash only this isolated smoke-test instance, preserving its temporary database.
     await currentProcess.crash();
     instances.delete(currentProcess);

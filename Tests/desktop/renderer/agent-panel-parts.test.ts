@@ -27,6 +27,20 @@ describe('AI panel projections', () => {
     expect(html([{ id: 'a', title: '需要批准', status: 'blocked' }])).toContain('计划受阻');
   });
 
+  it('never equates all plan steps being done with verified business success', () => {
+    const output = html([{ id: 'verify', title: '核对输出', status: 'done' }]);
+    expect(output).toContain('步骤已处理'); expect(output).toContain('1/1');
+    expect(output).not.toContain('计划已完成'); expect(output).not.toContain('✓');
+  });
+
+  it.each(['running', 'unknown', 'failed'] as const)('projects backend %s operations ahead of a done plan', (status) => {
+    const output = renderToStaticMarkup(createElement(AgentPlan, {
+      steps: [{ id: 'verify', title: '核对输出', status: 'done' }], operations: [{ ...operation, status, effects: 'possible' }]
+    }));
+    expect(output).toContain(status === 'running' ? '操作尚未结束' : '执行结果待核对');
+    expect(output).not.toContain('步骤已处理</span>'); expect(output).not.toContain('计划已完成');
+  });
+
   it.each(['proposed', 'approved', 'running', 'failed', 'denied', 'unknown'] as const)('keeps %s operations fully visible', (status) => {
     expect(canCondenseOperation({ ...operation, status })).toBe(false);
   });

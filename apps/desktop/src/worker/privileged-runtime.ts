@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { PrivilegedSessions, type SafetyGate, type TerminalManager } from '@cloudhelm/application';
-import { BashAnalyzer, SshCommandTerminal, SshTransport, SuSession } from '@cloudhelm/adapters';
+import { BashAnalyzer, SshAuthenticationError, SshCommandTerminal, SshTransport, SuSession } from '@cloudhelm/adapters';
 import { PrivilegeError, sudoContextCommand, type PrivilegeMethod } from '@cloudhelm/core';
 import type { ExecutionOptions, OperationExecutor, OperationResult, OperationIntent, ProposedOperation, RawTerminal } from '@cloudhelm/core';
 import type { InputRequestView } from '@cloudhelm/contracts';
+import { runtimeSshCredentials } from '@cloudhelm/contracts/runtime';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { FileOperationExecutor } from './file-operation-executor.js';
@@ -14,6 +15,7 @@ class DeferredTerminal implements RawTerminal {
   private display = (_value: string) => {};
   private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege'>) => {};
   private exit = (_value: number | undefined) => {};
+  private started = (_event: { pid: number }) => {};
   private authentication = (_value: { id: string; prompt?: string }) => {};
   private closed = () => {};
   private ended = false;
@@ -21,18 +23,23 @@ class DeferredTerminal implements RawTerminal {
   attach(target: RawTerminal): void {
     if (this.ended) { target.close(); throw new Error('Root terminal closed'); }
     this.target = target; target.onData(this.data); target.onDisplay?.(this.display);
+    target.onProcessStarted?.(this.started);
     target.onExecutionFailure?.(this.failure); target.onExit?.(this.exit); target.onAuthentication?.(this.authentication); target.onClose(() => this.finishClose());
   }
   onData(listener: (value: string) => void): void { this.data = listener; }
   onDisplay(listener: (value: string) => void): void { this.display = listener; }
   onExecutionFailure(listener: typeof this.failure): void { this.failure = listener; }
   onExit(listener: (value: number | undefined) => void): void { this.exit = listener; }
+  onProcessStarted(listener: typeof this.started): void { this.started = listener; this.target?.onProcessStarted?.(listener); }
   onAuthentication(listener: typeof this.authentication): void { this.authentication = listener; this.target?.onAuthentication?.(listener); }
+  interrupt(pid: number): Promise<'sent' | 'already-exited'> {
+    return this.target?.interrupt?.(pid) ?? Promise.reject(new Error('Root process control unavailable'));
+  }
   answerAuthentication(id: string, answer: string | null): boolean { return this.target?.answerAuthentication?.(id, answer) ?? false; }
   onClose(listener: () => void): void { this.closed = listener; }
-  execute(command: string, cwd: string, current: () => boolean): Promise<void> {
+  execute(command: string, cwd: string, current: () => boolean, options?: { sudoAuthorization?: boolean }): Promise<void> {
     if (!this.target?.execute) throw new Error('Root session not authenticated');
-    return this.target.execute(command, cwd, current);
+    return this.target.execute(command, cwd, current, options);
   }
   write(value: string): void { this.target?.write(value); }
   resize(cols: number, rows: number): void { this.target?.resize(cols, rows); }
@@ -211,41 +218,36 @@ export class PrivilegedRuntime implements OperationExecutor {
     let transport: SshTransport | SuSession;
     if (entry.mode === 'ssh') {
       const ssh = new SshTransport(() => this.close(entry.id)); entry.ssh = ssh;
-      const host = { ...entry.host, username: 'root', secret: undefined };
-      // Existing key/agent selection may be used, but never reuse the login account's saved password.
-      let secret: string | null = null;
-      if (host.auth === 'password') secret = await input('root SSH 密码', `接收方：${host.address}:${host.port} 的 root SSH 认证。本次不保存凭据。`);
-      if (host.auth === 'private-key') {
-        const choice = await this.deps.input({ taskId: entry.taskId, hostId: host.id, operationId: entry.probeId,
-          kind: 'confirmation', title: 'root SSH 私钥口令', explanation: '使用此主机已选择的私钥文件，以 root 身份认证。',
-          choices: ['私钥无口令', '输入私钥口令'] }, entry.controller.signal);
-        if (choice === '私钥无口令') secret = '';
-        else if (choice === '输入私钥口令') secret = await input('root SSH 私钥口令', '口令仅交给本次 SSH 认证，不保存。');
-        else throw new Error('Root login canceled');
-      }
-      if (host.auth !== 'agent' && secret === null) throw new Error('Root login canceled');
+      const host = { ...entry.host, username: 'root', secret: undefined, credentials: undefined };
+      // The transport negotiates first. Never reuse the ordinary account's password,
+      // or prompt merely because this host was configured for password/private-key login.
       current();
-      const jump = this.deps.jump(host);
-      try { await ssh.connect(host, { password: secret ?? undefined, passphrase: secret ?? undefined },
-        jump ? { host: jump, secret: { password: jump.secret, passphrase: jump.secret } } : undefined,
-        (challenge) => {
+      const jump = host.connection?.proxy?.enabled ? undefined : this.deps.jump(host);
+      const proxyPassword = runtimeSshCredentials(entry.host).proxyPassword;
+      try { await ssh.connect(host, proxyPassword === undefined ? {} : { proxyPassword },
+        jump ? { host: jump, secret: runtimeSshCredentials(jump) } : undefined,
+        async (challenge) => {
+          current();
           const recipient = challenge.hostId === host.id ? host : jump;
-          if (!recipient || recipient.id !== challenge.hostId || recipient.username !== challenge.username) return Promise.resolve(null);
-          return this.deps.input({ taskId: entry.taskId, hostId: recipient.id, operationId: entry.probeId,
-            title: 'SSH 追加认证', explanation: `接收方：${recipient.address}:${recipient.port} 的 ${challenge.username} SSH 认证。`,
+          if (!recipient || recipient.id !== challenge.hostId || recipient.username !== challenge.username) return null;
+          const answer = await this.deps.input({ taskId: entry.taskId, hostId: recipient.id, operationId: entry.probeId,
+            title: challenge.kind === 'key-passphrase' ? 'SSH 加密私钥口令' : 'SSH 身份验证',
+            explanation: `接收方：${recipient.address}:${recipient.port} 的 ${challenge.username} SSH 认证（${challenge.attempt ?? 1}/3）。仅用于本次认证，不保存。`,
             kind: /otp|verification|one.time/iu.test(challenge.text) ? 'otp' : 'secret' }, entry.controller.signal);
-        }, entry.controller.signal); }
+          current(); return answer;
+        }, entry.controller.signal, { onDemandAuthentication: true }); }
       catch (error) {
         if (error instanceof PrivilegeError) throw error;
         const rejected = error && typeof error === 'object' && 'level' in error && error.level === 'client-authentication';
-        throw new PrivilegeError({ method: 'ssh', stage: 'authentication', code: rejected ? 'authentication-rejected' : 'authentication-unconfirmed',
+        throw new PrivilegeError({ method: 'ssh', stage: 'authentication', code: error instanceof SshAuthenticationError ? error.code : rejected ? 'authentication-rejected' : 'authentication-unconfirmed',
           source: 'transport', businessCommand: 'not-started', recovery: 'user-action' });
       }
       transport = ssh;
       entry.executor = new FileOperationExecutor(this.deps.terminal, ssh, this.deps.terminal);
     } else {
       const su = new SuSession(this.deps.ssh, entry.host.id, entry.controller.signal, () => this.close(entry.id)); entry.su = su;
-      await su.connect(() => input('su root 身份验证（root 密码）', `接收方：${entry.host.label} 上本次操作的 su 认证进程。通常需要 root 账户密码，不是 ${entry.host.username} 的 sudo 密码。不知道 root 密码请取消，明确选择 sudo。密码不会发送给业务命令。`), current);
+      await su.connect((attempt) => input(attempt === '1' ? 'su root 身份验证（root 密码）' : `su 再次请求认证（${attempt}/3，root 密码）`,
+        `接收方：${entry.host.label} 上本次操作的 su 认证进程。通常需要 root 账户密码，不是 ${entry.host.username} 的 sudo 密码。无需密码时不会显示本窗口；若认证未通过，可在限次内重新输入，不知道 root 密码请取消。密码不会发送给业务命令。`), current);
       transport = su;
       entry.executor = { execute: (operation, fingerprint, signal, options) => operation.kind === 'command'
         ? this.deps.terminal.execute(operation, fingerprint, signal, options)

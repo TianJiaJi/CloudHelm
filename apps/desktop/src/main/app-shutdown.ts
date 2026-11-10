@@ -16,11 +16,19 @@ export class AppShutdown {
 
   get isClosed(): boolean { return this.phase === 'closed'; }
 
+  /** On non-macOS, ask before destroying the last window so cancel keeps the UI usable.
+   * macOS window closure keeps the application running; quitting still uses beforeQuit. */
+  beforeWindowClose(event: { preventDefault(): void }, keepsApplicationRunning: boolean): void {
+    if (!keepsApplicationRunning) this.beforeQuit(event);
+  }
+
   beforeQuit(event: { preventDefault(): void }): void {
     if (this.phase !== 'open') return;
     if (this.prompting) { event.preventDefault(); return; }
     const snapshot = this.deps.snapshot();
-    const active = snapshot?.conversations.some((conversation) => ['running', 'waiting-review', 'waiting-user', 'human-control'].includes(conversation.status))
+    const active = Object.values(snapshot?.execution ?? {}).some((value) => value.model === 'running' || value.remote === 'running')
+      || snapshot?.operations.some((operation) => !!operation.executionJob && !operation.executionJob.exitObserved && !operation.executionJob.notStarted)
+      || snapshot?.conversations.some((conversation) => ['running', 'waiting-review', 'waiting-user', 'human-control'].includes(conversation.status))
       || snapshot?.operations.some((operation) => ['running', 'unknown'].includes(operation.status)
         && snapshot.terminals.some((terminal) => terminal.id === operation.logRef));
     if (!active) return;

@@ -1,3 +1,4 @@
+import { runtimeCallTimeout } from './runtime-timeout.js';
 import type { DiagnosticEvent } from '@cloudhelm/core';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -20,7 +21,9 @@ export class RuntimeBridge {
     private readonly readLog: (taskId: string, operationId: string, cursor: number) => import('@cloudhelm/contracts/runtime').LogPage,
     private readonly onStopped: () => void = () => {},
     private readonly diagnostic: (event: DiagnosticEvent) => void = () => {},
-    private readonly requestBudget?: (command: unknown) => import('@cloudhelm/contracts').BudgetOutcome) {
+    private readonly requestBudget?: (command: unknown) => import('@cloudhelm/contracts').BudgetOutcome,
+    private readonly commitOperation?: (operation: import('@cloudhelm/contracts').OperationView) => void,
+    private readonly commitInput?: (value: import('@cloudhelm/contracts').StoredConversationInput) => void) {
     this.child = utilityProcess.fork(join(import.meta.dirname, 'runtime.js'), [], { serviceName: 'CloudHelm Agent and SSH runtime' });
     this.child.on('message', (message: RuntimeMessage) => this.receive(message));
     this.child.on('exit', () => {
@@ -38,8 +41,7 @@ export class RuntimeBridge {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('Runtime request timed out'));
-      }, call.method === 'prepare-message' || call.method === 'request-ai-denial-review' ? 650_000
-        : call.method === 'connect' ? 180_000 : call.method === 'test-host' ? 60_000 : 30_000);
+      }, runtimeCallTimeout(call));
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timeout });
       try { this.child.postMessage({ id, call }); }
       catch {
@@ -60,6 +62,22 @@ export class RuntimeBridge {
       catch { result = { error: 'budget-unavailable' }; }
       try { this.child.postMessage({ budgetResult: { id: query.id, ...result } }); }
       catch { /* A lost acknowledgment never refunds or replays a committed reservation. */ }
+      return;
+    }
+    if ('commitInput' in message) {
+      const { id, value } = message.commitInput;
+      let committed = false;
+      try { if (this.commitInput) { this.commitInput(value); committed = true; } } catch { /* No storage details in IPC. */ }
+      try { this.child.postMessage({ inputCommitResult: { id, taskId: value.taskId, inputId: value.id, committed } }); }
+      catch { /* Missing acknowledgement does not authorize delivery or replay. */ }
+      return;
+    }
+    if ('commitOperation' in message) {
+      const { id, value } = message.commitOperation;
+      let committed = false;
+      try { if (this.commitOperation) { this.commitOperation(value); committed = true; } } catch { /* No storage details in IPC. */ }
+      try { this.child.postMessage({ operationCommitResult: { id, taskId: value.taskId, operationId: value.id, committed } }); }
+      catch { /* Never retry dispatch or undo a committed record after losing the acknowledgment. */ }
       return;
     }
     if ('readLog' in message) {

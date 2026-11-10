@@ -32,6 +32,13 @@ export interface OperationScope {
 
 export type ProposedOperation =
   | { id: string; kind: 'command'; command: string; serviceUnit?: string;
+      /** Background lifetime is explicitly bound into review, never inferred from shell syntax. */
+      executionMode?: 'background';
+      /** Backend-created control descriptor. The command is review text, never executed as shell. */
+      processControl?: { kind: 'interrupt'; jobId: string; targetOperationId: string; pid: number;
+        processSequence: number; connectionId: string };
+      /** Operation-level root request, normalized before review; never an approval. */
+      privilege?: 'root';
       outputExpectation?: { expectedOutput: string; expectedExitCode?: number }; scope: OperationScope }
   | { id: string; kind: 'write-file'; path: string; content: string; scope: OperationScope }
   | { id: string; kind: 'upload'; localPath: string; remotePath: string; localRoot: string; contentSha256: string; size: number; scope: OperationScope }
@@ -119,6 +126,8 @@ export interface SafetySettings {
 }
 
 export interface OperationResult {
+  /** Delivery outcome only; never asserts that the target process exited. */
+  processControl?: { kind: 'interrupt'; jobId: string; targetOperationId: string; delivery: 'sent' | 'already-exited' | 'unknown' };
   operationId: string;
   status: 'succeeded' | 'failed' | 'unknown' | 'handed-over';
   exitCode?: number;

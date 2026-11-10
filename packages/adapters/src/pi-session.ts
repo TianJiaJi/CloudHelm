@@ -1,4 +1,9 @@
-import type { IdleCompactionLease, MessageDocument, ModelRequestAttempt } from '@cloudhelm/core';
+import { randomUUID } from 'node:crypto';
+import { PiQueryPolicy, queryCodeSchema, querySearchSchema } from './pi-query-policy.js';
+import { PiLifecycle } from './pi-lifecycle.js';
+import { inputVisible, omitUnapprovedInputs } from './pi-input-projection.js';
+import { PiInputQueue, queuedInputType } from './pi-input-queue.js';
+import type { IdleCompactionLease, MessageDocument, ModelRequestAttempt, QueuedSessionInput } from '@cloudhelm/core';
 import { sessionContextSnapshot } from './pi-context-budget.js';
 import { PiReasoningStream, reasoningView } from './pi-reasoning.js';
 import { modelCapacity, modelThinking } from './model-catalog.js';
@@ -10,12 +15,13 @@ import { sessionDirectoryCleanup } from './session-directory-cleanup.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentSession, createEventBus, DefaultResourceLoader, SettingsManager,
-  type AgentSession, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+  type AgentSession } from '@earendil-works/pi-coding-agent';
 import type { ConversationSession, SessionOptions, SessionProfile } from '@cloudhelm/core';
 import { openSessionStorage } from './pi-session-storage.js';
 import { installSessionModel, isolatedModelRuntime, resolveSessionModel } from './pi-session-model.js';
 import { description, guidelines } from './pi-extensions/ask-user/prompts.js';
-import askUser, { ASK_CHANNEL, type AskBridgeEvent } from './pi-extensions/ask-user/index.js';
+import { assertUnchangedToolArguments, toPiTool } from './pi-tool-validation.js';
+import askUser, { ASK_CHANNEL, askUserParameters, type AskBridgeEvent } from './pi-extensions/ask-user/index.js';
 
 const conversationSystemPrompt = (prompt: string) => [prompt, description, ...guidelines].join('\n');
 interface ActiveCompaction {
@@ -37,6 +43,7 @@ export async function createConversationSession(options: SessionOptions): Promis
       keepRecentTokens: Math.max(1, Math.min(8000, Math.floor(model.contextWindow * 0.25)))
     } });
     configureWindow(resolveSessionModel(options.profile).model);
+    const queryPolicy = new PiQueryPolicy(options);
     const bus = createEventBus();
     bus.on(ASK_CHANNEL, (data: unknown) => {
       const event = data as AskBridgeEvent;
@@ -46,8 +53,16 @@ export async function createConversationSession(options: SessionOptions): Promis
     const loader = new DefaultResourceLoader({ cwd, agentDir: cwd, settingsManager: settings, eventBus: bus,
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       systemPrompt: conversationSystemPrompt(options.systemPrompt),
-      extensionFactories: [{ name: '@cloudhelm/pi-ask-user', factory: askUser }, {
+      extensionFactories: [...queryPolicy.factories(), { name: '@cloudhelm/pi-ask-user', factory: askUser }, {
         name: '@cloudhelm/lifecycle', factory: (pi) => {
+          pi.on('tool_execution_start', (event) => {
+            if (event.parentToolCallId) options.event({ type: 'tool-start', id: event.toolCallId, name: event.toolName,
+              args: event.args, parentToolCallId: event.parentToolCallId });
+          });
+          pi.on('tool_execution_end', (event) => {
+            if (event.parentToolCallId) options.event({ type: 'tool-end', id: event.toolCallId, name: event.toolName,
+              isError: event.isError, parentToolCallId: event.parentToolCallId, durationMs: event.durationMs });
+          });
           pi.on('session_before_compact', (event) => {
             assertCompactionActive();
             // A retry can repeat operations with uncertain effects; only explicit user continuation may do so.
@@ -61,10 +76,10 @@ export async function createConversationSession(options: SessionOptions): Promis
     const { session, modelFallbackMessage } = await createAgentSession({ cwd, agentDir: cwd, modelRuntime: runtime,
       model: resolveSessionModel(options.profile).model, thinkingLevel: options.thinkingLevel, settingsManager: settings,
       sessionManager: manager, resourceLoader: loader, noTools: 'builtin',
-      tools: [...options.tools.map((tool) => tool.name), 'ask_user'],
-      customTools: options.tools as unknown as ToolDefinition[] });
+      tools: queryPolicy.activeNames().map((name) => `+${name}`),
+      customTools: options.tools.map(toPiTool) });
     if (modelFallbackMessage) { session.dispose(); throw new Error(modelFallbackMessage); }
-    const adapter = new PiConversationSession(session, options, cleanupDirectory, async (profile) => {
+    const adapter = new PiConversationSession(session, options, queryPolicy, cleanupDirectory, async (profile) => {
       const { model } = await installSessionModel(runtime, profile);
       configureWindow(model);
       await session.setModel(model);
@@ -79,9 +94,11 @@ export async function createConversationSession(options: SessionOptions): Promis
 
 class PiConversationSession implements ConversationSession {
   private readonly reasoningStream: PiReasoningStream;
+  private readonly lifecycle: PiLifecycle;
   private preferred: ThinkingLevel;
   private selected: SessionProfile;
   private active: SessionProfile;
+  private readonly inputQueue: PiInputQueue;
   private readonly pendingDocuments: Array<MessageDocument | undefined> = [];
   private readonly documents = new Map<string, MessageDocument>();
   private readonly projected = new Set<string>();
@@ -98,8 +115,10 @@ class PiConversationSession implements ConversationSession {
   private disposed = false;
 
   constructor(private readonly session: AgentSession, private readonly options: SessionOptions,
-    private readonly cleanupDirectory: ReturnType<typeof sessionDirectoryCleanup>,
+    queryPolicy: PiQueryPolicy, private readonly cleanupDirectory: ReturnType<typeof sessionDirectoryCleanup>,
     private readonly applyModel: (profile: SessionProfile) => Promise<void>) {
+    this.lifecycle = new PiLifecycle((value) => options.event({ type: 'lifecycle', value }),
+      new Set([...options.tools.map((tool) => tool.name), 'ask_user', 'codemode', 'tool_search']));
     this.reasoningStream = new PiReasoningStream((value) => options.event({ type: 'reasoning-progress', value }));
     this.active = { ...options.profile };
     this.selected = this.active;
@@ -116,19 +135,38 @@ class PiConversationSession implements ConversationSession {
     const previous = [...session.messages].reverse().find((message) => message.role === 'assistant');
     this.switched = !!previous && (previous.provider !== this.active.provider || previous.model !== this.active.modelId);
     const agent = session.agent;
-    agent.toolExecution = 'sequential'; // one tool call at a time: remote review/execution must never overlap
+    this.inputQueue = new PiInputQueue(agent, async (input) => {
+      options.assertActive(); await options.inputSelected?.(input); options.assertActive();
+    });
+    const transform = agent.transformContext;
+    agent.transformContext = async (messages, signal) => {
+      const allowed = messages.filter((message) => inputVisible(message, options.inputHistoryAllowed));
+      return transform ? transform(allowed, signal) : allowed;
+    };
+    agent.toolExecution = 'sequential'; // outer remote review/execution never overlaps; bounded script queries have their own slots
+    queryPolicy.bindAgent(agent);
+    queryPolicy.bindCallOrigin((id) => this.lifecycle.originFor(id));
     const prepare = agent.prepareNextTurnWithContext;
     agent.prepareNextTurnWithContext = async (turn, signal) => {
       options.assertActive();
       await this.prepareModel();
+      const visible = queryPolicy.activeNames(session.getActiveToolNames());
+      if (JSON.stringify(visible) !== JSON.stringify(session.getActiveToolNames())) session.setActiveToolsByName(visible);
+      omitUnapprovedInputs(session.sessionManager, options.inputHistoryAllowed);
       const result = await prepare?.(turn, signal);
       if (this.failure) throw this.failure;
       options.assertActive();
       return result;
     };
+    const toolSchemas = new Map(options.tools.map((tool) => [tool.name, tool.parameters]));
+    toolSchemas.set('ask_user', askUserParameters);
+    toolSchemas.set('codemode', queryCodeSchema); toolSchemas.set('tool_search', querySearchSchema);
     const beforeTool = agent.beforeToolCall;
     agent.beforeToolCall = async (call, signal) => {
       options.assertActive();
+      const schema = toolSchemas.get(call.toolCall.name);
+      if (!schema || !queryPolicy.allowed(call.toolCall.name)) return { block: true, reason: '工具不在当前授权注册表中，未执行。' };
+      assertUnchangedToolArguments(schema, call.toolCall.arguments, call.args);
       const asks = call.assistantMessage.content.filter((part) => part.type === 'toolCall'
         && ['ask_user', 'request_root_session'].includes(part.name));
       if (asks.length > 1 || (asks.length && (asks[0]?.type !== 'toolCall' || call.toolCall.name !== asks[0].name))) {
@@ -151,20 +189,24 @@ class PiConversationSession implements ConversationSession {
       if (this.failure) throw this.failure;
       let requestContext = context;
       if (purpose === 'conversation' && options.currentSystemPrompt) {
-        const leading = context.messages[0];
-        if (leading?.role !== 'system' || leading.content !== '' || typeof leading.sections?.preamble !== 'string') {
+        // A restored/pre-first-turn custom message may precede Pi's first native
+        // system entry. Require the structured SDK section, not an array position.
+        const system = context.messages.find((message) => message.role === 'system'
+          && message.content === '' && typeof message.sections?.preamble === 'string');
+        if (!system) {
           throw new Error('CloudHelm system authorization projection unavailable');
         }
         // Pi stores custom prompts in the preamble section; changing content would duplicate the prompt.
         const current = conversationSystemPrompt(options.currentSystemPrompt());
         if (!current.trim()) throw new Error('CloudHelm system authorization projection is empty');
         requestContext = { ...context, messages: context.messages.map((message) => message.role === 'system'
-          && typeof message.sections?.preamble === 'string'
+          && message.content === '' && typeof message.sections?.preamble === 'string'
           ? { ...message, sections: { ...message.sections, preamble: current } } : message) };
       }
       const profile = this.active;
       const selected = this.selected;
       const generation = this.generation();
+      let attempted: ModelRequestAttempt | undefined;
       const meter = meterModelRequest({ api: model.api, purpose, transport: streamOptions?.transport,
         signal: preparation ? AbortSignal.any([preparation.controller.signal, ...(streamOptions?.signal ? [streamOptions.signal] : [])]) : streamOptions?.signal,
         fetch: streamOptions?.fetch, assertActive: () => {
@@ -175,20 +217,40 @@ class PiConversationSession implements ConversationSession {
         reserve: async (attempt, signal) => {
           if (preparation) await preparation.lease.reserve(profile, attempt, signal);
           else await options.beforeRequest(purpose, profile, attempt, signal);
+          if (attempted) this.lifecycle.requestFinished(attempted);
+          attempted = { ...attempt }; this.lifecycle.requestStarted(attempt, profile);
           if (purpose === 'conversation') { this.responseAttempt = { ...attempt }; this.previousFrameTokens = this.contextSnapshot().frameTokens; this.usageReady = true; this.publishUsage(); }
         } });
-      await meter.beforeStream();
-      return stream(model, requestContext, { ...streamOptions, ...(meter.fetch ? { fetch: meter.fetch } : {}),
-        apiKey: profile.apiKey, env: {}, maxRetries: 0,
-        maxTokens: purpose === 'conversation' ? conversationOutputTokens(model) : streamOptions?.maxTokens });
+      try {
+        await meter.beforeStream();
+        const output = await stream(model, requestContext, { ...streamOptions, ...(meter.fetch ? { fetch: meter.fetch } : {}),
+          apiKey: profile.apiKey, env: {}, maxRetries: 0,
+          maxTokens: purpose === 'conversation' ? conversationOutputTokens(model) : streamOptions?.maxTokens });
+        const priced = profile.provider !== 'cloudhelm-custom' && Object.values(model.cost).some((value) => typeof value === 'number' && value > 0);
+        void output.result().then((message) => { if (attempted) this.lifecycle.requestFinished(attempted, message, priced); },
+          () => { if (attempted) this.lifecycle.requestFinished(attempted); }).catch(() => {
+          this.failure ??= new Error('模型生命周期回执未能发布'); void session.abort();
+        });
+        return output;
+      } catch (error) { if (attempted) this.lifecycle.requestFinished(attempted); throw error; }
     };
     // This listener runs after Pi's persistence listener. Public message_end runs before persistence.
     agent.subscribe(async (event) => {
+      if (event.type === 'message_start') await this.inputQueue.observe(event.message);
+      if (event.type === 'message_end') {
+        const id = this.inputQueue.idOf(event.message);
+        if (id) {
+          const entry = [...session.sessionManager.getBranch()].reverse().find((item) => item.type === 'custom_message'
+            && item.customType === queuedInputType && (item.details as { id?: unknown })?.id === id);
+          if (!entry) throw new Error('Native queued input history receipt unavailable');
+          await options.inputDelivered?.(id, entry.id);
+        }
+      }
       if ((event.type === 'message_start' || event.type === 'message_update') && event.message.role === 'assistant') {
         this.reasoningStream.update(event.message, this.session.thinkingLevel !== 'off');
       }
-      if (event.type === 'tool_execution_start') options.event({ type: 'tool-start', id: event.toolCallId, name: event.toolName, args: event.args });
-      if (event.type === 'tool_execution_end') options.event({ type: 'tool-end', id: event.toolCallId, name: event.toolName, isError: event.isError });
+      if (event.type === 'tool_execution_start' && !('parentToolCallId' in event && typeof event.parentToolCallId === 'string')) options.event({ type: 'tool-start', id: event.toolCallId, name: event.toolName, args: event.args });
+      if (event.type === 'tool_execution_end' && !('parentToolCallId' in event && typeof event.parentToolCallId === 'string')) options.event({ type: 'tool-end', id: event.toolCallId, name: event.toolName, isError: event.isError, durationMs: event.durationMs });
       if (event.type === 'message_end') {
         if (event.message.role === 'assistant') {
           const message = event.message;
@@ -208,6 +270,7 @@ class PiConversationSession implements ConversationSession {
       if (event.type === 'turn_end') { options.event({ type: 'turn-end' }); this.publishUsage(); }
     });
     session.subscribe((event) => {
+      this.lifecycle.observe(event);
       if (event.type === 'compaction_start') {
         this.usageReady = false;
         this.previousFrameTokens = undefined;
@@ -276,7 +339,7 @@ class PiConversationSession implements ConversationSession {
   contextSnapshot(systemPrompt?: string) {
     return sessionContextSnapshot(this.session, this.selected, conversationSystemPrompt(this.options.systemPrompt),
       conversationSystemPrompt(systemPrompt ?? this.options.currentSystemPrompt?.() ?? this.options.systemPrompt), !this.switched,
-      this.previousFrameTokens, this.generation());
+      this.previousFrameTokens, this.generation(), this.options.inputHistoryAllowed);
   }
   contextTokens(): number { return this.contextSnapshot().budget.usedTokens; }
 
@@ -296,6 +359,7 @@ class PiConversationSession implements ConversationSession {
   async compactIdle(lease: IdleCompactionLease): Promise<void> {
     if (this.isStreaming) return Promise.reject(new Error('会话尚未空闲，不能整理上下文'));
     lease.signal.throwIfAborted(); lease.assertValid();
+    omitUnapprovedInputs(this.session.sessionManager, this.options.inputHistoryAllowed);
     const active: ActiveCompaction = { lease, controller: new AbortController(), selected: this.selected,
       generation: this.generation(), contextRevision: this.contextSnapshot().revision };
     this.idleCompaction = active;
@@ -352,6 +416,7 @@ class PiConversationSession implements ConversationSession {
     this.options.assertActive();
     await this.prepareModel();
     this.options.assertActive();
+    omitUnapprovedInputs(this.session.sessionManager, this.options.inputHistoryAllowed);
     try {
       await start();
       await this.session.waitForIdle();
@@ -367,8 +432,14 @@ class PiConversationSession implements ConversationSession {
   async steer(text: string, document?: MessageDocument): Promise<void> {
     this.controlRevision++;
     if (this.idleCompaction) { this.invalidateCompaction(); throw new Error('上下文正在整理，消息未投递，请重新发送'); }
-    this.pendingDocuments.push(document); await this.session.steer(text);
+    this.queueInput({ id: document?.requestId ?? randomUUID(), kind: 'steer', text, document });
   }
+  queueInput(input: QueuedSessionInput): void {
+    this.options.assertActive();
+    if (this.idleCompaction) throw new Error('上下文正在整理，消息未投递');
+    this.inputQueue.enqueue(input);
+  }
+  cancelQueuedInput(id: string): boolean { return this.inputQueue.cancel(id); }
   async context(text: string): Promise<void> {
     this.controlRevision++;
     if (this.idleCompaction) { this.invalidateCompaction(); throw new Error('整理期间上下文发生变化'); }
@@ -380,10 +451,11 @@ class PiConversationSession implements ConversationSession {
     await this.running?.catch(() => {});
     await this.session.waitForIdle();
   }
-  clearQueue(): void { this.controlRevision++; this.invalidateCompaction(); this.session.clearQueue(); this.pendingDocuments.length = 0; }
+  clearQueue(): void { this.controlRevision++; this.invalidateCompaction(); this.inputQueue.clear(); this.session.clearQueue(); this.pendingDocuments.length = 0; }
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.lifecycle.close();
     try {
       this.invalidateCompaction();
       this.reasoningStream.clear();
@@ -393,7 +465,16 @@ class PiConversationSession implements ConversationSession {
 
   project(): void {
     for (const entry of this.session.sessionManager.getBranch()) {
-      if (this.projected.has(entry.id) || entry.type !== 'message') continue;
+      if (this.projected.has(entry.id)) continue;
+      if (entry.type === 'custom_message' && entry.customType === queuedInputType) {
+        this.projected.add(entry.id);
+        const details = entry.details as { document?: MessageDocument };
+        const text = typeof entry.content === 'string' ? entry.content : entry.content.filter((part) => part.type === 'text').map((part) => part.text).join('');
+        this.options.event({ type: 'text', value: { entryId: entry.id, role: 'user', source: 'input', text,
+          document: details?.document, createdAt: Date.parse(entry.timestamp) } });
+        continue;
+      }
+      if (entry.type !== 'message') continue;
       this.projected.add(entry.id);
       const message = entry.message;
       if (message.role === 'toolResult' && message.toolName === 'ask_user' && !message.isError) {

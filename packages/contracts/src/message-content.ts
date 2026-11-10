@@ -7,4 +7,4 @@ export type MessagePart = { type: 'text'; text: string } | { type: 'reference'; 
 export interface MessageDocument { requestId: string; parts: MessagePart[] }
 export interface ReferenceBody { reference: ReferenceInfo; original: string; summary?: string }
 export interface TerminalQuoteRequest { terminalId: string; hostId: string; selection?: string; conversationId?: string }
-export interface StructuredSend { document: MessageDocument; conversationId?: string; hostId: string | null; model?: { provider: string; modelId: string }; thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; localSelectionTokens: string[] }
+export interface StructuredSend { queueMode?: 'steer' | 'followUp'; document: MessageDocument; conversationId?: string; hostId: string | null; model?: { provider: string; modelId: string }; thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; localSelectionTokens: string[] }

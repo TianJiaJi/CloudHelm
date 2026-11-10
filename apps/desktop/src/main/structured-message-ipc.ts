@@ -11,7 +11,7 @@ import type { ReferenceStore } from './reference-store.js';
 interface Dependencies {
   state: AppState; store: SqliteStore; runtime: RuntimeBridge; references: ReferenceStore;
   start(input: ConversationStart, document?: MessageDocument, initialMessage?: string, intent?: string, assertPrepared?: (scopes: import('@cloudhelm/contracts').LocalScope[]) => void): Promise<TaskView>;
-  send(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string, prepared?: PreparedContext): Promise<void>;
+  send(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string, prepared?: PreparedContext, queueMode?: import('@cloudhelm/contracts').ConversationInputKind): Promise<void>;
   previewSelections?(tokens: string[]): import('@cloudhelm/contracts').LocalScope[];
   ensureRuntime?(task: TaskView): Promise<void>;
 }
@@ -45,6 +45,7 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
     await runtime.call({ method: 'cancel-message', requestId: id });
   });
   ipcMain.handle('cloudhelm:send-structured', (_event, input: StructuredSend) => {
+    if (input?.queueMode !== undefined && !['steer', 'followUp'].includes(input.queueMode)) throw new Error('无效消息投递方式');
     const id = input?.document?.requestId;
     if (typeof id !== 'string' || !/^[\w-]{1,100}$/u.test(id) || !Array.isArray(input.document.parts) || !input.document.parts.length || input.document.parts.length > 1000) throw new Error('无效消息');
     const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex');
@@ -128,7 +129,11 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       job.dispatching = true;
       receipt.state = 'dispatching'; store.put('message-receipts', id, receipt);
       let conversationId = input.conversationId;
-      if (conversationId) await send(conversationId, prepared.text, input.localSelectionTokens, prepared.document, prepared.intent, prepared.preparedContext);
+      if (conversationId) {
+        const args: Parameters<typeof send> = [conversationId, prepared.text, input.localSelectionTokens, prepared.document, prepared.intent, prepared.preparedContext];
+        if (input.queueMode !== undefined) args[6] = input.queueMode;
+        await send(...args);
+      }
       else {
         const title = parts.filter((part) => part.type === 'text').map((part) => part.text).join('').trim().slice(0, 200) ||
           (bodies.some((body) => body.reference.kind === 'terminal') ? '请分析这段终端输出' : '分析粘贴内容');

@@ -9,7 +9,7 @@ const CRITICAL_TREES = new Set(['/', '/etc', '/usr', '/usr/bin', '/usr/sbin', '/
 const QUERY_COMMANDS = new Set(['pwd', 'whoami', 'id', 'uname', 'uptime', 'date', 'df', 'free', 'hostname', 'ls', 'stat', 'cat']);
 const BAD_DISK_TOOLS = new Set(['mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkswap', 'wipefs', 'sfdisk', 'fdisk', 'parted', 'blkdiscard']);
 const CRITICAL_FILES = new Set(['/etc/passwd', '/etc/shadow', '/etc/sudoers', '/etc/fstab']);
-const SENSITIVE_FILE = /(?:^\/etc\/(?:shadow|gshadow)$|\/\.ssh\/(?:id_[^/]+|authorized_keys)$|(?:^|\/)\.env(?:\.[^/]+)?$)/u;
+const SENSITIVE_FILE = /(?:^\/etc\/(?:shadow|gshadow)$|\/\.ssh\/(?:id_[^/]+|authorized_keys)$|(?:^|\/)\.?Xauthority(?:-[^/]*)?$|(?:^|\/)\.env(?:\.[^/]+)?$)/u;
 const ORDINARY_COMMANDS = new Set(['mkdir', 'touch', 'cp', 'mv', 'install', 'tee', 'truncate', 'chmod', 'chown', 'ln',
   'sed', 'patch', 'tar', 'unzip', 'git', 'npm', 'pnpm', 'yarn', 'pip', 'pip3', 'python', 'python3', 'node',
   'systemctl', 'service', 'docker', 'apt', 'apt-get', 'dnf', 'yum', 'apk', 'brew', 'make', 'cmake', 'rsync', 'rm', 'rmdir']);
@@ -124,14 +124,16 @@ function hardCommandReason(analysis: CommandAnalysis, cwd: string): string | nul
 function sensitiveRead(analysis: CommandAnalysis, cwd: string): boolean {
   return analysis.calls.some((call) => {
     const name = path.posix.basename(call.name);
+    if (name === 'xauth') return true;
     if (name === 'tar' && call.semantics?.tar) {
       return call.semantics.tar.paths.some((effect) => effect.kind === 'read'
         && SENSITIVE_FILE.test(literalPath(effect.path, resolveCommandDirectory(effect.directory, cwd)) ?? ''))
         || call.semantics.coverage === 'partial' && call.args.some((arg) => SENSITIVE_FILE.test(literalPath(arg, callDirectory(call, cwd)) ?? ''));
     }
     if (!['cat', 'grep', 'head', 'tail', 'less', 'more', 'sed', 'awk', 'bash', 'sh', 'zsh', 'source', '.',
-      'cp', 'mv', 'rsync', 'scp', 'tar', 'find', 'tee'].includes(name)) return false;
-    return call.args.some((arg) => SENSITIVE_FILE.test(literalPath(arg, callDirectory(call, cwd)) ?? ''));
+      'cp', 'mv', 'rsync', 'scp', 'tar', 'find', 'tee', 'base64', 'xxd', 'od', 'hexdump', 'strings'].includes(name)) return false;
+    return call.args.some((arg) => /\$\{?XAUTHORITY\}?/u.test(arg)
+      || SENSITIVE_FILE.test(literalPath(arg, callDirectory(call, cwd)) ?? arg.replace(/^(['"])(.*)\1$/u, '$2')));
   });
 }
 

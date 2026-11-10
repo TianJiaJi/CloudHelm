@@ -51,6 +51,7 @@ function setup(task = makeConversation(), running = false) {
     getTask: vi.fn((id: string) => { const value = conversations.get(id); if (!value) throw new Error('Unknown conversation'); return value; }),
     runtimeHost: vi.fn((id: string) => ({ ...hosts.find((host) => host.id === id)! })),
     snapshot: vi.fn(() => ({ operations: [], messages })),
+    queuedInputs: vi.fn(() => []),
     rebuildVerificationReport: vi.fn(async () => {}),
     createTask: vi.fn((goal: string, hostIds: string[], modelId: string, localScopes: LocalScope[]) => {
       const created = { ...makeConversation(hostIds), id: 'new-conversation', session: { version: 1 as const, id: 'new-conversation' }, goal, modelId, localScopes };

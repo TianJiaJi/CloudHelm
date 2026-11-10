@@ -56,6 +56,44 @@ describe('application shutdown ordering', () => {
     expect(f.snapshot).toHaveBeenCalledOnce();
   });
 
+  it('asks before destroying a non-macOS window and preserves it when cancelled', async () => {
+    const f = fixture(true);
+    f.shutdown.beforeWindowClose(f.event, false);
+    expect(f.event.preventDefault).toHaveBeenCalledOnce();
+    f.answer(false); await Promise.resolve(); await Promise.resolve();
+    expect(f.quit).not.toHaveBeenCalled(); expect(f.close).not.toHaveBeenCalled();
+    expect(f.snapshot()).toBeDefined();
+  });
+
+  it('permits the confirmed quit to re-enter both window-close and before-quit without another prompt', async () => {
+    const f = fixture(true);
+    f.quit.mockImplementation(() => {
+      f.shutdown.beforeQuit(f.event); f.shutdown.beforeWindowClose(f.event, false); f.shutdown.willQuit();
+    });
+    f.shutdown.beforeWindowClose(f.event, false); f.answer(true); await Promise.resolve();
+    expect(f.event.preventDefault).toHaveBeenCalledOnce(); expect(f.confirmExit).toHaveBeenCalledOnce(); expect(f.close).toHaveBeenCalledOnce();
+  });
+
+  it('does not equate macOS window closure with application quit or remote exit', () => {
+    const f = fixture(true); f.shutdown.beforeWindowClose(f.event, true);
+    expect(f.event.preventDefault).not.toHaveBeenCalled(); expect(f.confirmExit).not.toHaveBeenCalled();
+    expect(f.quit).not.toHaveBeenCalled(); expect(f.close).not.toHaveBeenCalled();
+  });
+
+  it('prompts for an answered conversation with an unobserved background exit even without a live terminal', () => {
+    const f = fixture();
+    f.snapshot.mockReturnValue({ conversations: [{ status: 'answered' }], terminals: [], operations: [{ status: 'unknown',
+      executionJob: { status: 'unknown', exitObserved: false } }] } as unknown as AppSnapshot);
+    f.shutdown.beforeWindowClose(f.event, false);
+    expect(f.event.preventDefault).toHaveBeenCalledOnce(); expect(f.confirmExit).toHaveBeenCalledOnce();
+    expect(f.quit).not.toHaveBeenCalled(); expect(f.close).not.toHaveBeenCalled();
+  });
+
+  it.each([{ exitObserved: true }, { exitObserved: false, notStarted: 'denied' }])('does not invent a live job from an ended observation %s', (job) => {
+    const f = fixture(); f.snapshot.mockReturnValue({ conversations: [], terminals: [], operations: [{ status: 'succeeded', executionJob: job }] } as unknown as AppSnapshot);
+    f.shutdown.beforeWindowClose(f.event, false); expect(f.confirmExit).not.toHaveBeenCalled(); expect(f.event.preventDefault).not.toHaveBeenCalled();
+  });
+
   it('ignores a dialog answer delivered after resources were already closed', async () => {
     const f = fixture(true);
     f.shutdown.beforeQuit(f.event); f.shutdown.willQuit(); f.answer(true);

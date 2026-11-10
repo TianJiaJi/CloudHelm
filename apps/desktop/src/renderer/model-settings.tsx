@@ -244,11 +244,11 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
             <fieldset className={styles.fields} disabled={!loaded || busy !== null}>
               <div className={styles.field}><label htmlFor="model-api-key">API Key</label><div>
                 <div className={styles.inputWithAction}><input id="model-api-key" type={showKey ? 'text' : 'password'} autoComplete="off"
-                  spellCheck={false} value={draft.apiKey} onChange={(event) => updateDraft({ apiKey: event.target.value })}
-                  placeholder={configuration?.saved.hasKey ? '已配置 · 留空保留现有 Key' : '粘贴供应商 API Key'} />
+                  spellCheck={false} aria-describedby="model-key-status" value={draft.apiKey} onChange={(event) => updateDraft({ apiKey: event.target.value })}
+                  placeholder={configuration?.saved.hasKey ? '••••••••••••••••' : '粘贴供应商 API Key'} />
                   <button type="button" aria-label={showKey ? '隐藏 API Key' : '显示新输入的 API Key'} aria-pressed={showKey}
-                    onClick={() => setShowKey((value) => !value)}><SettingsIcon kind={showKey ? 'eye-off' : 'eye'} /></button></div>
-                <p className={styles.hint}>密钥仅保存在本机加密存储中。</p>
+                    disabled={!draft.apiKey} onClick={() => setShowKey((value) => !value)}><SettingsIcon kind={showKey ? 'eye-off' : 'eye'} /></button></div>
+                <p id="model-key-status" className={styles.hint}>{configuration?.saved.hasKey ? '已保存密钥 · 留空保留，输入新 Key 可替换。圆点仅表示已保存，不是密钥内容。' : '密钥仅保存在本机加密存储中。'}</p>
               </div></div>
               <div className={styles.field}><label htmlFor="model-base-url">Base URL</label><div>
                 <div className={styles.urlRow}><input id="model-base-url" type="url" spellCheck={false} value={draft.baseUrl}
@@ -324,7 +324,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
         </MenuSurface>}
         <label htmlFor="review-key">Jev / Vercel Gateway Key {hasJevKey && <span className={styles.badge}>已配置</span>}</label>
         <input id="review-key" type="password" autoComplete="off" spellCheck={false} value={jevKey} disabled={disableJev}
-          onChange={(event) => { setJevKey(event.target.value); setFeedback(null); }} placeholder={hasJevKey ? '留空保留现有 Key' : '选择 Jev 后填写'} />
+          onChange={(event) => { setJevKey(event.target.value); setFeedback(null); }} placeholder={hasJevKey ? '••••••••••••••••' : '选择 Jev 后填写'} />
         <p className={styles.hint}>使用 Vercel Gateway 的 typesafe-ai/jev。凭据与聊天模型独立，使用费用按供应商规则计算。</p>
         {hasJevKey && <label className={styles.checkbox}><input type="checkbox" checked={disableJev}
           onChange={(event) => { setDisableJev(event.target.checked); setFeedback(null); }} />移除 Jev Key</label>}

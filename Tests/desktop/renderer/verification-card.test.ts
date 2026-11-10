@@ -14,9 +14,11 @@ const task = (status: 'verified' | 'unverified'): TaskView => ({
 
 it('distinguishes answered but unverified changes from a verified report', () => {
   const warning = renderToStaticMarkup(createElement(VerificationCard, { conversation: task('unverified'), report: () => {} }));
-  expect(warning).toContain('已执行 · 未核验');
-  expect(warning).toContain('不能仅凭退出码断言目标已完成');
-  expect(warning).toContain('role="alert"');
+  expect(warning).toContain('历史操作记录');
+  expect(warning).toContain('此历史记录未保存结果说明');
+  expect(warning).not.toContain('继续核验');
+  expect(warning).not.toContain('不能仅凭退出码断言目标已完成');
+  expect(warning).not.toContain('role="alert"');
   expect(warning).not.toContain('已读回验证');
   const verified = renderToStaticMarkup(createElement(VerificationCard, { conversation: task('verified'), report: () => {} }));
   expect(verified).toContain('已读回验证');

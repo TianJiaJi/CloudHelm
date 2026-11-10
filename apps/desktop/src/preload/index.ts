@@ -10,8 +10,8 @@ const api: DesktopAPI = {
   cancelMessage: (id) => invoke('cancel-message', id),
   snapshot: () => invoke('snapshot'),
   appVersion: () => invoke('app-version'),
-  addHost: (host) => invoke('add-host', host),
-  editHost: (hostId, host, newSecret) => invoke('edit-host', hostId, host, newSecret),
+  addHost: (host, credentials) => invoke('add-host', host, credentials),
+  editHost: (hostId, host, newSecret, credentials) => invoke('edit-host', hostId, host, newSecret, credentials),
   testHostConnection: (input) => invoke('test-host', input),
   setHostSecret: (hostId, secret) => invoke('set-host-secret', hostId, secret),
   updateHostReviewMode: (hostId, mode) => invoke('update-host-review-mode', hostId, mode),
@@ -43,7 +43,9 @@ const api: DesktopAPI = {
   stopTerminal: (terminalId) => invoke('stop-terminal', terminalId),
   resizeTerminal: (terminalId, cols, rows) => invoke('resize', terminalId, cols, rows),
   startConversation: (input) => invoke('start-conversation', input),
-  sendMessage: (id, message, tokens) => invoke('send-message', id, message, tokens ?? []),
+  sendMessage: (id, message, tokens, queueMode) => queueMode === undefined
+    ? invoke('send-message', id, message, tokens ?? []) : invoke('send-message', id, message, tokens ?? [], queueMode),
+  cancelQueuedInput: (id, inputId) => invoke('cancel-queued-input', id, inputId),
   setConversationThinking: (id, level) => invoke('set-conversation-thinking', id, level),
   setConversationModel: (id, model) => invoke('set-conversation-model', id, model),
   answerClarification: (taskId, requestId, answers) => invoke('answer-clarification', taskId, requestId, answers),
@@ -58,6 +60,7 @@ const api: DesktopAPI = {
   extendRequestBudget: (input) => invoke('extend-request-budget', input),
   listRemote: (hostId, path) => invoke('list-remote', hostId, path),
   readTerminalLog: (terminalId) => invoke('read-terminal-log', terminalId),
+  readOperationLog: (taskId, operationId, cursor) => invoke('read-operation-log', taskId, operationId, cursor),
   deleteConversation: (id) => invoke('delete-conversation', id),
   onEvent: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, value: AppEvent) => listener(value);

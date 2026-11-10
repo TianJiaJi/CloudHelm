@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 export async function checkTerminalLayout(page, screenshot) {
   const originalViewport = page.viewportSize();
   for (const agent of [false, true]) {
-    await page.getByRole('button', { name: agent ? '打开 AI 专用终端' : '生产服务器', exact: true }).click();
+    await page.getByRole('button', { name: agent ? '打开 AI 专用终端' : '生产服务器 · 人工 · 已绑定', exact: true }).click();
     for (const viewport of [{ width: 1440, height: 820 }, { width: 980, height: 640 }, { width: 1440, height: 1100 }]) {
       await page.setViewportSize(viewport);
       // ResizeObserver + xterm's render frame settle after setViewportSize returns.
@@ -59,5 +59,5 @@ export async function checkTerminalLayout(page, screenshot) {
     });
   }
   await page.setViewportSize(originalViewport);
-  await page.getByRole('button', { name: '生产服务器', exact: true }).click();
+  await page.getByRole('button', { name: '生产服务器 · 人工 · 已绑定', exact: true }).click();
 }

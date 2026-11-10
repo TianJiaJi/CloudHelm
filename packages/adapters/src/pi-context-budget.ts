@@ -1,17 +1,18 @@
 import { createHash } from 'node:crypto';
 import { contextBudget, estimateTextTokens, type SessionContextSnapshot, type SessionProfile } from '@cloudhelm/core';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
+import { inputProjection } from './pi-input-projection.js';
 import { resolveSessionModel } from './pi-session-model.js';
 
 /** Only the active native projection is measured. The JSONL archive stays intact. */
 export function sessionContextSnapshot(session: AgentSession, profile: SessionProfile, originalPrompt: string,
-  currentPrompt: string, useUsage: boolean, previousFrameTokens: number | undefined, generation: string): SessionContextSnapshot & { frameTokens: number } {
+  currentPrompt: string, useUsage: boolean, previousFrameTokens: number | undefined, generation: string, inputAllowed?: (id: string) => boolean): SessionContextSnapshot & { frameTokens: number } {
   const system = session.systemPrompt.includes(originalPrompt) ? session.systemPrompt.replace(originalPrompt, currentPrompt)
     : `${session.systemPrompt}\n${currentPrompt}`;
   const frame = JSON.stringify([system, session.agent.state.tools.map(({ name, description, parameters }) => ({ name, description, parameters }))]);
   // agent.state.messages is runtime/transcript state, not the canonical
   // compaction-aware input. The public projection also applies context edits.
-  const messages = session.sessionManager.buildSessionProjection().messages.filter((message) => message.role !== 'system');
+  const messages = inputProjection(session.sessionManager, inputAllowed).filter((message) => message.role !== 'system');
   const history = JSON.stringify(messages);
   const frameTokens = estimateTextTokens(frame);
   const model = resolveSessionModel(profile).model;

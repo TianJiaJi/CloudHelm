@@ -16,7 +16,9 @@
   display: inline-flex; justify-content: center; align-items: center; padding: 10px 17px; border: 1px solid transparent;
   border-radius: 8px; background: var(--accent); color: var(--canvas); font-size: 12px; font-weight: 650; white-space: nowrap;
 }
-.page .primary:hover, .unsavedDialog .primary:hover { filter: brightness(1.06); color: var(--canvas); }
+/* Keep the primary fill above the shared .app button:hover rule, including disabled hover. */
+.page .primary:hover, .unsavedDialog .primary:hover { background: var(--accent); color: var(--canvas); }
+.page .primary:not(:disabled):hover, .unsavedDialog .primary:not(:disabled):hover { filter: brightness(1.06); }
 .page button:focus-visible, .unsavedDialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .page input { min-width: 0; width: 100%; border: 1px solid var(--border); border-radius: 7px; background: var(--canvas); color: var(--text); padding: 10px 12px; font-size: 12px; outline: none; }
 .page input:focus { border-color: var(--accent); }

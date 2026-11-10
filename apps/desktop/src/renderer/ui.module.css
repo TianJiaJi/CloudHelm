@@ -19,6 +19,7 @@
 .sectionHead { display: flex; justify-content: space-between; align-items: center; padding: 13px 15px 9px; color: var(--muted); font-size: 11px; }
 .sectionHead button { padding: 3px; }
 .hostList { max-height: 37vh; overflow: auto; padding: 0 8px 10px; flex: none; }
+.hostGroupLabel { margin: 10px 8px 6px; color: var(--muted); font-size: 10px; font-weight: 500; overflow-wrap: anywhere; }
 .hostRow { display: flex; align-items: center; border-radius: 7px; position: relative; margin-bottom: 3px; }
 .hostSelect { width: 100%; min-width: 0; padding: 10px 5px 10px 8px; text-align: left; }
 .hostSelect > svg { color: var(--muted); }

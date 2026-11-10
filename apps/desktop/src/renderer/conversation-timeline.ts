@@ -1,6 +1,6 @@
 import type { ClarificationRequest, ConversationMessage, OperationView } from '@cloudhelm/contracts';
 
-type TimelineEntry =
+export type TimelineEntry =
   | { kind: 'clarification'; key: string; value: ClarificationRequest }
   | { kind: 'message'; key: string; value: ConversationMessage }
   | { kind: 'operation'; key: string; value: OperationView };

@@ -12,7 +12,7 @@ import type { SshTransport } from '../../packages/adapters/src/ssh-transport.js'
 // binary and root UID/peer checks are replaced: these tests never elevate the local user.
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
-async function fixture() {
+async function fixture(retry = false) {
   const directory = await mkdtemp('/tmp/cloudhelm-su-');
   const children: ChildProcessWithoutNullStreams[] = [];
   cleanup.push(async () => { for (const child of children) child.kill(); await rm(directory, { recursive: true, force: true }); });
@@ -23,7 +23,9 @@ old=termios.tcgetattr(0); changed=termios.tcgetattr(0); changed[3] &= ~termios.E
 sys.stdout.write('Password:'); sys.stdout.flush()
 answer=sys.stdin.readline().strip()
 termios.tcsetattr(0,termios.TCSANOW,old)
-if answer != 'synthetic-root-password': sys.exit(1)
+if answer != 'synthetic-root-password':
+    if ${retry ? 'True' : 'False'}: print('su: Authentication failure', flush=True)
+    sys.exit(1)
 os.execv('/bin/sh',['/bin/sh','-c',sys.argv[-1]])
 `, { mode: 0o700 });
   const testRoot = suRootProgram.replace('if os.getuid() != 0:', 'if False:').replace("'uid': os.getuid()", "'uid': 0");
@@ -74,6 +76,18 @@ describe.skipIf(process.platform === 'win32')('su private authentication and ind
     expect([...f.output, ...f.display, f.stderr()].join('')).not.toContain('synthetic-root-password');
     expect(f.display.join('')).toContain('@');
     f.controller.abort(); await expect(f.session.openPipe()).rejects.toThrow('expired');
+  });
+  it('restarts only a failed isolated authentication phase, then runs the payload once', async () => {
+    const f = await fixture(true); const ask = vi.fn().mockResolvedValueOnce('incorrect-password').mockResolvedValue('synthetic-root-password');
+    await f.session.connect(ask, () => {}); expect(ask.mock.calls.map((args) => args[0])).toEqual(['1', '2']);
+    await f.terminal.execute('printf once', f.directory, () => true);
+    await vi.waitFor(() => expect(f.exits, f.stderr()).toEqual([0]), { timeout: 10000 });
+    expect(f.output.join('')).toBe('once'); expect(f.output.join('')).not.toContain('password');
+  });
+  it('stops after three rejected passwords without opening a payload channel', async () => {
+    const f = await fixture(true), ask = vi.fn(async () => 'incorrect-password');
+    await expect(f.session.connect(ask, () => {})).rejects.toMatchObject({ feedback: { code: 'attempts-exhausted', businessCommand: 'not-started' } });
+    expect(ask).toHaveBeenCalledTimes(3); expect(f.output).toEqual([]);
   });
   it.each([null, 'incorrect-password'])('closes without executing a payload on rejected auth: %s', async (answer) => {
     const f = await fixture(); await expect(f.session.connect(async () => answer, () => {})).rejects.toMatchObject({ feedback: { method: 'su',

@@ -59,7 +59,7 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
     await runtime.call({ method: 'start-task', task, restored: true,
       hosts: task.hostIds.map((id) => state.runtimeHost(id)),
       profile: profile!,
-      priorOperations: snapshot.operations.filter((operation) => operation.taskId === task.id),
+      priorOperations: snapshot.operations.filter((operation) => operation.taskId === task.id), priorInputs: state.queuedInputs(task.id),
       sessionDirectory: sessionDirectory(task) });
   }
 
@@ -84,7 +84,7 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
     }
   }
 
-  async function send(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string, prepared?: PreparedContext): Promise<void> {
+  async function send(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string, prepared?: PreparedContext, queueMode?: import('@cloudhelm/contracts').ConversationInputKind): Promise<void> {
     if (typeof text !== 'string' || !text.trim() || (!document && text.length > 100_000)) throw new Error('请输入有效内容');
     const task = state.getTask(id);
     if (task.status === 'waiting-user') throw new Error('请先回答需求澄清，或停止本轮对话');
@@ -99,13 +99,26 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
           ...(prepared ? { prepared: { ...prepared, text } } : {}) });
         state.authorizeTask(id, [], scopes);
       }
-      await runtime.call({ method: 'task-message', taskId: id, text, document, intent,
+      await runtime.call({ method: 'task-message', taskId: id, text, document, intent, queueMode,
         ...(prepared ? { preparedRevision: prepared.revision } : {}) });
     } catch (error) { restoreSelections(tokens, scopes); throw error; }
   }
   ipcMain.handle('cloudhelm:rebuild-verification-report', (_event, id: string) => state.rebuildVerificationReport(id, new BashAnalyzer()));
   ipcMain.handle('cloudhelm:start-conversation', (_event, input: ConversationStart) => start(input));
-  ipcMain.handle('cloudhelm:send-message', (_event, id: string, text: string, tokens: string[]) => send(id, text, tokens));
+  ipcMain.handle('cloudhelm:send-message', (_event, id: string, text: string, tokens: string[], queueMode?: unknown) => {
+    if (typeof queueMode === 'string' && queueMode !== 'steer' && queueMode !== 'followUp') throw new Error('无效消息投递方式');
+    // Legacy extra objects (including hostIds) never grant scope or choose a delivery mode.
+    return send(id, text, tokens, undefined, undefined, undefined,
+      queueMode === 'steer' || queueMode === 'followUp' ? queueMode : undefined);
+  });
+  ipcMain.handle('cloudhelm:cancel-queued-input', async (_event, taskId: string, inputId: string) => {
+    state.getTask(taskId);
+    const value = state.queuedInputs(taskId).find((entry) => entry.id === inputId);
+    if (!value) throw new Error('消息不属于当前对话');
+    if (!await runtime.call<boolean>({ method: 'has-task', taskId })) return { cancelled: false };
+    const result = await runtime.call<{ cancelled: boolean }>({ method: 'cancel-queued-input', taskId, inputId });
+    return { cancelled: result.cancelled }; // Prepared reference bodies never cross this renderer API.
+  });
   if (store && references) registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime,
     previewSelections: (tokens) => { const scopes = takeSelections(tokens); restoreSelections(tokens, scopes); return structuredClone(scopes); } });
 
@@ -125,6 +138,7 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
   });
   ipcMain.handle('cloudhelm:resume-task', async (_event, id: string) => {
     const task = state.getTask(id); sessionDirectory(task);
+    if (task.resumeReason === 'report') throw new Error('报告记录不是待执行工作；请发送新消息说明需求。');
     if (remainingRequests(state.requestBudgets.current(id)) <= 0) throw new RequestBudgetError('budget-exhausted');
     await ensureRuntime(task);
     if (remainingRequests(state.requestBudgets.reopen(id)) <= 0) throw new RequestBudgetError('budget-exhausted');

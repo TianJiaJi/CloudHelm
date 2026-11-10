@@ -19,6 +19,9 @@ export function operationFingerprint(operation: ProposedOperation): string {
     protectedReadPaths: scope.protectedReadPaths,
     protectedWritePaths: scope.protectedWritePaths,
     kind: operation.kind,
+    privilege: operation.kind === 'command' ? operation.privilege : undefined,
+    executionMode: operation.kind === 'command' ? operation.executionMode : undefined,
+    processControl: operation.kind === 'command' ? operation.processControl : undefined,
     payload: operation.kind === 'command' ? operation.command
       : operation.kind === 'write-file' ? [operation.path, operation.content]
       : operation.kind === 'upload' ? [operation.localPath, operation.remotePath, operation.localRoot, operation.contentSha256, operation.size]
@@ -29,7 +32,7 @@ export function operationFingerprint(operation: ProposedOperation): string {
 
 /** Replay identity excludes transient approval leases; it never authorizes execution. */
 export function operationIntentKey(operation: ProposedOperation): string {
-  return operationFingerprint({ ...operation, scope: { ...operation.scope,
+  return operationFingerprint({ ...operation, ...(operation.kind === 'command' ? { privilege: undefined, executionMode: undefined } : {}), scope: { ...operation.scope,
     taskId: '', terminalId: '', terminalGeneration: 0, policyRevision: 0, conversationRevision: 0, reviewerRevision: 0,
     connectionGeneration: undefined, sessionId: undefined, allowedWorkingRoots: [], protectedPaths: [],
     protectedReadPaths: [], protectedWritePaths: [], goal: ''

@@ -11,6 +11,7 @@ import { registerRecoveryIpc } from './recovery-ipc.js';
 import { AppState } from './app-state.js';
 import { registerHostSafetyIpc } from './host-safety-ipc.js';
 import { registerConversationIpc } from './conversation-ipc.js';
+import { HostConnectionAttempts } from './host-connection-attempts.js';
 import { RuntimeBridge } from './runtime-bridge.js';
 import { HostConnectionTester } from './host-connection-test.js';
 import { AppShutdown } from './app-shutdown.js';
@@ -23,7 +24,7 @@ let state: AppState;
 let runtime: RuntimeBridge;
 let references: ReferenceStore;
 const untrustedFingerprints = new Map<string, string>();
-const connecting = new Map<string, Promise<void>>();
+const connecting = new HostConnectionAttempts();
 const selectedLocalPaths = new Map<string, LocalScope>();
 
 function takeLocalSelections(tokens: string[]): LocalScope[] {
@@ -46,26 +47,27 @@ function publish(event: AppEvent): void {
 
 async function connectHost(hostId: string): Promise<void> {
   if (state.getHost(hostId).status === 'connected') return;
-  const pending = connecting.get(hostId);
-  if (pending) return pending;
-  const connection = connectOnce(hostId).finally(() => connecting.delete(hostId));
-  connecting.set(hostId, connection);
-  return connection;
+  return connecting.run(hostId, (signal) => connectOnce(hostId, signal));
 }
 
-async function connectOnce(hostId: string): Promise<void> {
+async function connectOnce(hostId: string, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
   const host = state.runtimeHost(hostId);
-  if (host.jumpHostId) {
-    const jumpHost = state.getHost(host.jumpHostId);
+  const jumpHostId = host.connection?.proxy?.enabled ? undefined : host.jumpHostId;
+  if (jumpHostId) {
+    const jumpHost = state.getHost(jumpHostId);
     if (jumpHost.jumpHostId) throw new Error('Only one jump host is supported');
     if (jumpHost.status !== 'connected') await connectHost(jumpHost.id);
   }
-  const jump = host.jumpHostId ? state.runtimeHost(host.jumpHostId) : undefined;
+  signal.throwIfAborted();
+  const jump = jumpHostId ? state.runtimeHost(jumpHostId) : undefined;
   state.updateHost(hostId, { status: 'connecting' });
   try {
     await runtime.call({ method: 'connect', host, jump });
+    signal.throwIfAborted();
     untrustedFingerprints.delete(hostId);
   } catch (error) {
+    if (signal.aborted) throw new Error('SSH 连接已取消');
     if (error && typeof error === 'object' && 'hostFingerprint' in error && typeof error.hostFingerprint === 'string') {
       untrustedFingerprints.set(hostId, error.hostFingerprint);
       state.updateHost(hostId, { status: 'changed-key' });
@@ -81,8 +83,8 @@ function registerIpc(): void {
   registerConversationIpc({ store, references, sessionRoot: join(app.getPath('userData'), 'pi-sessions'), state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
   ipcMain.handle('cloudhelm:snapshot', () => state.snapshot());
   ipcMain.handle('cloudhelm:app-version', () => app.getVersion());
-  ipcMain.handle('cloudhelm:add-host', (_event, host: HostDraft) => state.addHost(host));
-  ipcMain.handle('cloudhelm:edit-host', (_event, hostId: string, host: HostDraft, newSecret?: string) => state.editHost(hostId, host, newSecret));
+  ipcMain.handle('cloudhelm:add-host', (_event, host: HostDraft, credentials?: Parameters<DesktopAPI['addHost']>[1]) => state.addHost(host, credentials));
+  ipcMain.handle('cloudhelm:edit-host', (_event, hostId: string, host: HostDraft, newSecret?: string, credentials?: Parameters<DesktopAPI['editHost']>[3]) => state.editHost(hostId, host, newSecret, credentials));
   ipcMain.handle('cloudhelm:set-host-secret', (_event, hostId: string, secret: string) => {
     state.getHost(hostId);
     state.saveSecret(`host:${hostId}`, secret);
@@ -116,10 +118,10 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:test-model', (_event, profile: Parameters<DesktopAPI['testModelConnection']>[0]) => runtime.call({ method: 'test-model', profile: state.testProfile(profile) }));
   ipcMain.handle('cloudhelm:available-models', () => state.availableModels());
   ipcMain.handle('cloudhelm:disconnect-host', async (_event, hostId: string) => {
-    state.getHost(hostId); await runtime.call({ method: 'disconnect', hostId }); state.updateHost(hostId, { status: 'disconnected' });
+    state.getHost(hostId); connecting.cancel(hostId); await runtime.call({ method: 'disconnect', hostId }); state.updateHost(hostId, { status: 'disconnected' });
   });
   ipcMain.handle('cloudhelm:delete-host', async (_event, hostId: string) => {
-    state.getHost(hostId); await runtime.call({ method: 'disconnect', hostId }); state.archiveHost(hostId);
+    state.getHost(hostId); connecting.cancel(hostId); await runtime.call({ method: 'disconnect', hostId }); state.archiveHost(hostId);
   });
   ipcMain.handle('cloudhelm:list-model-providers', () => listModelProviders());
   ipcMain.handle('cloudhelm:model-provider-settings', (_event, providerId: string) => state.modelProviderSettings(providerId));
@@ -167,6 +169,7 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:pause-task', (_event, taskId: string) => runtime.call({ method: 'pause-task', taskId }));
   ipcMain.handle('cloudhelm:list-remote', (_event, hostId: string, path: string) => runtime.call({ method: 'list-remote', hostId, path }));
   ipcMain.handle('cloudhelm:read-terminal-log', (_event, terminalId: string) => state.readTerminalLog(terminalId));
+  ipcMain.handle('cloudhelm:read-operation-log', (_event, taskId: string, operationId: string, cursor: number) => state.readOperationLog(taskId, operationId, cursor));
 }
 
 /**
@@ -204,6 +207,7 @@ function createWindow(): void {
   });
   if (process.env.ELECTRON_RENDERER_URL) void window.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void window.loadFile(join(import.meta.dirname, '../renderer/index.html'));
+  window.on('close', (event) => shutdown.beforeWindowClose(event, process.platform === 'darwin'));
   window.on('closed', () => { window = null; });
 }
 
@@ -224,7 +228,7 @@ void app.whenReady().then(async () => {
       && (event.type === 'approval-open' || event.type === 'input-open')) {
       new Notification({ title: 'CloudHelm', body: 'AI 需要你处理一项请求。' }).show();
     }
-  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event), (command) => state.requestBudget(command));
+  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event), (command) => state.requestBudget(command), (operation) => state.commitOperation(operation), (value) => state.commitInput(value));
   // Reclassify only provably read-only completed legacy commands before the
   // worker restores host locks. Ambiguous commands remain blocked.
   await state.normalizeHistoricalQueries(new BashAnalyzer());

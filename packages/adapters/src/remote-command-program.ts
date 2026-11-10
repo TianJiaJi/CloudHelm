@@ -1,6 +1,6 @@
 /** Fixed transport component. Business commands and credentials are data, never generated shell scripts. */
 export const remoteCommandProgram = String.raw`#!/usr/bin/env python3
-import shutil
+import shutil, re
 import base64, codecs, fcntl, json, os, pty, pwd, select, signal, socket, struct, subprocess, sys, termios, threading, time, uuid
 
 def askpass():
@@ -29,6 +29,9 @@ pending = {}
 process = None
 master = None
 slave = None
+authorization_ready = False
+authorization_deadline = None
+signal_receipt = None
 
 def emit(value):
     with output_lock:
@@ -71,11 +74,35 @@ def auth_loop(server, token):
         except OSError:
             break
 
-def read_output():
+def poll_child(child):
+    # Serialize reaping with signalling: a reaped/reused PID must never be signalled.
+    with state_lock: return child.poll()
+
+def interrupt_child(expected_pid=None):
+    with state_lock:
+        child = process
+        if child is None or (expected_pid is not None and child.pid != expected_pid):
+            raise ValueError('Process binding changed')
+        if child.poll() is not None: return 'already-exited'
+        # While this lock is held no other thread can reap this child. If it exits
+        # now its PID stays reserved as a zombie until the signal attempt finishes.
+        try: os.killpg(child.pid, signal.SIGINT)
+        except ProcessLookupError:
+            if child.poll() is None: raise
+            return 'already-exited'
+        return 'sent'
+
+def read_output(checking=False):
+    global authorization_ready, authorization_deadline
+    child = process
+    authorized = False
+    diagnostic = ''
     decoder = codecs.getincrementaldecoder('utf-8')('replace')
     def take(data):
+        nonlocal diagnostic
         text = decoder.decode(data)
-        if text: emit({'type': 'data', 'data': text})
+        if checking: diagnostic = (diagnostic + text)[-8192:]
+        elif text: emit({'type': 'data', 'data': text})
     try:
         quiet = 0
         # The parent keeps the slave open until the transport closes, so output written
@@ -88,16 +115,36 @@ def read_output():
                 except OSError: break
                 if not data: break
                 take(data)
-            elif process.poll() is not None:
+            elif poll_child(child) is not None:
                 quiet += 1
         tail = decoder.decode(b'', final=True)
-        if tail: emit({'type': 'data', 'data': tail})
-        code = process.wait()
-        emit({'type': 'exit', 'code': code if code >= 0 else 128 - code})
+        if checking: diagnostic = (diagnostic + tail)[-8192:]
+        elif tail: emit({'type': 'data', 'data': tail})
+        code = poll_child(child)
+        while code is None:
+            time.sleep(0.05)
+            code = poll_child(child)
+        if checking:
+            # This process only queried sudo policy for the exact approved argv. No payload ran.
+            # Diagnostic text selects the explanation; the separate process phase proves no dispatch.
+            denied = re.search(r'(?:not in the sudoers|not allowed to (?:execute|run)|may not run sudo)', diagnostic, re.I)
+            if code != 0 and (denied or code < 0 or code >= 128):
+                emit({'type': 'sudo-authorization-failed', 'code': 'authorization-denied' if denied else 'authentication-unconfirmed'})
+            else:
+                # -n makes policy listing noninteractive. listpw is NOT the command's
+                # password policy: an inconclusive listing must not request a password.
+                # The reviewed target still goes through sudo's actual policy check.
+                authorized = True
+                with state_lock:
+                    authorization_ready = True
+                    authorization_deadline = time.monotonic() + 30
+                emit({'type': 'sudo-authorized' if code == 0 else 'sudo-policy-unconfirmed'})
+        else: emit({'type': 'exit', 'code': code if code >= 0 else 128 - code})
     finally:
-        finished.set()
-        with state_lock:
-            for entry in pending.values(): entry['event'].set()
+        if not authorized:
+            finished.set()
+            with state_lock:
+                for entry in pending.values(): entry['event'].set()
 
 server = None
 socket_path = None
@@ -147,15 +194,24 @@ try:
     def child_session():
         os.setsid()
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-    process = subprocess.Popen(argv, cwd=launch['cwd'], env=environment, stdin=slave, stdout=slave, stderr=slave,
-                               close_fds=True, preexec_fn=child_session)
+    checking = launch.get('sudoAuthorization') is True
+    if checking and (not launch.get('sudo') or argv[1:3] != ['-A', '--']): raise ValueError('Invalid bounded sudo authorization')
+    # Internal command-scoped authorization, not a model-visible sudo capability probe.
+    # Unlike a root shell wrapper, sudo still checks and executes the exact target program.
+    checked_argv = [argv[0], '-n', '-l'] + argv[2:] if checking else argv
+    def start(args):
+        return subprocess.Popen(args, cwd=launch['cwd'], env=environment, stdin=slave, stdout=slave, stderr=slave,
+                                close_fds=True, preexec_fn=child_session)
+    process = start(checked_argv)
+    if not checking: emit({'type': 'process-started', 'pid': process.pid})
     # The slave descriptor stays open here on purpose: closing it while the payload's last
     # writes are still in the tty buffer can make the master read miss that output entirely.
     if server: threading.Thread(target=auth_loop, args=(server, token), daemon=True).start()
-    threading.Thread(target=read_output, daemon=True).start()
+    threading.Thread(target=read_output, args=(checking,), daemon=True).start()
     # Unbuffered reads avoid a control message remaining in Python's read-ahead buffer.
     incoming = b''
     while not finished.is_set():
+        if authorization_deadline is not None and time.monotonic() > authorization_deadline: break
         ready, _, _ = select.select([sys.stdin.fileno()], [], [], 0.1)
         if not ready: continue
         chunk = os.read(sys.stdin.fileno(), 65536)
@@ -166,9 +222,30 @@ try:
             line, incoming = incoming.split(b'\n', 1)
             message = json.loads(line)
             kind = message.get('type')
-            if kind == 'input':
+            if kind == 'continue-authorized':
+                with state_lock:
+                    if not checking or not authorization_ready or process.poll() is None: raise ValueError('Stale authorization continuation')
+                    authorization_ready = False
+                    authorization_deadline = None
+                    checking = False
+                process = start(argv)
+                emit({'type': 'process-started', 'pid': process.pid})
+                threading.Thread(target=read_output, daemon=True).start()
+            elif kind == 'signal':
+                request_id, expected_pid = message.get('id'), message.get('pid')
+                if checking or message.get('signal') != 'SIGINT' or not isinstance(request_id, str) or not re.fullmatch(r'[a-f0-9]{32}', request_id):
+                    raise ValueError('Invalid process control')
+                if type(expected_pid) is not int or expected_pid < 1: raise ValueError('Invalid process identity')
+                if signal_receipt is not None:
+                    if signal_receipt['id'] != request_id or signal_receipt['pid'] != expected_pid:
+                        raise ValueError('Conflicting process control')
+                else:
+                    status = interrupt_child(expected_pid)
+                    signal_receipt = {'type': 'signal-result', 'id': request_id, 'pid': expected_pid, 'status': status}
+                emit(signal_receipt)
+            elif kind == 'input':
                 data = base64.b64decode(message['data'])
-                if data == b'\x03': os.killpg(process.pid, signal.SIGINT)
+                if data == b'\x03': interrupt_child()
                 else: os.write(master, data)
             elif kind == 'resize':
                 rows, cols = int(message['rows']), int(message['cols'])

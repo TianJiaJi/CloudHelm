@@ -30,9 +30,13 @@ export interface ExecutionOptions {
   readOnly?: boolean;
   /** Synchronous final authorization check; adapters call it before each new side effect. */
   isAuthorized?: () => boolean;
+  /** Trusted supervised-process observation. Not proof of target authentication or readiness. */
+  onProcessStarted?: (event: { pid: number }) => void;
 }
 
 export interface OperationExecutor {
+  /** Control may target a live operation, never bypass a different/unknown host write lock. */
+  canControlOperation?(hostId: string, operationId: string): boolean;
   reconcile?(hostId: string, operationId: string): boolean;
   execute(operation: ProposedOperation, fingerprint: string, signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult>;
 }
@@ -54,9 +58,15 @@ export interface TerminalLease {
 }
 
 export interface RawTerminal {
+  /** Trusted process-transport event, never inferred from command output or model settlement. */
+  onProcessStarted?(listener: (event: { pid: number }) => void): void;
+  /** Dedicated control protocol for the currently observed process, never ordinary stdin. */
+  interrupt?(expectedPid: number): Promise<'sent' | 'already-exited'>;
+  /** Manual-shell directory projection; never grants an Agent lease. */
+  onCwd?(listener: (directory: string) => void): void;
   onCommand?(listener: (event: { phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }) => void): void;
   /** Separate process/control channel; command text is never rewritten as terminal input. */
-  execute?(command: string, cwd: string, isAuthorized: () => boolean): Promise<void>;
+  execute?(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean }): Promise<void>;
   onExecutionFailure?(listener: (failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege'>) => void): void;
   onExit?(listener: (exitCode: number | undefined) => void): void;
   /** Prompt/command echo for the terminal only, separate from captured command output. */

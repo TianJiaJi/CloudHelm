@@ -23,7 +23,7 @@ async function processTable() {
     try {
       const { stdout } = process.platform === 'win32'
         ? await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-          'Get-CimInstance Win32_Process | ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.ParentProcessId }'],
+          'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId | ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.ParentProcessId }'],
         { timeout: 30_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 })
         : await execute('ps', ['-axo', 'pid=,ppid=,stat='], { timeout: 30_000 });
       return stdout.trim().split(/\r?\n/u).filter(Boolean).map((line) => {
@@ -45,6 +45,23 @@ function descendants(table, root) {
     for (const entry of table) if (pids.has(entry.parentPid)) pids.add(entry.pid);
   } while (size !== pids.size);
   return pids;
+}
+
+/** Kernel liveness check: an access error is uncertainty, never proof of exit. */
+export function processRunning(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) {
+    if (error.code === 'ESRCH') return false;
+    if (error.code === 'EPERM') return true;
+    throw error;
+  }
+}
+
+async function remainingPids(pids) {
+  // Windows has no POSIX zombie state. Avoid starting PowerShell/CIM repeatedly
+  // just to inspect already-owned PIDs; retain ancestry enumeration in capture().
+  if (process.platform === 'win32') return [...pids].filter(processRunning);
+  return (await processTable()).filter((entry) => pids.has(entry.pid) && !entry.zombie).map((entry) => entry.pid);
 }
 
 export async function forceKill(pid) {
@@ -71,6 +88,7 @@ export class DesktopProcess {
   }
 
   async capture() {
+    if (!this.pids.size && (this.child.exitCode !== null || this.child.signalCode !== null)) return;
     const table = await processTable();
     // Forget already exited processes so an old PID is not kept across smoke stages.
     const live = new Set(table.filter((entry) => !entry.zombie).map((entry) => entry.pid));
@@ -83,12 +101,12 @@ export class DesktopProcess {
   async waitForExit(timeoutMs = 10_000) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
-      const remaining = (await processTable()).filter((entry) => this.pids.has(entry.pid) && !entry.zombie);
+      const remaining = await remainingPids(this.pids);
       if (!remaining.length && (this.child.exitCode !== null || this.child.signalCode !== null)) {
         this.pids.clear();
         return;
       }
-      if (Date.now() >= deadline) throw new Error(`Electron processes did not exit: ${remaining.map((entry) => entry.pid).join(', ')}`);
+      if (Date.now() >= deadline) throw new Error(`Electron processes did not exit: ${remaining.join(', ')}`);
       await delay(100);
     }
   }
@@ -98,7 +116,7 @@ export class DesktopProcess {
     // No app.quit()/close(): the persisted pending question must reach startup recovery.
     if (this.pids.has(this.child.pid)) await forceKill(this.child.pid);
     // Terminating one PID does not kill descendants; include captured orphans.
-    const live = new Set((await processTable()).filter((entry) => !entry.zombie).map((entry) => entry.pid));
+    const live = new Set(await remainingPids(this.pids));
     for (const pid of this.pids) if (pid !== this.child.pid && live.has(pid)) await forceKill(pid);
     // OS process termination releases userData/SQLite handles before we reuse the directory.
     await this.waitForExit();

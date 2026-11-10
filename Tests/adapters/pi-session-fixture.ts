@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { listenForFetch } from './fetch-listener.js';
 
 interface FixtureMessage { role: string; content?: string | Array<{ type: string; text?: string }>; tool_call_id?: string }
 export interface FixtureRequest {
@@ -14,7 +14,7 @@ export interface FixtureRequest {
   stream: boolean;
   tools?: Array<{ function: { name: string; description?: string } }>;
 }
-export type FixtureResponse = ({ text: string } | { calls: Array<{ id: string; name: string; arguments: unknown }> } | { error: string; status: number }) & { reasoning?: string[]; finishReason?: 'stop' | 'length'; afterReasoning?: () => Promise<void>; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens: number } } };
+export type FixtureResponse = ({ text: string } | { calls: Array<{ id: string; name: string; arguments: unknown; rawArguments?: string }> } | { error: string; status: number }) & { reasoning?: string[]; finishReason?: 'stop' | 'length'; afterReasoning?: () => Promise<void>; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens: number } } };
 
 export function fixtureMessageText(message: FixtureMessage): string {
   return typeof message.content === 'string' ? message.content
@@ -25,6 +25,7 @@ export function fixtureMessageText(message: FixtureMessage): string {
 export async function openAiFixture(reply: (request: FixtureRequest) => Promise<FixtureResponse>) {
   const requests: FixtureRequest[] = [];
   const errors: string[] = [];
+  let connections = 0;
   const server = createServer((incoming, response) => {
     void handle(incoming, response).catch((error: unknown) => {
       errors.push(error instanceof Error ? error.message : String(error));
@@ -32,6 +33,8 @@ export async function openAiFixture(reply: (request: FixtureRequest) => Promise<
       response.end(JSON.stringify({ error: { message: 'Local test fixture rejected the request', type: 'fixture_error' } }));
     });
   });
+
+  server.on('connection', () => { connections++; });
 
   async function handle(incoming: IncomingMessage, response: ServerResponse): Promise<void> {
     if (incoming.method !== 'POST' || incoming.url !== '/v1/chat/completions') throw new Error(`Unexpected route: ${incoming.url}`);
@@ -57,7 +60,7 @@ export async function openAiFixture(reply: (request: FixtureRequest) => Promise<
     if ('text' in result) send(chunk({ content: result.text }));
     else for (const [index, call] of result.calls.entries()) {
       send(chunk({ tool_calls: [{ index, id: call.id, type: 'function', function: { name: call.name, arguments: '' } }] }));
-      const argumentsJson = JSON.stringify(call.arguments);
+      const argumentsJson = call.rawArguments ?? JSON.stringify(call.arguments);
       const midpoint = Math.floor(argumentsJson.length / 2);
       // Split tool arguments so the actual Pi incremental parser is exercised too.
       for (const fragment of [argumentsJson.slice(0, midpoint), argumentsJson.slice(midpoint)]) {
@@ -69,9 +72,10 @@ export async function openAiFixture(reply: (request: FixtureRequest) => Promise<
     response.end('data: [DONE]\n\n');
   }
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = await listenForFetch(server);
   return {
-    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, requests, errors,
+    baseUrl: `http://127.0.0.1:${port}/v1`, requests, errors,
+    get connections() { return connections; },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

@@ -1,3 +1,7 @@
+import { openManualChannel } from './ssh-manual-channel.js';
+import { prepareX11Forwarding } from './x11-forwarding.js';
+import { manualSessionStartup } from './manual-session.js';
+import type { SshConnectionSettings } from '@cloudhelm/core';
 import { randomBytes } from 'node:crypto';
 import type { Client, ClientChannel } from 'ssh2';
 
@@ -8,7 +12,9 @@ const quote = (text: string): string => `'${text.replace(/'/gu, `'"'"'`)}'`;
 export class ShellMarkerParser {
   private pending = '';
   constructor(private readonly nonce: string, private readonly output: (text: string) => void,
-    private readonly command: (event: ShellCommandEvent) => void) {}
+    private readonly command: (event: ShellCommandEvent) => void,
+    private readonly cwd: (directory: string) => void = () => {},
+    private readonly decode: (bytes: Buffer) => string = (bytes) => bytes.toString('utf8')) {}
   push(text: string): void {
     this.pending += text;
     const prefix = `\x1b]777;cloudhelm;${this.nonce};`;
@@ -33,7 +39,13 @@ export class ShellMarkerParser {
       if (value.startsWith('start;')) {
         const hex = value.slice(6);
         if (!/^(?:[\da-f]{2})*$/u.test(hex)) { this.command({ phase: 'unavailable' }); continue; }
-        this.command({ phase: 'start', command: Buffer.from(hex, 'hex').toString('utf8').trim() });
+        this.command({ phase: 'start', command: this.decode(Buffer.from(hex, 'hex')).trim() });
+      } else if (value.startsWith('cwd;')) {
+        const hex = value.slice(4);
+        if (/^(?:[\da-f]{2}){1,8192}$/u.test(hex)) {
+          const directory = this.decode(Buffer.from(hex, 'hex'));
+          if (directory.startsWith('/') && directory.length <= 4096 && !/[\u0000-\u001f\u007f]/u.test(directory)) this.cwd(directory);
+        }
       } else if (/^end;\d+$/u.test(value)) this.command({ phase: 'end', exitCode: Number(value.slice(4)) });
       else this.command({ phase: 'unavailable' });
     }
@@ -42,8 +54,9 @@ export class ShellMarkerParser {
 }
 
 /** Temporary startup shims are removed after sourcing. User startup files are never rewritten. */
-export function integratedShellCommand(nonce: string): string {
+export function integratedShellCommand(nonce: string, startup = ''): string {
   const emit = `printf '\\033]777;cloudhelm;${nonce};`;
+  const reportCwd = `${emit}cwd;%s\\007' "$(printf '%s' "$(pwd -P)" | od -An -v -tx1 | tr -d ' \\n')"`;
   const cleanup = `case "$CLOUDHELM_SHELL_DIR" in
 */cloudhelm-shell.${nonce}.????????)
   if [ -d "$CLOUDHELM_SHELL_DIR" ] && [ ! -L "$CLOUDHELM_SHELL_DIR" ]; then
@@ -60,6 +73,7 @@ for __cloudhelm_profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.pro
   if [ -r "$__cloudhelm_profile" ]; then . "$__cloudhelm_profile"; break; fi
 done
 unset __cloudhelm_profile
+${startup}
 __cloudhelm_start() {
   local cmd latest
   latest=$(HISTTIMEFORMAT= builtin history 1)
@@ -73,6 +87,7 @@ __cloudhelm_end() {
   local code=$?
   __cloudhelm_history=$(HISTTIMEFORMAT= builtin history 1)
   ${emit}end;%s\\007' "$code"
+  ${reportCwd}
 }
 # PS0 marks a complete top-level input, including pipelines and compound commands.
 if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
@@ -94,7 +109,7 @@ ZDOTDIR=$CLOUDHELM_SHELL_DIR
 ZDOTDIR=$CLOUDHELM_ORIGINAL_ZDOTDIR
 [ ! -r "$ZDOTDIR/.zshrc" ] || . "$ZDOTDIR/.zshrc"
 __cloudhelm_start() { ${emit}start;%s\\007' "$(printf '%s' "$1" | od -An -v -tx1 | tr -d ' \\n')"; }
-__cloudhelm_end() { local code=$?; ${emit}end;%s\\007' "$code"; }
+__cloudhelm_end() { local code=$?; ${emit}end;%s\\007' "$code"; ${reportCwd}; }
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec __cloudhelm_start
 add-zsh-hook precmd __cloudhelm_end
@@ -110,6 +125,7 @@ ZDOTDIR=$CLOUDHELM_SHELL_DIR
 ${cleanup}
 unset CLOUDHELM_SHELL_DIR CLOUDHELM_ORIGINAL_ZDOTDIR
 [ ! -r "$ZDOTDIR/.zlogin" ] || . "$ZDOTDIR/.zlogin"
+${startup}
 `;
   const script = `case "\${SHELL##*/}" in
 bash|zsh)
@@ -129,14 +145,32 @@ bash|zsh)
     ZDOTDIR=$CLOUDHELM_SHELL_DIR; export ZDOTDIR
     exec "$SHELL" -il
   fi;;
-*) exec "\${SHELL:-/bin/sh}" -i;;
+*)
+${startup}
+${reportCwd}
+exec "\${SHELL:-/bin/sh}" -i;;
 esac`;
   return `/bin/sh -c ${quote(script)}`;
 }
 
-export async function openIntegratedShell(client: Client, cols: number, rows: number): Promise<{ channel: ClientChannel; nonce: string }> {
+export interface ManualShellOptions { settings: SshConnectionSettings; assertAuthorized(): void; signal?: AbortSignal; x11Cookie?: string }
+export async function openIntegratedShell(client: Client, cols: number, rows: number, options?: ManualShellOptions): Promise<{ channel: ClientChannel; nonce: string }> {
   const nonce = randomBytes(16).toString('hex');
-  const channel = await new Promise<ClientChannel>((resolve, reject) => client.exec(integratedShellCommand(nonce),
-    { pty: { term: 'xterm-256color', cols, rows } }, (error, channel) => error ? reject(error) : resolve(channel)));
-  return { channel, nonce };
+  const command = integratedShellCommand(nonce, manualSessionStartup(options?.settings.session));
+  options?.assertAuthorized();
+  const x11 = options?.settings.x11?.enabled ? await prepareX11Forwarding(client, options.settings.x11, options.assertAuthorized, options.x11Cookie, options.signal) : undefined;
+  let channel: ClientChannel | undefined;
+  const cancel = () => { x11?.dispose(); channel?.close(); };
+  const cleanup = () => { options?.signal?.removeEventListener('abort', cancel); x11?.dispose(); };
+  options?.signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    options?.assertAuthorized();
+    channel = await openManualChannel(client, command,
+      { pty: { term: options?.settings.terminal?.term ?? 'xterm-256color', cols, rows }, ...(x11 ? { x11: x11.request } : {}) },
+      options?.assertAuthorized ?? (() => {}), options?.signal);
+    options?.assertAuthorized();
+    if (channel.destroyed || channel.readableEnded) cleanup();
+    else channel.once('close', cleanup);
+    return { channel, nonce };
+  } catch (error) { cancel(); cleanup(); throw error; }
 }

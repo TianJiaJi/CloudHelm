@@ -21,11 +21,12 @@ describe('remote authorization and working directories', () => {
       expect(instructions).toContain('"reviewMode":"permissive"');
       expect(instructions).not.toContain('synthetic-ssh-secret');
       expect(instructions.length, `serialized system on model request ${requests}`).toBeLessThan(9000);
-      expect(request.tools).toHaveLength(13);
+      expect(request.tools).toHaveLength(15);
+      expect(request.tools?.map((tool) => tool.function.name)).toEqual(expect.arrayContaining(['query_operation_history', 'inspect_host_environment']));
       const applicability = instructions.split('\n').find((line) => line.startsWith('{"version":1,"tools":'));
       expect(applicability).toBeTruthy();
       expect(JSON.parse(applicability!)).toMatchObject({ tools: { read_selected_text_file: false,
-        list_selected_directory: false, submit_verification: requests >= 2 && requests < 5 ? 'conditional' : false }, taskId: 'root-creation' });
+        list_selected_directory: false, submit_verification: false }, taskId: 'root-creation' });
       if (process.env.CLOUDHELM_PROMPT_BUDGET === '1' && requests === 1 && !protectedRoot) {
         const toolChars = JSON.stringify(request.tools ?? []).length;
         console.info('CloudHelm prompt budget:', JSON.stringify({ systemChars: instructions.length, toolSchemaChars: toolChars,
@@ -33,16 +34,11 @@ describe('remote authorization and working directories', () => {
       }
       expect(instructions).toContain('call the first necessary tool promptly');
       expect(instructions).toContain('current user\'s language for ALL user-visible prose');
-      expect(request.tools?.find((tool) => tool.function.name === 'submit_verification')?.function.description)
-        .toContain('Optional report notes');
-      expect(request.tools?.find((tool) => tool.function.name === 'submit_verification')?.function.description)
-        .toContain('not a completion gate');
+      expect(request.tools?.find((tool) => tool.function.name === 'submit_verification')).toBeUndefined();
       expect(instructions).not.toContain('docker compose config --quiet');
       if (requests === 1) {
         const plan = request.tools?.find((tool) => tool.function.name === 'update_plan');
         expect(plan?.function.description).toContain('genuinely multi-step or uncertain work');
-        expect(request.tools?.find((tool) => tool.function.name === 'submit_verification')?.function.description)
-          .toContain('File content read-back is matched automatically');
         expect(request.tools?.find((tool) => tool.function.name === 'ask_user')?.function.description)
           .toContain('consequential missing choice');
         return { calls: [{ id: 'mkdir', name: 'run_remote', arguments: {
@@ -67,12 +63,9 @@ describe('remote authorization and working directories', () => {
         expect(output).toContain('Hello world');
         const operationId = /Operation ID: ([^\n]+)/u.exec(output)?.[1];
         expect(operationId).toBeTruthy();
-        return { calls: [{ id: 'report', name: 'submit_verification', arguments: {
-          version: 3, summary: '文件已写入并读回', recovery: ['如不再需要，可通过审核后的单独操作删除文件']
-        } }] };
       }
-      expect(requests).toBe(5);
-      return { text: '文件内容已读回核验，验证报告已记录。' };
+      expect(requests).toBe(4);
+      return { text: '文件内容已读回核验，执行与观察已自动记录。' };
     });
     const host: RuntimeHost = { id: 'fixture', label: '测试', address: '192.0.2.1', port: 22, username: 'ubuntu',
       auth: 'password', secret: 'synthetic-ssh-secret', status: 'connected', defaultMode: 'permissive',
@@ -96,7 +89,7 @@ describe('remote authorization and working directories', () => {
     try {
       await runner.start();
       expect(fixture.errors).toEqual([]);
-      expect(requests).toBe(protectedRoot ? 1 : 5);
+      expect(requests).toBe(protectedRoot ? 1 : 4);
       expect(execute).toHaveBeenCalledTimes(protectedRoot ? 0 : 3);
       expect(requestApproval).not.toHaveBeenCalled();
       if (!protectedRoot) {
@@ -108,7 +101,11 @@ describe('remote authorization and working directories', () => {
       expect(events.some((event) => event.type === 'task-status' && event.status === 'failed')).toBe(false);
       expect(events.filter((event) => event.type === 'task-status').at(-1)?.status).toBe(protectedRoot ? 'paused' : 'answered');
       expect(events.some((event) => event.type === 'work-report' && !!event.report)).toBe(!protectedRoot);
-      if (!protectedRoot) expect(events.filter((event) => event.type === 'verification-state').at(-1)).toMatchObject({ value: { status: 'verified' } });
+      if (!protectedRoot) {
+        expect(events.filter((event) => event.type === 'verification-state').at(-1)).toMatchObject({ value: undefined });
+        expect(task.report?.facts).toMatchObject({ registration: 'automatic', operations: expect.any(Array) });
+        expect(task.report?.facts?.operations).toHaveLength(3);
+      }
     } finally { await fixture.close(); }
   });
 
@@ -127,6 +124,8 @@ describe('remote authorization and working directories', () => {
         cancelApproval: () => {} });
     try {
       await runner.start();
+      expect(task.status).toBe('answered');
+      expect(fixture.requests).toHaveLength(1);
       runner.addAuthorization([second], [{ kind: 'file', path: '/selected/README.md' }]);
       runner.updateHostSafety('first', 'ask', ['/private/read'], ['/private/write'], 4);
       runner.updateConversationReviewMode('first', 'ai-review', 2);

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { HostConnectionTestResult, HostDraft, HostTestFailure } from '@cloudhelm/contracts';
+import type { HostConnectionTestResult, HostDraft, HostTestFailure, HostCredentialsPatch } from '@cloudhelm/contracts';
 import { errorMessage } from './error-presentation.js';
 import styles from './ui.module.css';
 
 const failures: Record<HostTestFailure, string> = {
   auth: '身份验证未通过。请核对账户、密码、私钥文件及私钥口令。',
   credentials: '请填写密码或私钥路径。更换地址、账户或私钥后，测试时需要重新填写对应凭据。',
-  agent: '本机 SSH Agent 尚未就绪。请加载私钥，或改用私钥文件连接。',
+  agent: '旧 SSH Agent 配置已停用。请选择密码或私钥认证后重新保存。',
   'key-file': '无法读取私钥文件。请重新选择文件，并确认本机有读取权限。',
   timeout: '服务器响应超时。请检查网络、端口和服务器上的 SSH 服务。',
   network: '无法建立 SSH 连接。请检查地址、端口、网络及跳板机的转发权限。',
@@ -14,7 +14,7 @@ const failures: Record<HostTestFailure, string> = {
   unknown: '连接测试未完成。请核对连接配置后重试。'
 };
 
-export function useHostConnectionTest(host: HostDraft, secret: string, editingHostId: string | undefined, report: (value: string) => void) {
+export function useHostConnectionTest(host: HostDraft, secret: string, editingHostId: string | undefined, report: (value: string) => void, credentials?: HostCredentialsPatch) {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<HostConnectionTestResult | null>(null);
   const generation = useRef(0);
@@ -23,14 +23,14 @@ export function useHostConnectionTest(host: HostDraft, secret: string, editingHo
     generation.current += 1;
     setResult(null);
     return () => { generation.current += 1; };
-  }, [host, secret, editingHostId]);
+  }, [host, secret, editingHostId, credentials]);
   async function test(trustRequestId?: string): Promise<void> {
     if (inFlight.current) return;
     const current = generation.current;
     inFlight.current = true;
     setTesting(true); setResult(null);
     try {
-      const next = await window.cloudhelm.testHostConnection({ host, secret: secret || undefined, editingHostId, trustRequestId });
+      const next = await window.cloudhelm.testHostConnection({ host, secret: secret || undefined, credentials, editingHostId, trustRequestId });
       if (generation.current === current) setResult(next);
     } catch (error) { if (generation.current === current) report(errorMessage(error)); }
     finally { inFlight.current = false; setTesting(false); }

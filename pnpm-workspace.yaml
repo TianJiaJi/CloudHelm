@@ -2,6 +2,8 @@ packages:
   - apps/*
   - packages/*
   - Tests
+patchedDependencies:
+  iconv-lite@0.7.0: patches/iconv-lite@0.7.0.patch
 overrides:
   ssh2>cpu-features: '-'
   ssh2>nan: '-'
@@ -16,8 +18,4 @@ allowBuilds:
   ssh2: true
   tree-sitter-bash: false
 minimumReleaseAgeExclude:
-  - '@earendil-works/chord@0.99.1'
-  - '@earendil-works/pi-agent-core@0.99.1'
-  - '@earendil-works/pi-ai@0.99.1'
-  - '@earendil-works/pi-telemetry@0.99.1'
   - electron@44.5.1

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ProposedOperation, RawTerminal } from '@cloudhelm/core';
 import { CommandNotStartedError, operationFingerprint } from '@cloudhelm/core';
 import { TerminalManager } from '../../packages/application/src/terminal-manager.js';
@@ -8,6 +8,9 @@ class FakeTerminal implements RawTerminal {
   private data?: (text: string) => void;
   private closed?: () => void;
   private exited?: (code: number | undefined) => void;
+  private started?: (event: { pid: number }) => void;
+  onProcessStarted(listener: (event: { pid: number }) => void): void { this.started = listener; }
+  start(pid: number): void { this.started?.({ pid }); }
   commands: Array<{ command: string; cwd: string }> = [];
   async execute(command: string, cwd: string): Promise<void> { this.commands.push({ command, cwd }); }
   onExit(listener: (code: number | undefined) => void): void { this.exited = listener; }
@@ -28,6 +31,47 @@ function operation(id: string, generation: number): ProposedOperation {
 }
 
 describe('real PTY ownership', () => {
+  it('does not let a late model abort overwrite human ownership or its generation', async () => {
+    const channel = new FakeTerminal(), state = vi.fn(), controller = new AbortController();
+    const manager = new TerminalManager({ data() {}, state });
+    const id = manager.open('host', channel, 'task'), proposed = operation('handover', manager.currentGeneration(id));
+    proposed.scope.terminalId = id;
+    const pending = manager.execute(proposed, operationFingerprint(proposed), controller.signal);
+    manager.takeOver(id);
+    const generation = manager.currentGeneration(id);
+    expect((await pending).status).toBe('handed-over');
+    controller.abort();
+    expect(manager.currentGeneration(id)).toBe(generation);
+    expect(manager.stateOf(id)).toBe('human');
+    expect(state).toHaveBeenLastCalledWith(id, 'human');
+    channel.complete();
+  });
+
+  it('binds process observations to the pending operation, and does not settle it on startup', async () => {
+    const channel = new FakeTerminal(), processStarted = vi.fn(), observed = vi.fn();
+    const manager = new TerminalManager({ data() {}, state() {}, processStarted });
+    const id = manager.open('host', channel, 'task');
+    channel.start(1); expect(processStarted).not.toHaveBeenCalled();
+    const proposed = operation('one', manager.currentGeneration(id)); proposed.scope.terminalId = id;
+    const result = manager.execute(proposed, operationFingerprint(proposed), undefined, { onProcessStarted: observed });
+    channel.start(42);
+    expect(processStarted).toHaveBeenCalledExactlyOnceWith(id, 'one', 1, 42);
+    expect(observed).toHaveBeenCalledExactlyOnceWith({ pid: 42 }); expect(manager.hasPending(id)).toBe(true);
+    manager.takeOver(id); channel.start(43);
+    expect(observed).toHaveBeenCalledTimes(1); expect((await result).status).toBe('handed-over');
+    channel.complete();
+  });
+  it('rechecks the lease after synchronous startup observers and rejects revoked policy', async () => {
+    const channel = new FakeTerminal(), observed = vi.fn(); let authorized = true;
+    const manager = new TerminalManager({ data() {}, state() {}, processStarted() { authorized = false; } });
+    const id = manager.open('host', channel, 'task');
+    const proposed = operation('one', manager.currentGeneration(id)); proposed.scope.terminalId = id;
+    const result = manager.execute(proposed, operationFingerprint(proposed), undefined,
+      { isAuthorized: () => authorized, onProcessStarted: observed });
+    channel.start(42); channel.start(43); expect(observed).not.toHaveBeenCalled();
+    channel.complete(); await result;
+  });
+
   it.each(['hello', `${'🙂'.repeat(40000)}\n`])('reports authoritative redacted-output truncation without split surrogate pairs', async (output) => {
     const channel = new FakeTerminal();
     const manager = new TerminalManager({ data() {}, state() {} });

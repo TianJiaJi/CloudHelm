@@ -1,17 +1,22 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Value } from 'typebox/value';
-import { HostDraftSchema, type HostConnectionTestInput, type HostConnectionTestResult, type HostDraft, type HostView } from '@cloudhelm/contracts';
+import { HostDraftSchema, validateHostConnectionSettings, type HostConnectionTestInput, type HostConnectionTestResult, type HostDraft, type HostView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeHostTestResult } from '@cloudhelm/contracts/runtime';
+
+import { canReuseHostLogin, credentialsForDraft } from './host-settings.js';
+import { runtimeSshCredentials } from '@cloudhelm/contracts/runtime';
 
 interface HostSource { getHost(id: string): HostView; runtimeHost(id: string): RuntimeHost }
 interface TrustChallenge {
   digest: string; expiresAt: number; fingerprints: Partial<Record<'host' | 'jump', string>>;
 }
 
-function probeHost(draft: HostDraft, id: string, fingerprint?: string, secret?: string): RuntimeHost {
+function probeHost(draft: HostDraft, id: string, fingerprint?: string, credentials?: RuntimeHost['credentials']): RuntimeHost {
   // Copy only the public form fields: renderer-supplied fingerprints are never trusted.
   return { id, label: draft.label, address: draft.address, port: draft.port, username: draft.username,
-    auth: draft.auth, privateKeyPath: draft.privateKeyPath, fingerprint, secret,
+    auth: draft.auth, privateKeyPath: draft.privateKeyPath, fingerprint, credentials,
+    secret: draft.auth === 'password' ? credentials?.password : draft.auth === 'private-key' ? credentials?.passphrase : undefined,
+    jumpHostId: draft.jumpHostId, group: draft.group, notes: draft.notes, connection: draft.connection ? structuredClone(draft.connection) : undefined,
     status: 'disconnected', protectedPaths: [], policyRevision: 1, defaultMode: 'ai-review' };
 }
 
@@ -37,19 +42,23 @@ export class HostConnectionTester {
       throw new Error('Invalid host settings');
     }
     const draft = input.host;
+    validateHostConnectionSettings(draft);
+    if (input.secret && input.secret.length > 4096) throw new Error('Invalid SSH credentials');
     const previous = input.editingHostId ? this.source.getHost(input.editingHostId) : undefined;
     if (previous?.archived) throw new Error('Invalid host settings');
     const sameEndpoint = previous?.address === draft.address && previous.port === draft.port;
-    const reuseSecret = sameEndpoint && previous.username === draft.username && previous.auth === draft.auth
-      && previous.privateKeyPath === draft.privateKeyPath && previous.jumpHostId === draft.jumpHostId;
-    const secret = input.secret || (reuseSecret && draft.auth !== 'agent' ? this.source.runtimeHost(previous.id).secret : undefined);
-    const host = probeHost(draft, 'test-target', sameEndpoint ? previous.fingerprint : undefined, secret);
+    const reuseSecret = canReuseHostLogin(draft, previous) || !!draft.connection?.proxy?.username;
+    const saved = reuseSecret && previous ? runtimeSshCredentials(this.source.runtimeHost(previous.id)) : {};
+    const credentials = credentialsForDraft(draft, previous, saved, {
+      ...(input.secret ? draft.auth === 'password' ? { password: input.secret } : { passphrase: input.secret } : {}), ...input.credentials });
+    const host = probeHost(draft, 'test-target', sameEndpoint ? previous.fingerprint : undefined, credentials);
     if (!draft.jumpHostId) return { host };
     const savedJump = this.source.getHost(draft.jumpHostId);
     if (savedJump.archived || savedJump.jumpHostId || savedJump.id === previous?.id) {
       throw new Error('Choose an active direct host as the jump host');
     }
-    const jump = probeHost(savedJump, 'test-jump', savedJump.fingerprint, this.source.runtimeHost(savedJump.id).secret);
+    if (draft.connection?.proxy?.enabled) return { host };
+    const jump = probeHost(savedJump, 'test-jump', savedJump.fingerprint, runtimeSshCredentials(this.source.runtimeHost(savedJump.id)));
     return { host, jump };
   }
 

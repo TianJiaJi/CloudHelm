@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { createModelCatalog, listModelProviders, modelCapacity, modelThinking } from '../../packages/adapters/src/model-catalog.js';
 
 describe('Pi model catalog settings', () => {
+  it('retains legacy Azure provider identity and API without rewriting the canonical provider', () => {
+    const providers = listModelProviders();
+    expect(providers.find((item) => item.id === 'azure')?.models.length).toBeGreaterThan(0);
+    const legacy = providers.find((item) => item.id === 'azure-openai-responses');
+    expect(legacy?.name).toContain('旧配置兼容');
+    expect(legacy?.models.some((model) => model.id === 'gpt-4')).toBe(true);
+    const catalog = createModelCatalog({ provider: 'azure-openai-responses', modelId: 'gpt-4', baseUrl: 'https://legacy.example.test' });
+    expect(catalog.getModel('azure-openai-responses', 'gpt-4')).toMatchObject({
+      provider: 'azure-openai-responses', api: 'azure-openai-responses', baseUrl: 'https://legacy.example.test'
+    });
+    expect(catalog.getModel('azure', 'gpt-4')).toMatchObject({ provider: 'azure', api: 'azure-openai-responses' });
+    expect(catalog.getModel('azure', 'gpt-4')?.baseUrl).not.toBe('https://legacy.example.test');
+    expect(catalog.getModels('azure-openai-responses').every((model) => model.api === 'azure-openai-responses')).toBe(true);
+  });
   it('uses explicit custom capacity and rejects invalid or fabricated limits', () => {
     const selection = { provider: 'cloudhelm-custom', modelId: 'large', baseUrl: 'https://example.com/v1' };
     expect(createModelCatalog({ ...selection, contextWindow: 1_000_000, maxTokens: 384_000 })

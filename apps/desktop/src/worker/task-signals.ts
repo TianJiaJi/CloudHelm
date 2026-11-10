@@ -2,6 +2,8 @@ import type { DiagnosticEvent } from '@cloudhelm/core';
 import type { AppEvent, ApprovalView, BudgetCommand, BudgetValue, OperationView, ResumeReason, TaskStatus } from '@cloudhelm/contracts';
 
 export interface TaskSignals {
+  commitOperation?(operation: OperationView): Promise<void>;
+  commitInput?(value: import('@cloudhelm/core').ConversationInput): Promise<void>;
   budget?(command: BudgetCommand, signal?: AbortSignal): Promise<BudgetValue>;
   clearCredentials?(): void;
   diagnostic?(event: DiagnosticEvent): void;

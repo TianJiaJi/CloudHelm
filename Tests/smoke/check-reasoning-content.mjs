@@ -16,6 +16,8 @@ export async function checkReasoningContent(page, screenshot) {
   });
   const card = page.getByRole('region', { name: '思考内容', exact: true });
   await card.getByText('正在接收…', { exact: true }).waitFor();
+  assert.equal(await card.locator('details').count(), 0, 'Reasoning has no extra collapsible wrapper');
+  assert.equal(await card.getByRole('button').count(), 1);
   assert.equal(await card.getByRole('button').getAttribute('aria-expanded'), 'false');
   assert.equal(await card.getByText('先查看服务状态，再核对退出码。').count(), 0);
   await card.getByRole('button').click();

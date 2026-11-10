@@ -1,0 +1,12 @@
+diff --git a/encodings/dbcs-codec.js b/encodings/dbcs-codec.js
+--- a/encodings/dbcs-codec.js
++++ b/encodings/dbcs-codec.js
+@@ -435,7 +435,7 @@
+ DBCSDecoder.prototype.write = function (buf) {
+-  var newBuf = Buffer.alloc(buf.length * 2)
++  var newBuf = Buffer.alloc((buf.length + this.prevBytes.length) * 2)
+   var nodeIdx = this.nodeIdx
+   var prevBytes = this.prevBytes; var prevOffset = this.prevBytes.length
+   var seqStart = -this.prevBytes.length // idx of the start of current parsed sequence.
+   var uCode
+ 

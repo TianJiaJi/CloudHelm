@@ -27,7 +27,7 @@ describe('layered agent guidance', () => {
       'Never include passwords, private keys, tokens or credential-bearing URLs']) expect(prompt).toContain(boundary);
     for (const rule of ['SafetyGate', 'never automatically replay', 'submit_verification',
       'run_remote.cwd', 'read_operation_log', 'host recovery card', 'Ask the user only when',
-      'Dedicated tools may include documented preflight', 'run-output compares an existing run',
+      'Dedicated tools may include documented preflight', 'No submit_verification tool or report submission is required',
       'Prefer one logical action per tool call', 'a bounded single-purpose command may use &&, ||, semicolons or a pipeline',
       'Never probe sudo with sudo -n true', 'Sudo pipelines, redirections, sudo -S, su and nested shells']) expect(prompt).toContain(rule);
     for (const unrelated of ['apt-get --simulate', 'docker compose config --quiet', 'pgrep -a nginx', 'Examples (each numbered step)']) {

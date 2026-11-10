@@ -6,6 +6,22 @@ const op = (id: string, values: Partial<OperationView> = {}): OperationView => (
   preview: 'UNTRUSTED_COMMAND_DO_NOT_COPY', outputTail: 'UNTRUSTED_BODY_DO_NOT_COPY', createdAt: 1,
   status: 'succeeded', readOnly: true, effects: 'none', ...values });
 const intent: TaskIntentState = { version: 1, revision: 2, originalGoal: 'Original background', currentInput: 'Only inspect', origin: 'explicit', clarifications: [] };
+it('projects background observations into subsequent frames without treating stop delivery as exit or health', () => {
+  const job: NonNullable<OperationView['executionJob']> = { version: 1, jobId: 'job', operationId: 'service', taskId: 'task', hostId: 'host',
+    terminalId: 'terminal', terminalGeneration: 1, connectionId: 'connection', loginAs: 'user', runAs: 'user', status: 'running',
+    createdAt: 1, updatedAt: 2, startedAt: 2, pid: 42, processSequence: 1, exitObserved: false };
+  const service = op('service', { status: 'running', readOnly: false, executionJob: job });
+  const observations = [service, ...Array.from({ length: 20 }, (_, i) => op(`later-${i}`))];
+  const before = requestBusinessFacts(task, observations, [], intent);
+  job.status = 'stop-requested'; job.stopRequestId = 'stop'; job.updatedAt = 3;
+  const after = requestBusinessFacts(task, observations, [], intent);
+  expect(after.sourceVersion).not.toBe(before.sourceVersion);
+  expect(after.inFlight[0]!.executionJob).toMatchObject({ status: 'stop-requested', pid: 42, processSequence: 1,
+    exitObserved: false, observedAt: 3, source: 'backend-transport-observation', health: 'not-established' });
+  expect(before.inFlight[0]!.executionJob).toMatchObject({ status: 'running', observedAt: 2 });
+  expect(decode(after).resultSources.find((source) => source.operationId === 'service')).toMatchObject({ executionJob: {
+    status: 'stop-requested', exitObserved: false, connectionId: 'connection' } });
+});
 function decode(facts: ReturnType<typeof requestBusinessFacts>) {
   const wire = JSON.parse(encodeBusinessFacts(facts));
   const { columns, rows } = wire.resultSources as { columns: string[]; rows: unknown[][] };

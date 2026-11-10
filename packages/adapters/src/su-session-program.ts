@@ -63,8 +63,10 @@ def setup():
     os.setsid(); fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 bootstrap = 'import base64;exec(compile(base64.b64decode(' + repr(ROOT) + '),"<cloudhelm-root>","exec"))'
 command = ' '.join(shlex.quote(arg) for arg in [sys.executable, '-I', '-u', '-c', bootstrap, location, COMMAND])
-process = subprocess.Popen(['/usr/bin/su', '-s', '/bin/sh', 'root', '-c', command],
-    stdin=slave, stdout=slave, stderr=slave, env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL':'C'}, preexec_fn=setup, close_fds=True)
+def start_authentication():
+    return subprocess.Popen(['/usr/bin/su', '-l', '-s', '/bin/sh', 'root', '-c', command],
+        stdin=slave, stdout=slave, stderr=slave, env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL':'C'}, preexec_fn=setup, close_fds=True)
+process = start_authentication()
 peer = None
 ready = False
 waiting = False
@@ -77,7 +79,20 @@ failure_code = 'authentication-unconfirmed'
 try:
     while True:
         if not ready and time.monotonic() > deadline: raise TimeoutError()
-        if not ready and process.poll() is not None: raise ValueError('Authentication ended')
+        if not ready and process.poll() is not None:
+            # Only the isolated su authentication process has run; no business channel exists.
+            # Drain its final diagnostic before deciding whether a bounded retry is appropriate.
+            while select.select([master], [], [], 0)[0]:
+                chunk = os.read(master, 4096)
+                if not chunk: break
+                prompt = (prompt + chunk)[-4096:]
+            rejected = b'su: Authentication failure' in prompt and attempts > 0 and not waiting and peer is None
+            if rejected and attempts < 3:
+                prompt = b''
+                process = start_authentication()
+                continue
+            failure_code = 'attempts-exhausted' if rejected else 'authentication-unconfirmed'
+            raise ValueError('Authentication ended')
         watched = [sys.stdin.fileno(), peer if peer else server]
         if not ready: watched.append(master)
         readable, _, _ = select.select(watched, [], [], 0.1)
@@ -93,7 +108,8 @@ try:
                 prompt = (prompt + chunk)[-4096:]
                 if not waiting and prompt.rstrip().endswith(b'Password:'):
                     if termios.tcgetattr(slave)[3] & termios.ECHO or attempts >= 3:
-                        failure_code = 'unsupported'; raise ValueError('Unsafe authentication')
+                        failure_code = 'attempts-exhausted' if attempts >= 3 else 'unsupported'
+                        raise ValueError('Unsafe authentication')
                     attempts += 1; waiting = True; prompt = b''
                     emit({'type': 'auth', 'id': str(attempts)})
             elif source is peer:

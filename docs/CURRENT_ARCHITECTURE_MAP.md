@@ -1,6 +1,6 @@
 # CloudHelm 当前架构与逐文件功能地图
 
-> 更新：2026-10-29，项目版本 `0.2.4`，包含测试集中与验收 V3 整理。本文是当前源码职责地图，不是未来设计，也不代表真实服务器、模型或安装包已经全部验收；实际结果以 [STATUS.md](STATUS.md) 为准。
+> 更新：2026-11-06，项目版本 `0.2.4`，包含 P0＋P1 操作级提权、统一结果协议与结果说明调整。本文是当前源码职责地图，不是未来设计，也不代表真实服务器、模型或安装包已经全部验收；实际结果以 [STATUS.md](STATUS.md) 为准。
 >
 > **阅读目标：判断“现在有什么功能、功能在哪里、哪些只是界面或协议、哪些限制仍然存在”。**
 >
@@ -24,7 +24,7 @@
 
 | 能力     | 当前代码做到哪里                                                                | 不能据此认为已经做到                                         |
 | -------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| 主机管理 | 新增、编辑、归档；修改连接目标生成修订；密码／私钥／SSH Agent；指纹与单跳板     | 任意跳板链、云资产发现或批量主机编排                         |
+| 主机管理 | 新增、编辑、归档；修改连接目标生成修订；密码／私钥；分组、配置与凭据原子修订；指纹与单跳板     | 任意跳板链、云资产发现或批量主机编排                         |
 | 测试连接 | 对未保存表单建立临时 SSH 握手；临时指纹确认；超时清理                           | 执行命令、打开终端或永久信任该指纹                           |
 | 人工 SSH | 多终端标签、xterm、输入、尺寸同步、关闭／断开                                   | 所有 Shell 都支持自动命令边界识别                            |
 | AI 对话  | Pi 原生多轮会话、自定义工具、澄清、计划、模型／思考档位切换                     | 新对话跨多主机操作、任意本地工具访问                         |
@@ -37,8 +37,58 @@
 | 模型设置 | API Key、Base URL、模型容量、连接检查；当前／Jev／指定模型审核                  | OAuth 订阅登录、产品订阅计费                                 |
 | 恢复     | 原生会话恢复、操作未知状态、主机写锁、只读核验、逐条风险接管                    | 断线后重新附着任意旧前台进程、未知操作自动重放               |
 | systemd  | 已有 `.service` 的 inspect／restart／logs，重启前后检查                       | 创建服务、安装 systemd、通用 `systemd-run` 作业平台        |
-| 结果核验 | 变更后只读证据检查、结构化报告、独立 verified／unverified 状态                  | 退出码为 0 就证明目标达成；风险接管就是成功证据              |
+| 结果核验 | 自动操作记录、可选具体输出比较、自然回答和按需展开证据                  | 退出码为 0 就证明目标达成；风险接管就是成功证据              |
 | 发布     | macOS DMG、Windows NSIS 配置和 CI 发布流程                                      | 已签名／公证、各平台全部人工验收完成                         |
+
+### 执行工作区新增职责（实现已接通，验收见 STATUS）
+
+| 文件 | 职责 |
+| --- | --- |
+| [core/host-environment.ts](../packages/core/src/host-environment.ts) / [application/host-environment-registry.ts](../packages/application/src/host-environment-registry.ts) / [adapters/host-environment-probe.ts](../packages/adapters/src/host-environment-probe.ts) | 有来源、时间、登录与连接绑定的有界只读观察；离线快照不探测。 |
+| [application/conversation-terminal-pool.ts](../packages/application/src/conversation-terminal-pool.ts) / [execution-jobs.ts](../packages/application/src/execution-jobs.ts) | 精确空闲租约复用、容量与人工所有权；独立可信进程观察与恢复未知。 |
+| [worker/background-operations.ts](../apps/desktop/src/worker/background-operations.ts) / [background-job-tool.ts](../apps/desktop/src/worker/background-job-tool.ts) | 可信启动后的独立寿命与租约；经过审核的停止工具，不把回执当退出。 |
+| [adapters/ssh-process-signal.ts](../packages/adapters/src/ssh-process-signal.ts) / [ssh-control-pipe.ts](../packages/adapters/src/ssh-control-pipe.ts) | 绑定 PID／代次／nonce 的专用信号；有界分配、执行前复核、不自动重发。 |
+| [worker/operation-commit-client.ts](../apps/desktop/src/worker/operation-commit-client.ts) / [main/operation-recovery.ts](../apps/desktop/src/main/operation-recovery.ts) | 远端派发前持久化确认；重启／断线保守恢复，不制造退出证据。 |
+| [application/conversation-input-queue.ts](../packages/application/src/conversation-input-queue.ts) / [adapters/pi-input-queue.ts](../packages/adapters/src/pi-input-queue.ts) | 后端 ID／授权／过期与原生单槽 steer／followUp 选择回执，不按文本认领。 |
+| [worker/task-input-queue.ts](../apps/desktop/src/worker/task-input-queue.ts) / [input-commit-client.ts](../apps/desktop/src/worker/input-commit-client.ts) / [main/conversation-input-store.ts](../apps/desktop/src/main/conversation-input-store.ts) | 入队、选择与历史前的持久化和授权重查；恢复不投递；界面仅接收有界预览。 |
+| [worker/workspace-context.ts](../apps/desktop/src/worker/workspace-context.ts) / [request-business-facts.ts](../apps/desktop/src/worker/request-business-facts.ts) | 全操作检索、离线环境投影与后续请求中的来源明确作业事实，不自动唤醒模型。 |
+| [adapters/pi-tool-result.ts](../packages/adapters/src/pi-tool-result.ts) / [pi-tool-validation.ts](../packages/adapters/src/pi-tool-validation.ts) | 显式有界公开结果，私人 details 分离；原始与 SDK 处理后的参数严格一致。 |
+| [adapters/pi-query-policy.ts](../packages/adapters/src/pi-query-policy.ts) | 官方搜索／QuickJS 的查询授权、并发／输出／时间边界、代次复核与引用缓存事务。 |
+| [adapters/pi-input-projection.ts](../packages/adapters/src/pi-input-projection.ts) | 未授权队列内容的离线投影与追加式上下文编辑；既有摘要可能污染时拒绝继续。 |
+| [adapters/pi-lifecycle.ts](../packages/adapters/src/pi-lifecycle.ts) / [pi-tool-origin.ts](../packages/adapters/src/pi-tool-origin.ts) / [main/agent-activity-store.ts](../apps/desktop/src/main/agent-activity-store.ts) | 后端父子调用身份、原生结束与元数据／用量投影；不能改变远端或预算权威。 |
+| [renderer/agent-activity.tsx](../apps/desktop/src/renderer/agent-activity.tsx) / [conversation-queue.tsx](../apps/desktop/src/renderer/conversation-queue.tsx) | 独立状态、未知／估算费用和后端队列回执；取消不乐观变更状态。 |
+| [renderer/execution-workspace-view.ts](../apps/desktop/src/renderer/execution-workspace-view.ts) / [execution-job-status.tsx](../apps/desktop/src/renderer/execution-job-status.tsx) / [样式](../apps/desktop/src/renderer/execution-workspace.module.css) | 终端用途、后台作业和停止范围说明；运行／失败／未知不折叠。 |
+| [renderer/operation-log.tsx](../apps/desktop/src/renderer/operation-log.tsx) / [contracts/operation-log.ts](../packages/contracts/src/operation-log.ts) | 按操作分页、本地增量留存读取，隐藏暂停／无重叠／有界显示，后台错误不抢焦点。 |
+| [core/agent-lifecycle.ts](../packages/core/src/agent-lifecycle.ts) / [contracts/agent-lifecycle.ts](../packages/contracts/src/agent-lifecycle.ts) | 元数据观察协议与严格快照校验，不携带参数／凭据或授权能力。 |
+| [core/execution-job.ts](../packages/core/src/execution-job.ts) / [execution-workspace.ts](../packages/core/src/execution-workspace.ts) / [process-control.ts](../packages/core/src/process-control.ts) / [contracts/execution-job.ts](../packages/contracts/src/execution-job.ts) | 终端池、不可变作业接收方、专用进程控制与界面作业协议。 |
+| [core/conversation-input.ts](../packages/core/src/conversation-input.ts) / [contracts/conversation-input.ts](../packages/contracts/src/conversation-input.ts) | 队列状态、持久化记录与公开预览；私密完整输入不进入界面全量快照。 |
+
+### SSH 配置新增职责（实现已接通，验收见 STATUS）
+
+| 文件 | 职责 |
+| --- | --- |
+| [core/ssh-settings.ts](../packages/core/src/ssh-settings.ts) / [contracts/host-settings.ts](../packages/contracts/src/host-settings.ts) | Core 配置／凭据类型；IPC 版本 1 schema、算法候选与语义校验。 |
+| [main/host-settings.ts](../apps/desktop/src/main/host-settings.ts) | 公共白名单、兼容凭据用途绑定、配置／凭据事务与连接修订。 |
+| [main/host-connection-attempts.ts](../apps/desktop/src/main/host-connection-attempts.ts) | 主进程连接意图去重与取消，等待共享跳板期间也撤销目标派发，不让旧请求清除新请求。 |
+| [main/runtime-timeout.ts](../apps/desktop/src/main/runtime-timeout.ts) | 外层 RPC 包含配置的 SSH／代理期限与人工确认／启动期限，不重试执行。 |
+| [renderer/host-editor.tsx](../apps/desktop/src/renderer/host-editor.tsx) / [host-editor-fields.tsx](../apps/desktop/src/renderer/host-editor-fields.tsx) / [样式](../apps/desktop/src/renderer/host-editor.module.css) | 八分区、独立凭据 patch、校验定位、固定操作栏，旧 Agent 显式重选。 |
+| [worker/manual-session-authorization.ts](../apps/desktop/src/worker/manual-session-authorization.ts) | 人工配置、接收方与连接代次授权，断线撤销，不用于 AI 通道。 |
+| [adapters/ssh-proxy.ts](../packages/adapters/src/ssh-proxy.ts) | HTTP(S) CONNECT／SOCKS5 有界隧道；TLS 校验、无直连降级。 |
+| [adapters/manual-session.ts](../packages/adapters/src/manual-session.ts) / [ssh-manual-channel.ts](../packages/adapters/src/ssh-manual-channel.ts) | 人工环境／目录／初始化、独立保活和限时通道启动；未知结果不重放。 |
+| [adapters/terminal-codec.ts](../packages/adapters/src/terminal-codec.ts) | 人工终端流式解码与无损编码；AI 协议仍固定 UTF-8。 |
+| [adapters/x11-cookie.ts](../packages/adapters/src/x11-cookie.ts) / [x11-forwarding.ts](../packages/adapters/src/x11-forwarding.ts) | 有界本机 Cookie 读取、每会话假 Cookie、认证后本机转发与真实 Cookie 置换、清理。 |
+
+### P0＋P1 新增职责
+
+| 文件 | 职责 |
+| --- | --- |
+| [worker/operation-privilege.ts](../apps/desktop/src/worker/operation-privilege.ts) | 操作级 root 请求、租约内 UID 确认、审核前 sudo 身份、经确认的新身份后备，不代替 SafetyGate。 |
+| [core/privilege-routing.ts](../packages/core/src/privilege-routing.ts) | 仅凭结构化未启动／无影响／传输事实决定是否可提出 su，不能绕过取消或未知结果。 |
+| [core/operation-outcome.ts](../packages/core/src/operation-outcome.ts) | 统一结果版本、执行边界、影响、下一步和禁止重放协议；不解析输出猜安全性。 |
+| [renderer/verification-facts-card.tsx](../apps/desktop/src/renderer/verification-facts-card.tsx) | 按需查看执行证据与具体检查；不再追加默认验收卡或汇总业务判决，真实未决状态由恢复入口处理。 |
+| [renderer/conversation-turns.ts](../apps/desktop/src/renderer/conversation-turns.ts) / [conversation-transcript.tsx](../apps/desktop/src/renderer/conversation-transcript.tsx) | 按用户轮次组织过程；结束且无待办/未决状态后折叠，最终回答保持展开，不以计划 done 赋予业务成功。 |
+
+常规原生工具不再注册 `submit_verification`；兼容报告模块保留历史校验／读取。正常答复结束不生成通用 verified/unverified 裁判，不因缺报告恢复模型或占用未完成预算。实际检查和独立未知结果写锁不变。
 
 ## 2. 总体架构图
 
@@ -233,7 +283,7 @@ flowchart TD
 注意三个不同概念：
 
 1. **操作成功**：命令／文件执行返回成功。
-2. **目标已有观察／比较**：后端自动记录执行事实；有完整输出及绑定预期、匹配内容读回时才支持相应确定性比较，复杂语义仍为模型判断。`submit_verification` 仅是可选补充。
+2. **目标已有观察／比较**：后端自动记录执行事实；有完整输出及绑定预期、匹配内容读回时才支持相应确定性比较，复杂语义仍为模型判断。`submit_verification` 已移出常规工具集合，旧提交保留为历史解释。
 3. **人工接受未知风险**：只解除指定阻断，不把原操作改成成功，也不算核验成功证据。
 
 `TaskStatus.answered` 只表示已答复；验收 V3 分别投影执行、目标观察、影响、登记，兼容保留历史 verified／unverified。缺少模型补充不构成完成门槛，普通新消息不丢弃尚未覆盖的操作或接受旧风险。符合条件的旧自动报告可只按已有记录重整，不启动 Agent／SSH／模型，原报告追加保留。详见[验收 V3](VERIFICATION_V3.md)。
@@ -362,7 +412,7 @@ flowchart TD
 | [remote-tool-dependencies.ts](../apps/desktop/src/worker/remote-tool-dependencies.ts) | 远端工具所需依赖接口：授权主机、本地材料、终端／root 会话、scope 构建和统一操作执行。                                                                                               |
 | [remote-tools.ts](../apps/desktop/src/worker/remote-tools.ts)                         | 定义 run_remote、write_remote_file、delete_remote_file、upload_selected_file、本地选择范围列举／读取、request_root_session；注册 manage_service。工具构造操作，不自己绕开审核执行。 |
 | [service-tool.ts](../apps/desktop/src/worker/service-tool.ts)                         | 已有 systemd 服务的检查／日志／重启流程；重启前检查 loaded／CanStart／NeedDaemonReload／Job，重启后比较 InvocationID、active、Result、Job。每一步走统一操作入口。                   |
-| [work-journal.ts](../apps/desktop/src/worker/work-journal.ts)                         | update_plan、read_operation_log、record_reconciled_result、submit_verification；自动收尾事实报告、显式轮次及可选 V3 补充；核对观察归属、预期绑定、未决结果和报告敏感内容。                            |
+| [work-journal.ts](../apps/desktop/src/worker/work-journal.ts)                         | update_plan、read_operation_log、record_reconciled_result；submit_verification 仅兼容内部旧入口，Runner 不注册；自动事实记录、显式轮次及历史 V3 补充；核对观察归属、预期绑定、未决结果和报告敏感内容。                            |
 | [recovery-context.ts](../apps/desktop/src/worker/recovery-context.ts)                 | 判断未决操作，按 verify／report／interrupted／model 原因构造恢复上下文；只注入紧凑操作引用，明确禁止自动重放。                                                                      |
 | [approval-presentation.ts](../apps/desktop/src/worker/approval-presentation.ts)       | 把审核请求转成审批卡标题、风险解释和恢复提示，面向当前精确操作而非旧任务目标。                                                                                                      |
 | [operation-feedback.ts](../apps/desktop/src/worker/operation-feedback.ts)             | 给模型格式化结果：操作 ID、退出码、认证、失败类型、副作用、输出尾部与下一步建议，区分权限失败／无副作用／未知锁。                                                                   |
@@ -392,7 +442,7 @@ flowchart TD
 | `update_plan`              | 更新界面可见计划                               | 只记录计划，不执行／授权远端动作                                          |
 | `read_operation_log`       | 按游标读取脱敏操作输出                         | 只允许当前对话的操作 ID                                                   |
 | `record_reconciled_result` | 用新证据记录原未知／可能部分失败操作的观察结果 | 同主机、同对话的新成功证据；仍运行的原进程不能解锁；不重放                |
-| `submit_verification`      | 可选补充目标预期、业务解释及恢复说明              | 不执行命令、不解除写锁；输出／文件检查及模型判断分开；不得改执行前预期              |
+| `submit_verification`（历史兼容） | 常规工具已移除，保留旧目标解释及恢复说明              | 不执行命令、不解除写锁；输出／文件检查及模型判断分开；不得改执行前预期              |
 | `ask_user`                 | 提出 1–3 个需求澄清问题                       | 后端 coordinator 关联请求、回答、取消与过期；不用于秘密认证               |
 
 **没有开放的默认能力：** Pi 内置任意 Bash／写文件／编辑工具、用户／项目自动扩展发现、任意本地路径读取。普通用户通过系统选择器授予资料范围，不会因此授予本地执行权。
@@ -472,6 +522,7 @@ flowchart TD
 | [bash-analyzer.ts](../packages/adapters/src/bash-analyzer.ts)                   | 加载 tree-sitter Bash WASM 并解析 AST；输出命令调用、动态展开、管道、重定向、前台列表等结构；解析失败不能猜测放行。                                                   |
 | [shell-wrappers.ts](../packages/adapters/src/shell-wrappers.ts)                 | Shell 字面量引用、受支持包装命令剥离、嵌套 Shell 与 find 执行子命令提取，供分析器识别隐藏执行。                                                                       |
 | [ssh-transport.ts](../packages/adapters/src/ssh-transport.ts)                   | ssh2 连接、认证／指纹／跳板、连接代次、Shell／pipe、Python 前置检查与固定组件部署；SFTP 列举、脚本只读检查、受限写删与恢复副本。                                      |
+| [ssh-authentication.ts](../packages/adapters/src/ssh-authentication.ts) | 普通连接与显式 root SSH 的按需认证协商、加密私钥需求检测、私密挑战、有界纠正及失效阻断；不依主机配置提前索密。 |
 | [ssh-command-terminal.ts](../packages/adapters/src/ssh-command-terminal.ts)     | 实现 RawTerminal：通过结构化进程协议运行命令、argv 与 Shell 分流、sudo 前台列表逐步派发、认证回答、展示／真实输出分离、尺寸和中断；人工接管时切换通道。               |
 | [remote-command-program.ts](../packages/adapters/src/remote-command-program.ts) | TypeScript 字符串内的固定 Python 远端程序：PTY／子进程、cwd／环境、输出／退出消息、认证和控制协议。它是被部署的执行组件，不是生成业务命令的脚本模板，也不是常驻服务。 |
 | [shell-integration.ts](../packages/adapters/src/shell-integration.ts)           | 人工 Bash／Zsh 会话启动集成与带 nonce 命令标记解析；采集命令边界供引用。无法可靠采集时退回用户选区，不猜提示符。                                                      |

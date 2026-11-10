@@ -5,6 +5,7 @@ import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
 export type CommandTransport = Pick<SshTransport, 'connectionGeneration' | 'prepareCommandProgram' | 'removeCommandProgram' | 'openPipe' | 'shell'> & Partial<Pick<SshTransport, 'integratedShell'>>;
+import { ProcessInterrupt } from './ssh-process-signal.js';
 import { remoteCommandProgram } from './remote-command-program.js';
 
 /** Commands are process arguments; PTY input and sudo credentials have distinct channels. */
@@ -31,6 +32,9 @@ export class SshCommandTerminal implements RawTerminal {
   private exited = (_code: number | undefined) => {};
   private closedListener = () => {};
   private authentication = (_challenge: { id: string; prompt?: string }) => {};
+  private started = (_event: { pid: number }) => {};
+  private interrupter?: ProcessInterrupt;
+  private startupTimer?: ReturnType<typeof setTimeout>;
   private readonly generation: number;
   private readonly analyzer = new BashAnalyzer();
 
@@ -41,18 +45,30 @@ export class SshCommandTerminal implements RawTerminal {
   onData(listener: (text: string) => void): void { this.data = listener; }
   onDisplay(listener: (text: string) => void): void { this.display = listener; }
   onExecutionFailure(listener: typeof this.failure): void { this.failure = listener; }
+  onProcessStarted(listener: (event: { pid: number }) => void): void { this.started = listener; }
   onExit(listener: (code: number | undefined) => void): void { this.exited = listener; }
   onClose(listener: () => void): void { this.closedListener = listener; }
   onAuthentication(listener: (challenge: { id: string; prompt?: string }) => void): void { this.authentication = listener; }
 
-  async execute(command: string, cwd: string, isAuthorized: () => boolean): Promise<void> {
+  async execute(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean }): Promise<void> {
+    if (this.busy || this.human || this.humanOpening) throw new Error('The command terminal is busy');
+    this.busy = true;
+    const deadline = new Promise<never>((_resolve, reject) => this.armStartup(reject));
+    try { await Promise.race([this.executeCommand(command, cwd, isAuthorized, options), deadline]); }
+    catch (error) {
+      this.busy = false; this.clearStartup();
+      if (this.humanOwned && !this.closed) void this.openHuman().catch(() => this.close());
+      throw error;
+    }
+  }
+
+  private async executeCommand(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean }): Promise<void> {
     const current = () => {
       if (this.closed || this.generation !== this.ssh.connectionGeneration(this.hostId) || !isAuthorized()) {
         throw new Error('Command authorization expired');
       }
     };
     current();
-    if (this.busy || this.human || this.humanOpening) throw new Error('The command terminal is busy');
     const analysis = await this.analyzer.analyze(command);
     if (analysis.hasError) throw new Error('Command parsing failed');
     const sudo = supportsSudo(analysis);
@@ -64,7 +80,14 @@ export class SshCommandTerminal implements RawTerminal {
     const fallback = first ? [first.name, ...first.args] : ['/bin/bash', '--noprofile', '--norc', '-c', command];
     current();
     try {
-      if (!this.program) this.program = await this.ssh.prepareCommandProgram(this.hostId, remoteCommandProgram, current);
+      if (!this.program) {
+        const program = await this.ssh.prepareCommandProgram(this.hostId, remoteCommandProgram, current);
+        if (this.closed) {
+          if (this.generation === this.ssh.connectionGeneration(this.hostId)) void this.ssh.removeCommandProgram(this.hostId, program).catch(() => {});
+          throw new Error('Command channel closed during preparation');
+        }
+        this.program = program;
+      }
     } catch (error) {
       // Keep the concrete transport cause visible; the generic checklist alone hides what to fix.
       const cause = redactOutput(error instanceof Error ? error.message : String(error)).trim().slice(0, 300);
@@ -74,6 +97,7 @@ export class SshCommandTerminal implements RawTerminal {
     this.busy = true;
     this.lineStart = true;
     const finish = (code?: number) => {
+      this.clearStartup();
       this.busy = false;
       // The exit report can synchronously hand the terminal back to the human owner;
       // decide on the synthetic prompt only after that handover is known.
@@ -100,25 +124,38 @@ export class SshCommandTerminal implements RawTerminal {
         !!step && isSudo(step.call), index === 0 ? command : undefined, current, (exitCode) => {
           if (exitCode === undefined) { finish(); return; }
           void next(index + 1, exitCode).catch(() => finish());
-        });
+        }, options?.sudoAuthorization === true);
     };
     try { await next(0, 0); }
     catch (error) { this.busy = false; throw error; }
   }
 
   private async startProcess(argv: string[], cwd: string, sudo: boolean, command: string | undefined,
-    current: () => void, onComplete: (code?: number) => void): Promise<void> {
+    current: () => void, onComplete: (code?: number) => void, sudoAuthorization = false): Promise<void> {
+    // Subsequent supervised steps get their own startup bound, never a payload-runtime bound.
+    if (!this.startupTimer) this.armStartup();
     // The fixed helper is installed via SFTP. Neither command text nor credentials appear in this SSH command.
-    const channel = await this.ssh.openPipe(this.hostId, `python3 -I -u ${this.program} --serve`);
+    let channel: ClientChannel;
+    try {
+      channel = await this.ssh.openPipe(this.hostId, `python3 -I -u ${this.program} --serve`);
+      if (channel.destroyed || channel.writableEnded) { channel.close(); throw new Error('Channel closed before handoff'); }
+    } catch {
+      // Only the fixed helper was requested; no business header/argv has been written.
+      throw new CommandNotStartedError('命令执行通道未建立或已关闭，业务命令未发送。');
+    }
     try { current(); } catch (error) { channel.end(); channel.close(); throw error; }
     this.active = channel;
     const decoder = new StringDecoder('utf8');
     let buffer = '';
     let completed = false;
+    let authorizationContinued = false;
+    let startObserved = false;
     const complete = (code?: number) => {
       if (completed) return;
       completed = true;
+      this.clearStartup();
       this.active = undefined;
+      this.interrupter?.close(); this.interrupter = undefined;
       for (const id of this.challenges) this.authentication({ id });
       this.challenges.clear();
       channel.end();
@@ -130,6 +167,7 @@ export class SshCommandTerminal implements RawTerminal {
       if (buffer.length > 1_048_576) { complete(); return; }
       let newline: number;
       while ((newline = buffer.indexOf('\n')) >= 0) {
+        if (completed) return;
         const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
         try {
           const event = JSON.parse(line) as Record<string, unknown>;
@@ -141,12 +179,37 @@ export class SshCommandTerminal implements RawTerminal {
             this.syntheticPromptShown = false;
           }
           else if (event.type === 'prompt' && typeof event.data === 'string') this.prompt = event.data;
-          else if (event.type === 'launch-error' && ['permission-denied', 'unsupported'].includes(String(event.kind))) {
+          else if (event.type === 'launch-error' && !startObserved && ['permission-denied', 'unsupported'].includes(String(event.kind))) {
             this.failure({ failureKind: event.kind as 'permission-denied' | 'unsupported', effects: this.precedingSteps ? 'possible' : 'none',
               ...(sudo && event.code === 'sudo-unavailable' ? { privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable',
                 source: 'transport', businessCommand: this.precedingSteps ? 'unknown' : 'not-started', recovery: this.precedingSteps ? 'verify' : 'confirm-alternative' } as const } : {}) });
             this.data(event.kind === 'unsupported' ? '命令未启动：所需工具或工作目录不存在。请确认工具已安装、路径正确后继续。' : '命令未启动：当前身份无权访问工具或工作目录。请核验权限后提交新的审核操作。'); complete(127); return;
           }
+          else if (['sudo-authorized', 'sudo-policy-unconfirmed'].includes(String(event.type)) && sudo && sudoAuthorization && !authorizationContinued) {
+            current();
+            authorizationContinued = true;
+            channel.write('{"type":"continue-authorized"}\n');
+          }
+          else if (event.type === 'sudo-authorization-failed' && sudo && sudoAuthorization && !authorizationContinued
+            && ['authorization-denied', 'authentication-rejected', 'authentication-unconfirmed'].includes(String(event.code))) {
+            this.failure({ failureKind: 'authentication-failed', effects: this.precedingSteps ? 'possible' : 'none',
+              privilege: { method: 'sudo', stage: event.code === 'authorization-denied' ? 'authorization' : 'authentication',
+                code: event.code as 'authorization-denied' | 'authentication-rejected' | 'authentication-unconfirmed',
+                source: 'transport', businessCommand: this.precedingSteps ? 'unknown' : 'not-started',
+                recovery: this.precedingSteps ? 'verify' : event.code === 'authorization-denied' ? 'confirm-alternative' : 'user-action' } });
+            this.data('sudo 未完成本次命令的授权或认证；业务命令尚未启动。'); complete(1); return;
+          }
+          else if (event.type === 'process-started' && !startObserved && Number.isSafeInteger(event.pid)
+            && (event.pid as number) > 0 && (event.pid as number) <= 2147483647
+            && (!sudo || !sudoAuthorization || authorizationContinued)) {
+            current();
+            startObserved = true;
+            this.clearStartup();
+            this.interrupter = new ProcessInterrupt(event.pid as number, current,
+              (message) => channel.write(`${JSON.stringify(message)}\n`));
+            this.started({ pid: event.pid as number });
+          }
+          else if (event.type === 'signal-result' && this.interrupter?.receive(event)) { /* Signal acknowledgement, not exit. */ }
           else if (event.type === 'exit' && Number.isInteger(event.code)) { complete(event.code as number); return; }
           else if (event.type === 'auth' && typeof event.id === 'string' && /^[a-f0-9]{32}$/u.test(event.id)) {
             this.challenges.add(event.id);
@@ -161,7 +224,11 @@ export class SshCommandTerminal implements RawTerminal {
     channel.on('error', () => complete());
     channel.on('close', () => complete());
     current();
-    channel.write(`${JSON.stringify({ argv, cwd, sudo, command, cols: this.cols, rows: this.rows })}\n`);
+    channel.write(`${JSON.stringify({ argv, cwd, sudo, command, cols: this.cols, rows: this.rows, ...(sudo && sudoAuthorization ? { sudoAuthorization: true } : {}) })}\n`);
+  }
+
+  interrupt(expectedPid: number): Promise<'sent' | 'already-exited'> {
+    return this.interrupter?.interrupt(expectedPid) ?? Promise.reject(new Error('没有可核验的当前进程；停止信号未发送'));
   }
 
   answerAuthentication(id: string, answer: string | null): boolean {
@@ -203,6 +270,7 @@ export class SshCommandTerminal implements RawTerminal {
   }
 
   takeOver(): void {
+    this.clearStartup();
     this.humanOwned = true;
     if (!this.busy && !this.closed) void this.openHuman().catch(() => this.close());
   }
@@ -213,9 +281,22 @@ export class SshCommandTerminal implements RawTerminal {
     this.human?.setWindow(rows, cols, 0, 0);
   }
 
+  private clearStartup(): void { clearTimeout(this.startupTimer); this.startupTimer = undefined; }
+  private armStartup(reject?: (error: Error) => void): void {
+    this.clearStartup();
+    this.startupTimer = setTimeout(() => {
+      this.clearStartup();
+      try { this.data('启动观察超时，远端结果未知；不会重放命令，请核验原操作。'); } catch { /* Still revoke this channel. */ }
+      try { this.close(); } finally { reject?.(new Error('Command startup observation timed out; verify the original operation')); }
+    }, 180_000);
+    this.startupTimer.unref?.();
+  }
+
   close(): void {
+    this.clearStartup();
     if (this.closed) return;
     this.closed = true;
+    this.interrupter?.close(); this.interrupter = undefined;
     this.active?.end(); this.active?.close(); this.human?.end();
     this.closedListener();
     if (this.program && this.generation === this.ssh.connectionGeneration(this.hostId)) {

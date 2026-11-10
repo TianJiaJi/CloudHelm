@@ -2,7 +2,14 @@ import { Type, type Static } from 'typebox';
 import type { VerificationReport, VerificationState } from './verification-report.js';
 export * from './verification-report.js';
 export * from './request-budget.js';
+export * from './execution-job.js';
+export * from './agent-lifecycle.js';
+export type { OperationLogPage } from './operation-log.js';
+export * from './conversation-input.js';
+import type { ExecutionJobView } from './execution-job.js';
 export * from './request-budget-runtime.js';
+export * from './host-settings.js';
+import { SshConnectionSettingsSchema, type HostCredentialsPatch } from './host-settings.js';
 
 export const HostDraftSchema = Type.Object({
   label: Type.String({ minLength: 1, maxLength: 80 }),
@@ -11,11 +18,14 @@ export const HostDraftSchema = Type.Object({
   username: Type.String({ minLength: 1, maxLength: 128 }),
   auth: Type.Union([Type.Literal('agent'), Type.Literal('private-key'), Type.Literal('password')]),
   privateKeyPath: Type.Optional(Type.String()),
-  jumpHostId: Type.Optional(Type.String())
+  jumpHostId: Type.Optional(Type.String()),
+  group: Type.Optional(Type.String({ maxLength: 80 })),
+  notes: Type.Optional(Type.String({ maxLength: 4096 })),
+  connection: Type.Optional(SshConnectionSettingsSchema)
 });
 
 export type HostDraft = Static<typeof HostDraftSchema>;
-export interface HostConnectionTestInput { host: HostDraft; editingHostId?: string; secret?: string; trustRequestId?: string }
+export interface HostConnectionTestInput { host: HostDraft; editingHostId?: string; secret?: string; credentials?: HostCredentialsPatch; trustRequestId?: string }
 export type HostTestFailure = 'auth' | 'credentials' | 'agent' | 'key-file' | 'timeout' | 'network' | 'interactive' | 'unknown';
 export type HostConnectionTestResult =
   | { status: 'success'; latencyMs: number }
@@ -99,7 +109,7 @@ export interface ConversationMessage {
   clarificationToolCallId?: string;
   document?: import('./message-content.js').MessageDocument;
   reasoning?: ReasoningView; entryId?: string; interruption?: UserInterruption; taskId: string; role: 'agent' | 'user' | 'system'; text: string; createdAt: number; model?: ModelChoice }
-export interface TerminalViewState { id: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed'; replacementTerminalId?: string }
+export interface TerminalViewState { cwd?: string; cwdUpdatedAt?: number; id: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed'; replacementTerminalId?: string }
 export interface ConversationStart { thinkingLevel?: ThinkingLevel; hostId: string | null; message: string; model?: ModelChoice; localSelectionTokens: string[] }
 export interface LocalScope { path: string; kind: 'file' | 'directory' }
 
@@ -159,6 +169,12 @@ export interface TaskView {
 }
 
 export interface OperationView {
+  /** Versioned backend process observation, independent of model settlement. */
+  executionJob?: ExecutionJobView;
+  processControl?: { kind: 'interrupt'; jobId: string; targetOperationId: string; pid?: number; processSequence?: number;
+    connectionId?: string; delivery?: 'sent' | 'already-exited' | 'unknown' };
+  /** Optional v1 JSON metadata; legacy records remain unknown, never relabelled on reconnect. */
+  executionContext?: { version: 1; connectionId: string; terminalId: string; terminalGeneration: number };
   /** Capability verified from the full operation before execution, not from its display preview. */
   readOnly?: boolean;
   ruleId?: string;
@@ -274,6 +290,8 @@ export interface ExecutionView {
 }
 
 export interface AppSnapshot {
+  agentActivity?: Record<string, import('./agent-lifecycle.js').AgentActivityView>;
+  queuedInputs?: import('./conversation-input.js').ConversationInputView[];
   reasoningProgress?: Record<string, ReasoningProgress>;
   execution?: Record<string, ExecutionView>;
   contextUsage?: Record<string, ContextUsageView>;
@@ -305,6 +323,8 @@ export interface ModelProviderSettings {
 }
 
 export type AppEvent =
+  | { type: 'agent-lifecycle'; taskId: string; value: import('./agent-lifecycle.js').AgentLifecycleObservation }
+  | { type: 'terminal-cwd'; terminalId: string; directory: string; updatedAt: number }
   | { type: 'terminal-command'; terminalId: string; generation: number; phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }
   | { type: 'message-preparation'; requestId: string; referenceId?: string; status: 'checking' | 'compressing' | 'ready'; context?: ContextUsageView; summaryRequests?: { used: number; limit: 32 } }
   | { type: 'reasoning-progress'; taskId: string; value: ReasoningProgress | null }
@@ -337,8 +357,8 @@ export interface DesktopAPI {
   snapshot(): Promise<AppSnapshot>;
   /** Version of the packaged application, sourced from apps/desktop/package.json. */
   appVersion(): Promise<string>;
-  addHost(host: HostDraft): Promise<HostView>;
-  editHost(hostId: string, host: HostDraft, newSecret?: string): Promise<HostView>;
+  addHost(host: HostDraft, credentials?: HostCredentialsPatch): Promise<HostView>;
+  editHost(hostId: string, host: HostDraft, newSecret?: string, credentials?: HostCredentialsPatch): Promise<HostView>;
   testHostConnection(input: HostConnectionTestInput): Promise<HostConnectionTestResult>;
   setHostSecret(hostId: string, secret: string): Promise<void>;
   updateHostReviewMode(hostId: string, mode: ReviewMode): Promise<void>;
@@ -371,7 +391,8 @@ export interface DesktopAPI {
   stopTerminal(terminalId: string): Promise<void>;
   resizeTerminal(terminalId: string, cols: number, rows: number): Promise<void>;
   startConversation(input: ConversationStart): Promise<TaskView>;
-  sendMessage(conversationId: string, message: string, localSelectionTokens?: string[]): Promise<void>;
+  sendMessage(conversationId: string, message: string, localSelectionTokens?: string[], queueMode?: import('./conversation-input.js').ConversationInputKind): Promise<void>;
+  cancelQueuedInput?(conversationId: string, inputId: string): Promise<{ cancelled: boolean }>;
   setConversationThinking(conversationId: string, level: ThinkingLevel): Promise<void>;
   setConversationModel(conversationId: string, model: ModelChoice): Promise<void>;
   answerClarification(taskId: string, requestId: string, answers: ClarificationAnswer[]): Promise<void>;
@@ -387,6 +408,7 @@ export interface DesktopAPI {
   extendRequestBudget(input: import('./request-budget.js').ExtendRequestBudget): Promise<import('./request-budget.js').BudgetExtensionResult>;
   listRemote(hostId: string, path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>>;
   readTerminalLog(terminalId: string): Promise<string>;
+  readOperationLog?(taskId: string, operationId: string, cursor: number): Promise<import('./operation-log.js').OperationLogPage>;
   /** Permanently removes a finished conversation with its records and terminal logs. */
   deleteConversation(id: string): Promise<void>;
   onEvent(listener: (event: AppEvent) => void): () => void;
