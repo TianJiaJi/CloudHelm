@@ -22,6 +22,18 @@ class MemoryStore {
     const values = this.buckets.get(bucket) ?? new Map<string, unknown>();
     values.set(id, structuredClone(value)); this.buckets.set(bucket, values);
   }
+  commitModelSettings(settings: Array<{ id: string; value: unknown }>, credentials: Array<{ id: string; ciphertext: string | null }> = []): void {
+    const before = structuredClone(this.buckets);
+    try {
+      for (const { id, value } of settings) this.put('settings', id, value);
+      for (const { id, ciphertext } of credentials) {
+        if (ciphertext === null) this.remove('secrets', id); else this.put('secrets', id, ciphertext);
+      }
+    } catch (error) {
+      this.buckets.clear(); for (const [key, value] of before) this.buckets.set(key, value);
+      throw error;
+    }
+  }
   remove(bucket: string, id: string): void { this.buckets.get(bucket)?.delete(id); }
   removeWhere(bucket: string, field: string, value: string): void {
     const values = this.buckets.get(bucket);

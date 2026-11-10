@@ -5,7 +5,7 @@ import { createHostSettings, editHostSettings, readHostCredentials } from './hos
 import type { HostCredentialsPatch } from '@cloudhelm/contracts';
 import { customModelLimits, modelThinking } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
-import { safeStorage } from 'electron';
+import { CredentialUnavailableError, decryptSecret, encryptSecret, secretConfigured } from './credential-storage.js';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
 import { OutputRedactor, type CommandAnalyzer } from '@cloudhelm/core';
@@ -139,7 +139,9 @@ export class AppState {
       hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
-      profile: { ...this.profile, hasKey: !!this.profileSecret(), hasJevKey: !!this.secret('jev-key:vercel-ai-gateway'), reviewer: this.reviewerSettings().selection }
+      profile: { ...this.profile, hasKey: secretConfigured(this.store, this.modelSecretId(this.profile.provider))
+        || secretConfigured(this.store, this.legacyModelSecretId(this.profile)),
+      hasJevKey: secretConfigured(this.store, 'jev-key:vercel-ai-gateway'), reviewer: this.reviewerSettings().selection }
     };
   }
 
@@ -281,17 +283,9 @@ export class AppState {
     this.publish();
   }
 
-  private encryptSecret(value: string): string {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('OS credential encryption is unavailable');
-    return safeStorage.encryptString(value).toString('base64');
-  }
+  private encryptSecret(value: string): string { return encryptSecret(value); }
 
-  private secret(id: string): string | undefined {
-    const ciphertext = this.store.get<string>('secrets', id);
-    if (!ciphertext) return undefined;
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('OS credential decryption is unavailable');
-    return safeStorage.decryptString(Buffer.from(ciphertext, 'base64'));
-  }
+  private secret(id: string): string | undefined { return decryptSecret(this.store, id); }
 
   saveProfile(draft: ModelProfileDraft): void {
     const provider = listModelProviders().find((candidate) => candidate.id === draft.provider);
@@ -305,9 +299,15 @@ export class AppState {
     const baseUrl = requestedUrl && requestedUrl !== provider.defaultBaseUrl ? validModelUrl(requestedUrl) : undefined;
     const limits = provider.id === 'cloudhelm-custom' ? customModelLimits(draft) : undefined;
     if (!limits && (draft.contextWindow !== undefined || draft.maxTokens !== undefined)) throw new Error('内置模型容量由 Pi 模型目录提供');
-    const legacyKey = this.sameProfileProvider(provider.id, provider.name) ? this.profileSecret() : undefined;
     const previous = this.store.get<ProfileRecord>('settings', `model-provider:${provider.id}`);
-    const savedKey = this.secret(this.modelSecretId(provider.id));
+    let savedKey: string | undefined, legacyKey: string | undefined;
+    try {
+      savedKey = this.secret(this.modelSecretId(provider.id));
+      legacyKey = !savedKey && this.sameProfileProvider(provider.id, provider.name) ? this.profileSecret() : undefined;
+    } catch (error) {
+      // Only an explicit replacement may recover a broken OS credential. Storage failures still propagate.
+      if (!(error instanceof CredentialUnavailableError) || !draft.apiKey) throw error;
+    }
     const previousKey = savedKey ?? legacyKey;
     const keyToSave = draft.apiKey || (!savedKey ? legacyKey : undefined);
     // Encrypt before changing defaults: OS keychain failure must leave the prior profile intact.
@@ -315,10 +315,11 @@ export class AppState {
     const credentialRevision = previous?.credentialRevision && previous.baseUrl === baseUrl
       && previous.contextWindow === limits?.contextWindow && previous.maxTokens === limits?.maxTokens
       && (!draft.apiKey || draft.apiKey === previousKey) ? previous.credentialRevision : randomUUID();
-    this.profile = { provider: provider.id, modelId, baseUrl, ...limits, credentialRevision };
-    this.store.put('settings', 'model-profile', this.profile);
-    this.store.put('settings', `model-provider:${provider.id}`, { modelId, baseUrl, ...limits, credentialRevision });
-    if (ciphertext) this.store.put('secrets', this.modelSecretId(provider.id), ciphertext);
+    const profile = { provider: provider.id, modelId, baseUrl, ...limits, credentialRevision };
+    this.store.commitModelSettings([{ id: 'model-profile', value: profile },
+      { id: `model-provider:${provider.id}`, value: { modelId, baseUrl, ...limits, credentialRevision } }],
+    ciphertext ? [{ id: this.modelSecretId(provider.id), ciphertext }] : []);
+    this.profile = profile;
     this.publish();
   }
 
@@ -331,12 +332,13 @@ export class AppState {
       throw new Error('审核模型选择无效');
     }
     if (selection.kind === 'jev' && settings.disableJev) throw new Error('选择 Jev 审核时不能删除 Jev Key');
-    if (selection.kind === 'model') this.plainRuntimeProfile(selection);
+    if (selection.kind === 'model') this.plainRuntimeProfile(selection, false);
     if (selection.kind === 'jev' && !settings.jevKey && !this.reviewKey()) throw new Error('请先配置 Jev Key');
-    if (settings.jevKey) this.saveSecret('jev-key:vercel-ai-gateway', settings.jevKey);
-    if (settings.disableJev) this.store.remove('secrets', 'jev-key:vercel-ai-gateway');
+    const ciphertext = settings.jevKey ? this.encryptSecret(settings.jevKey) : undefined;
     const previous = this.reviewerSettings();
-    this.store.put('settings', 'reviewer', { selection, revision: previous.revision + 1 } satisfies StoredReviewer);
+    this.store.commitModelSettings([{ id: 'reviewer', value: { selection, revision: previous.revision + 1 } satisfies StoredReviewer }],
+      settings.disableJev ? [{ id: 'jev-key:vercel-ai-gateway', ciphertext: null }]
+        : ciphertext ? [{ id: 'jev-key:vercel-ai-gateway', ciphertext }] : []);
     this.publish();
   }
 
@@ -365,7 +367,7 @@ export class AppState {
     return { ...profile, reviewer: this.runtimeReviewer(profile), jevKey: this.reviewKey() };
   }
 
-  private plainRuntimeProfile(selection?: ModelChoice & { baseUrl?: string }): RuntimeProfile {
+  private plainRuntimeProfile(selection?: ModelChoice & { baseUrl?: string }, commitLegacyBinding = true): RuntimeProfile {
     const choice = selection ?? this.profile;
     const saved = this.modelProviderSettings(choice.provider);
     const provider = listModelProviders().find((item) => item.id === choice.provider);
@@ -378,7 +380,7 @@ export class AppState {
     let binding = this.store.get<ProfileRecord>('settings', `model-provider:${provider.id}`);
     if (!binding?.credentialRevision) {
       binding = { provider: provider.id, modelId: choice.modelId, baseUrl: saved.baseUrl, credentialRevision: randomUUID() };
-      this.store.put('settings', `model-provider:${provider.id}`, binding);
+      if (commitLegacyBinding) this.store.put('settings', `model-provider:${provider.id}`, binding);
     }
     return { ...choice, baseUrl: choice.baseUrl ?? saved.baseUrl ?? provider.defaultBaseUrl, apiKey,
       ...(provider.id === 'cloudhelm-custom' ? customModelLimits({ ...choice,
@@ -455,13 +457,13 @@ export class AppState {
     if (!provider) throw new Error('Unknown Pi model provider');
     const saved = this.store.get<Pick<ProfileRecord, 'modelId' | 'baseUrl' | 'contextWindow' | 'maxTokens'>>('settings', `model-provider:${providerId}`);
     const active = this.sameProfileProvider(provider.id, provider.name) ? this.profile : undefined;
-    const legacyKey = active ? this.secret(this.legacyModelSecretId(active)) : undefined;
+    const legacyKey = active ? secretConfigured(this.store, this.legacyModelSecretId(active)) : false;
     return {
       modelId: saved?.modelId ?? active?.modelId,
       baseUrl: saved?.baseUrl ?? active?.baseUrl,
       contextWindow: saved?.contextWindow ?? active?.contextWindow,
       maxTokens: saved?.maxTokens ?? active?.maxTokens,
-      hasKey: !!(this.secret(this.modelSecretId(providerId)) ?? legacyKey)
+      hasKey: secretConfigured(this.store, this.modelSecretId(providerId)) || legacyKey
     };
   }
 

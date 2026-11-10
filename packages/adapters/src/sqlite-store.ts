@@ -219,6 +219,17 @@ export class SqliteStore {
     this.raw.transaction(() => { for (const { bucket, id, value } of changes) this.put(bucket, id, value); }).immediate();
   }
 
+  /** Model endpoint/revision and already-encrypted credentials are one durable change. */
+  commitModelSettings(settings: Array<{ id: string; value: unknown }>, credentials: Array<{ id: string; ciphertext: string | null }> = []): void {
+    this.raw.transaction(() => {
+      for (const { id, value } of settings) this.put('settings', id, value);
+      for (const { id, ciphertext } of credentials) {
+        if (ciphertext === null) this.remove('secrets', id);
+        else this.put('secrets', id, ciphertext);
+      }
+    }).immediate();
+  }
+
   /** Compare the whole read set and atomically commit records plus version receipts.
    * Analysis is done before this synchronous transaction, never inside it. */
   commitDataRepair(repair: DataRepair): void {
