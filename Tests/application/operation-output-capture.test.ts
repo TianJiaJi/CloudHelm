@@ -14,9 +14,19 @@ it('preserves conservative masking of long unterminated output rather than widen
   const safe = '[REDACTED LONG UNTERMINATED OUTPUT]\n';
   expect(capture.snapshot()).toEqual({ stdoutTail: safe, outputCapture: { totalChars: safe.length, tailChars: safe.length, truncated: false } });
 });
+it('applies the same long-line guard even when a newline arrives in the same chunk', () => {
+  const input = 'x'.repeat(80000) + '\n';
+  const whole = new OperationOutputCapture(), split = new OperationOutputCapture();
+  whole.push(input); whole.finish();
+  for (let start = 0; start < input.length; start += 1000) split.push(input.slice(start, start + 1000));
+  split.finish();
+  expect(whole.snapshot()).toEqual(split.snapshot());
+  expect(whole.text).toBe('[REDACTED LONG UNTERMINATED OUTPUT]\n');
+});
 it('returns immutable observation snapshots while later output continues to be counted', () => {
   const capture = new OperationOutputCapture();
-  const first = `${'🙂'.repeat(40000)}\n`;
+  // Many bounded lines exercise capture-tail truncation, not the redactor's long-line guard.
+  const first = `${'🙂'.repeat(4000)}\n`.repeat(10);
   capture.push(first);
   const before = capture.snapshot();
   capture.push('late\n'); capture.finish();
