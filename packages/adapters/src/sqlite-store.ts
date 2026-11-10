@@ -52,6 +52,14 @@ export interface RequestBudgetCommit {
   receipt: { owner: string; requestId: string; binding: string; before?: unknown; value: unknown };
 }
 
+/** Durable redo receipt; never stores an arbitrary filesystem path. */
+export interface ConversationCleanup {
+  version: 1;
+  taskId: string;
+  sessionId?: string;
+  createdAt: number;
+}
+
 export class SqliteStore {
   private readonly raw: Database.Database;
   private readonly db;
@@ -270,6 +278,35 @@ export class SqliteStore {
       this.raw.prepare(`INSERT INTO request_budget_receipts(owner,request_id,binding,value,updated_at) VALUES(?,?,?,?,?)
         ON CONFLICT(owner,request_id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
         .run(receipt.owner, receipt.requestId, receipt.binding, JSON.stringify(receipt.value), Date.now());
+    }).immediate();
+  }
+
+  /** Commit records first; the desktop processes the filesystem redo receipt afterwards. */
+  commitConversationDeletion(taskId: string, referenceIds: string[], logIds: string[], sessionId?: string): void {
+    if (sessionId !== undefined && (sessionId !== taskId || !/^[a-zA-Z0-9-]{1,120}$/u.test(sessionId))) {
+      throw new Error('Invalid conversation session binding');
+    }
+    this.raw.transaction(() => {
+      if (!this.get('tasks', taskId)) throw new Error('Conversation already removed');
+      const owners = this.raw.prepare(`SELECT 'aux:review:' || id AS owner FROM records
+        WHERE bucket = 'operations' AND json_extract(value, '$.taskId') = ?
+        UNION ALL SELECT 'aux:summary:' || id AS owner FROM records
+        WHERE bucket = 'message-receipts' AND json_extract(value, '$.conversationId') = ?`)
+        .all(taskId, taskId) as Array<{ owner: string }>;
+      this.put('conversation-cleanups', taskId, { version: 1, taskId, ...(sessionId ? { sessionId } : {}), createdAt: Date.now() } satisfies ConversationCleanup);
+      for (const id of referenceIds) this.removeReference(id);
+      for (const bucket of ['operations', 'messages', 'clarifications', 'verification-reports', 'conversation-inputs']) {
+        this.removeWhere(bucket, 'taskId', taskId);
+      }
+      this.removeWhere('message-receipts', 'conversationId', taskId);
+      this.removePrefix('model-requests', `${taskId}:`);
+      this.remove('request-round-inputs', taskId);
+      for (const { owner } of [...owners, { owner: `task:${taskId}` }]) {
+        this.remove('request-budget-scopes', owner);
+        this.raw.prepare('DELETE FROM request_budget_receipts WHERE owner = ?').run(owner);
+      }
+      for (const id of logIds) this.removeLogs(id);
+      this.remove('tasks', taskId);
     }).immediate();
   }
 

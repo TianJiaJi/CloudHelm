@@ -7,7 +7,8 @@ import type { SqliteStore } from '@cloudhelm/adapters';
 import type { ReferenceStore } from './reference-store.js';
 import type { MessageDocument } from '@cloudhelm/contracts';
 import { BashAnalyzer, modelThinking } from '@cloudhelm/adapters';
-import { rm } from 'node:fs/promises';
+import { finishConversationCleanup } from './conversation-cleanup.js';
+import { ConversationLifecycle } from './conversation-lifecycle.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ipcMain } from 'electron';
@@ -19,6 +20,7 @@ import type { PreparedContext } from '@cloudhelm/contracts/runtime';
 interface Dependencies {
   store?: SqliteStore; references?: ReferenceStore;
   sessionRoot: string;
+  cleanupConversation?(id: string): Promise<boolean>;
   state: AppState;
   runtime: RuntimeBridge;
   connectHost(id: string): Promise<void>;
@@ -26,7 +28,16 @@ interface Dependencies {
   restoreSelections(tokens: string[], scopes: LocalScope[]): void;
 }
 
-export function registerConversationIpc({ store, references, sessionRoot, state, runtime, connectHost, takeSelections, restoreSelections }: Dependencies): void {
+export function registerConversationIpc({ store, references, sessionRoot, cleanupConversation, state, runtime, connectHost, takeSelections, restoreSelections }: Dependencies): void {
+  const lifecycle = new ConversationLifecycle();
+  function handleTask<A extends unknown[], T>(name: string, action: (id: string, ...args: A) => T | Promise<T>): void {
+    ipcMain.handle(`cloudhelm:${name}`, (_event, id: string, ...args: A) => lifecycle.use(id, () => action(id, ...args)));
+  }
+  const cleanup = cleanupConversation ?? ((id: string) => {
+    if (!store) throw new Error('Conversation cleanup storage unavailable');
+    return finishConversationCleanup(store, sessionRoot, id);
+  });
+  const pendingCleanup = () => new Error('对话记录已删除，本地会话文件清理尚未完成；已保留恢复记录，下次启动将重试。');
   function sessionDirectory(task: TaskView): string {
     if (task.hostIds.length > 1) throw new Error('旧的多主机对话仅供查看，请在目标主机开始新的单主机对话。');
     if (!task.session || task.session.version !== 1 || task.session.id !== task.id || !/^[a-zA-Z0-9-]+$/u.test(task.id)) {
@@ -35,7 +46,8 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
     return join(sessionRoot, task.session.id);
   }
   const restoring = new Map<string, Promise<void>>();
-  async function ensureRuntime(task: TaskView): Promise<void> {
+  const ensureRuntime = (task: TaskView) => lifecycle.use(task.id, () => ensureRuntimeNow(task));
+  async function ensureRuntimeNow(task: TaskView): Promise<void> {
     sessionDirectory(task);
     state.requestBudgets.complete(task.id);
     const pending = restoring.get(task.id);
@@ -75,16 +87,19 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
       assertPrepared?.(scopes);
       const task = state.createTask(input.message, input.hostId ? [input.hostId] : [], profile.modelId, scopes);
       persisted = true;
-      state.setTaskModel(task.id, profile);
-      await runtime.call({ method: 'start-task', task, document, initialMessage, intent, thinkingLevel: input.thinkingLevel, sessionDirectory: sessionDirectory(task), hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
-      return task;
+      return await lifecycle.use(task.id, async () => {
+        state.setTaskModel(task.id, profile);
+        await runtime.call({ method: 'start-task', task, document, initialMessage, intent, thinkingLevel: input.thinkingLevel, sessionDirectory: sessionDirectory(task), hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
+        return task;
+      });
     } catch (error) {
       if (!persisted) restoreSelections(input.localSelectionTokens, scopes);
       throw error;
     }
   }
 
-  async function send(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string, prepared?: PreparedContext, queueMode?: import('@cloudhelm/contracts').ConversationInputKind): Promise<void> {
+  const send = (...args: Parameters<typeof sendNow>) => lifecycle.use(args[0], () => sendNow(...args));
+  async function sendNow(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string, prepared?: PreparedContext, queueMode?: import('@cloudhelm/contracts').ConversationInputKind): Promise<void> {
     if (typeof text !== 'string' || !text.trim() || (!document && text.length > 100_000)) throw new Error('请输入有效内容');
     const task = state.getTask(id);
     if (task.status === 'waiting-user') throw new Error('请先回答需求澄清，或停止本轮对话');
@@ -111,7 +126,7 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
     return send(id, text, tokens, undefined, undefined, undefined,
       queueMode === 'steer' || queueMode === 'followUp' ? queueMode : undefined);
   });
-  ipcMain.handle('cloudhelm:cancel-queued-input', async (_event, taskId: string, inputId: string) => {
+  handleTask('cancel-queued-input', async (taskId: string, inputId: string) => {
     state.getTask(taskId);
     const value = state.queuedInputs(taskId).find((entry) => entry.id === inputId);
     if (!value) throw new Error('消息不属于当前对话');
@@ -120,14 +135,15 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
     return { cancelled: result.cancelled }; // Prepared reference bodies never cross this renderer API.
   });
   if (store && references) registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime,
+    assertConversationAvailable: (id) => lifecycle.assertAvailable(id),
     previewSelections: (tokens) => { const scopes = takeSelections(tokens); restoreSelections(tokens, scopes); return structuredClone(scopes); } });
 
-  ipcMain.handle('cloudhelm:set-conversation-thinking', async (_event, id: string, level: import('@cloudhelm/contracts').ThinkingLevel) => {
+  handleTask('set-conversation-thinking', async (id: string, level: import('@cloudhelm/contracts').ThinkingLevel) => {
     await ensureRuntime(state.getTask(id));
     await runtime.call({ method: 'set-conversation-thinking', taskId: id, level });
   });
 
-  ipcMain.handle('cloudhelm:set-conversation-model', async (_event, id: string, choice: ModelChoice) => {
+  handleTask('set-conversation-model', async (id: string, choice: ModelChoice) => {
     sessionDirectory(state.getTask(id));
     const profile = state.runtimeProfile(choice);
     const live = await runtime.call<boolean>({ method: 'has-task', taskId: id });
@@ -136,7 +152,7 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
     }
     state.setTaskModel(id, profile, live);
   });
-  ipcMain.handle('cloudhelm:resume-task', async (_event, id: string) => {
+  handleTask('resume-task', async (id: string) => {
     const task = state.getTask(id); sessionDirectory(task);
     if (task.resumeReason === 'report') throw new Error('报告记录不是待执行工作；请发送新消息说明需求。');
     if (remainingRequests(state.requestBudgets.current(id)) <= 0) throw new RequestBudgetError('budget-exhausted');
@@ -148,7 +164,7 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
     try {
       if (!Value.Check(ExtendRequestBudgetSchema, input)) throw new RequestBudgetError('budget-invalid');
       sessionDirectory(state.getTask(input.taskId));
-      return await extendRequestBudget(input, {
+      return await lifecycle.use(input.taskId, () => extendRequestBudget(input, {
         authority: state.requestBudgets,
         live: (id) => {
           const execution = state.snapshot().execution?.[id];
@@ -156,27 +172,32 @@ export function registerConversationIpc({ store, references, sessionRoot, state,
         },
         restore: (id) => ensureRuntime(state.getTask(id)),
         resume: (id) => runtime.call({ method: 'resume-task', taskId: id })
-      });
+      }));
     } catch (error) {
       throw new Error(error instanceof RequestBudgetError ? error.code : '预算追加或继续确认失败；请核对当前状态，不会自动重试。');
     }
   });
-  ipcMain.handle('cloudhelm:answer-clarification', (_event, taskId: string, requestId: string, answers: ClarificationAnswer[]) => {
+  handleTask('answer-clarification', (taskId: string, requestId: string, answers: ClarificationAnswer[]) => {
     state.getTask(taskId);
     return runtime.call({ method: 'answer-clarification', taskId, requestId, answers });
   });
-  ipcMain.handle('cloudhelm:cancel-clarification', (_event, taskId: string, requestId: string) => {
+  handleTask('cancel-clarification', (taskId: string, requestId: string) => {
     state.getTask(taskId);
     return runtime.call({ method: 'cancel-clarification', taskId, requestId });
   });
-  ipcMain.handle('cloudhelm:stop-operation', (_event, id: string) => runtime.call({ method: 'stop-operation', taskId: id }));
+  handleTask('stop-operation', (id: string) => runtime.call({ method: 'stop-operation', taskId: id }));
   ipcMain.handle('cloudhelm:delete-conversation', async (_event, id: string) => {
     if (typeof id !== 'string' || !id.trim() || id.length > 120) throw new Error('Invalid conversation id');
-    // Authoritative state decides deletability before any runtime cleanup.
-    state.assertDeletable(id);
-    if (await runtime.call<boolean>({ method: 'has-task', taskId: id })) await runtime.call({ method: 'delete-task', taskId: id });
-    const task = state.getTask(id);
-    if (task.session) await rm(sessionDirectory(task), { recursive: true, force: true });
-    state.deleteTask(id);
+    return lifecycle.delete(id, async () => {
+      if (store?.get('conversation-cleanups', id)) {
+        if (!await cleanup(id)) throw pendingCleanup();
+        return;
+      }
+      // Authoritative state decides deletability before any runtime cleanup.
+      state.assertDeletable(id);
+      if (await runtime.call<boolean>({ method: 'has-task', taskId: id })) await runtime.call({ method: 'delete-task', taskId: id });
+      state.deleteTask(id); // Rechecks state and commits the redo receipt before any filesystem removal.
+      if (!await cleanup(id)) throw pendingCleanup();
+    });
   });
 }

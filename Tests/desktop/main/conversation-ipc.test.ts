@@ -76,8 +76,9 @@ function setup(task = makeConversation(), running = false) {
     const result = tokens.map((token) => selections.get(token)!); tokens.forEach((token) => selections.delete(token)); return result;
   });
   const restoreSelections = vi.fn((tokens: string[], scopes: LocalScope[]) => { tokens.forEach((token, index) => selections.set(token, scopes[index]!)); });
-  registerConversationIpc({ sessionRoot: '/tmp/cloudhelm-ipc-test-sessions', state: state as unknown as AppState, runtime: { call } as unknown as RuntimeBridge, connectHost, takeSelections, restoreSelections });
-  return { state, call, connectHost, takeSelections, restoreSelections, active, conversations };
+  const cleanupConversation = vi.fn(async (_id: string) => true);
+  registerConversationIpc({ cleanupConversation, sessionRoot: '/tmp/cloudhelm-ipc-test-sessions', state: state as unknown as AppState, runtime: { call } as unknown as RuntimeBridge, connectHost, takeSelections, restoreSelections });
+  return { state, call, connectHost, takeSelections, restoreSelections, active, conversations, cleanupConversation };
 }
 
 beforeEach(() => ipc.handlers.clear());
@@ -270,6 +271,54 @@ it('blocks ordinary messages and local attachment authorization while waiting fo
 });
 
 describe('conversation deletion IPC', () => {
+  it('protects a newly persisted task while its initial runtime creation is pending', async () => {
+    const f = setup(), waiting = deferred<void>();
+    f.call.mockImplementation(async (request) => request.method === 'start-task' ? waiting.promise : false);
+    const pending = invoke('start-conversation', { message: 'synthetic task', hostId: null, localSelectionTokens: [] });
+    try {
+      await expect(invoke('delete-conversation', 'new-conversation')).rejects.toThrow('处理中');
+      expect(f.state.deleteTask).not.toHaveBeenCalled();
+    } finally { waiting.resolve(); await pending; }
+  });
+  it.each(['send-message', 'set-conversation-model'])('refuses deletion while %s is awaiting a runtime response', async (channel) => {
+    const f = setup(), waiting = deferred<boolean>();
+    f.call.mockImplementation(async (request) => request.method === 'has-task' ? waiting.promise : undefined);
+    const pending = invoke(channel, 'conversation-one', channel === 'send-message' ? 'continue' : profile, []);
+    try {
+      await expect(invoke('delete-conversation', 'conversation-one')).rejects.toThrow('处理中');
+      expect(f.state.deleteTask).not.toHaveBeenCalled();
+    } finally { waiting.resolve(true); await pending; }
+  });
+  it('rejects new messages and duplicate deletes while deletion awaits the runtime', async () => {
+    const f = setup(), waiting = deferred<boolean>();
+    f.call.mockImplementation(async (request) => request.method === 'has-task' ? waiting.promise : undefined);
+    const pending = invoke('delete-conversation', 'conversation-one');
+    try {
+      await expect(invoke('send-message', 'conversation-one', 'continue', [])).rejects.toThrow('正在删除');
+      await expect(invoke('delete-conversation', 'conversation-one')).rejects.toThrow('正在删除');
+      expect(f.call).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'task-message' }));
+    } finally { waiting.resolve(false); await pending; }
+  });
+  it('releases the deletion fence when runtime disposal fails, without removing records or files', async () => {
+    const f = setup(); f.active.add('conversation-one');
+    f.call.mockRejectedValueOnce(new Error('synthetic runtime failure'));
+    await expect(invoke('delete-conversation', 'conversation-one')).rejects.toThrow('synthetic runtime failure');
+    expect(f.state.deleteTask).not.toHaveBeenCalled(); expect(f.cleanupConversation).not.toHaveBeenCalled();
+    await invoke('send-message', 'conversation-one', 'continue', []);
+    expect(f.call).toHaveBeenCalledWith(expect.objectContaining({ method: 'task-message' }));
+  });
+  it('never deletes session files when record commit fails', async () => {
+    const f = setup();
+    f.state.deleteTask.mockImplementation(() => { throw new Error('synthetic commit failure'); });
+    await expect(invoke('delete-conversation', 'conversation-one')).rejects.toThrow('synthetic commit failure');
+    expect(f.cleanupConversation).not.toHaveBeenCalled();
+  });
+  it('reports deferred physical cleanup distinctly after committing records', async () => {
+    const f = setup(); f.cleanupConversation.mockResolvedValue(false);
+    await expect(invoke('delete-conversation', 'conversation-one')).rejects.toThrow('对话记录已删除');
+    expect(f.state.deleteTask).toHaveBeenCalledBefore(f.cleanupConversation);
+    expect(f.conversations.has('conversation-one')).toBe(false);
+  });
   it('drops the runtime task before removing the authoritative record', async () => {
     const fixture = setup();
     fixture.active.add('conversation-one');

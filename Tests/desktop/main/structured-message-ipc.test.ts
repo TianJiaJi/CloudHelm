@@ -14,6 +14,7 @@ afterEach(() => store.close());
 const invoke = async (method: string, input: unknown) => await ipc.handlers.get(`cloudhelm:${method}`)!({}, input);
 function setup() {
   const profile = { provider: 'test', modelId: 'test-model', apiKey: 'private-test-key' };
+  const lifecycle = { deleting: false };
   const bodies = new Map<string, ReferenceBody>();
   const task = { id: 'task', hostIds: ['host'] } as TaskView;
   let budgetActive: (id: string, taskId?: string) => boolean = () => false;
@@ -31,12 +32,46 @@ function setup() {
   const send = vi.fn(async () => {}); const start = vi.fn<Parameters<typeof registerStructuredMessageIpc>[0]['start']>(async () => task);
   const references = { read: (id: string) => { const body = bodies.get(id); if (!body) throw new Error('missing'); return body; },
     save: (body: ReferenceBody) => bodies.set(body.reference.id, body), quote: vi.fn() } as unknown as ReferenceStore;
-  registerStructuredMessageIpc({ state, store, runtime: { call } as unknown as RuntimeBridge, references, send, start });
+  registerStructuredMessageIpc({ state, store, runtime: { call } as unknown as RuntimeBridge, references, send, start,
+    assertConversationAvailable: () => { if (lifecycle.deleting) throw new Error('对话正在删除'); } });
   const input: StructuredSend = { conversationId: 'task', hostId: 'host', localSelectionTokens: [], document: { requestId: 'request-1',
     parts: [{ type: 'text', text: 'explain ' }, { type: 'reference', reference: { id: 'local', kind: 'paste', capturedAt: 1 }, content: 'password=secret\nhello' }] } };
-  return { input, send, start, call, bodies, profile, inputBudget, execution, budgetActive: (id: string, taskId?: string) => budgetActive(id, taskId) };
+  return { input, send, start, call, bodies, profile, inputBudget, execution, lifecycle, state, budgetActive: (id: string, taskId?: string) => budgetActive(id, taskId) };
 }
 describe('structured message IPC', () => {
+  it('refuses preparations during deletion before creating a receipt or requesting a model', async () => {
+    const f = setup(); f.lifecycle.deleting = true;
+    await expect(invoke('send-structured', f.input)).rejects.toThrow('正在删除');
+    expect(store.list('message-receipts')).toEqual([]); expect(f.call).not.toHaveBeenCalled();
+  });
+  it('revokes auxiliary budget authority and rejects a preparation completed during deletion', async () => {
+    const f = setup(); let finish!: () => void;
+    const original = f.call.getMockImplementation()!;
+    f.call.mockImplementation(async (request) => {
+      if (request.method === 'prepare-message') await new Promise<void>((resolve) => { finish = resolve; });
+      return original(request);
+    });
+    const pending = invoke('send-structured', f.input);
+    expect(f.budgetActive('request-1')).toBe(true);
+    f.lifecycle.deleting = true;
+    expect(() => f.budgetActive('request-1')).toThrow('正在删除');
+    finish(); await expect(pending).rejects.toThrow('正在删除');
+    expect(f.send).not.toHaveBeenCalled(); expect(f.bodies.size).toBe(0);
+  });
+  it('does not recreate a deleted receipt when a late preparation finishes', async () => {
+    const f = setup(); let finish!: () => void;
+    const original = f.call.getMockImplementation()!;
+    f.call.mockImplementation(async (request) => {
+      if (request.method === 'prepare-message') await new Promise<void>((resolve) => { finish = resolve; });
+      return original(request);
+    });
+    const pending = invoke('send-structured', f.input);
+    store.removeWhere('message-receipts', 'conversationId', 'task');
+    vi.spyOn(f.state, 'getTask').mockImplementation(() => { throw new Error('Task not found'); });
+    finish(); await expect(pending).rejects.toThrow('Task not found');
+    expect(store.list('message-receipts')).toEqual([]);
+    expect(f.send).not.toHaveBeenCalled(); expect(f.bodies.size).toBe(0);
+  });
   it('revokes auxiliary attempts when the selected model changes during preparation', async () => {
     const f = setup(); let finish!: () => void;
     const original = f.call.getMockImplementation()!;

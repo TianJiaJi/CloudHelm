@@ -24,6 +24,7 @@
     "test:ui": "node Tests/smoke/ui-smoke.mjs",
     "test:desktop": "node Tests/smoke/desktop-smoke.mjs",
     "test:credentials": "node Tests/smoke/credential-isolation-smoke.mjs",
+    "test:deletion": "node Tests/smoke/conversation-deletion-smoke.mjs",
     "test:desktop:packaged": "node Tests/smoke/desktop-smoke.mjs --packaged",
     "test:markdown": "node Tests/smoke/markdown-smoke.mjs",
     "test:ai-panel": "node Tests/smoke/ai-panel-smoke.mjs"

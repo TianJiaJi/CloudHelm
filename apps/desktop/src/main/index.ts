@@ -1,4 +1,5 @@
 import { ReferenceStore } from './reference-store.js';
+import { resumeConversationCleanup } from './conversation-cleanup.js';
 import { DiagnosticLogger, diagnosticSettings } from './diagnostic-logger.js';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
@@ -222,6 +223,7 @@ void app.whenReady().then(async () => {
   const diagnostics = new DiagnosticLogger(diagnosticSettings(!!process.env.ELECTRON_RENDERER_URL, process.env, app.getPath('userData')));
   diagnostics.write({ event: 'runtime.started', level: 'info' });
   runtime = new RuntimeBridge((event) => {
+    if (!state.acceptsEvent(event)) return;
     if (event.type === 'terminal-command' || event.type === 'terminal-data' || event.type === 'terminal-state') references.record(event);
     state.record(event);
     if (!window?.isFocused() && Notification.isSupported()
@@ -237,6 +239,9 @@ void app.whenReady().then(async () => {
   registerIpc();
   registerRecoveryIpc(state, runtime);
   createWindow();
+  void resumeConversationCleanup(store, join(app.getPath('userData'), 'pi-sessions')).then((pending) => {
+    if (pending) console.warn(`CloudHelm: ${pending} local conversation cleanup(s) remain pending`);
+  }).catch(() => console.warn('CloudHelm: local conversation cleanup retry deferred'));
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 }).catch((error: unknown) => {
   if (shutdown.isClosed) return;

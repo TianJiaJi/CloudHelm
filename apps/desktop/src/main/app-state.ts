@@ -44,6 +44,8 @@ export class AppState {
   private readonly hosts = new Map<string, HostView>();
   private readonly terminals = new Map<string, TerminalViewState>();
   private readonly tasks = new Map<string, TaskView>();
+  private readonly deletedTasks = new Set<string>();
+  private readonly deletedTerminals = new Set<string>();
   private readonly operations = new Map<string, OperationView>();
   private readonly approvals = new Map<string, AppSnapshot['approvals'][number]>();
   private readonly inputs = new Map<string, AppSnapshot['inputs'][number]>();
@@ -223,7 +225,8 @@ export class AppState {
 
   /** Permanently removes a finished conversation, its records and its terminal logs. */
   deleteTask(id: string): void {
-    this.assertDeletable(id);
+    const task = this.assertDeletable(id);
+    if (task.session && task.session.version !== 1) throw new Error('Invalid conversation session version');
     const logKeys = new Set<string>();
     for (const operation of this.operations.values()) {
       if (operation.taskId !== id) continue;
@@ -231,36 +234,38 @@ export class AppState {
       if (operation.logRef) logKeys.add(operation.logRef);
     }
     for (const terminal of this.terminals.values()) if (terminal.taskId === id) logKeys.add(terminal.id);
-    this.flushLogs();
-    for (const message of this.messages.filter((message) => message.taskId === id)) {
-      for (const part of message.document?.parts ?? []) if (part.type === 'reference') this.store.removeReference(part.reference.id);
+    for (const operation of this.operations.values()) if (operation.taskId !== id && operation.logRef) logKeys.delete(operation.logRef);
+    for (const terminal of this.terminals.values()) if (terminal.taskId !== id) logKeys.delete(terminal.id);
+    const referenceIds = new Set<string>(), sharedReferences = new Set<string>();
+    for (const message of this.messages) for (const part of message.document?.parts ?? []) {
+      if (part.type === 'reference') (message.taskId === id ? referenceIds : sharedReferences).add(part.reference.id);
     }
-    this.store.removeWhere('message-receipts', 'conversationId', id);
-    this.inputStore.removeTask(id);
+    this.flushLogs();
+    this.store.commitConversationDeletion(id, [...referenceIds].filter((key) => !sharedReferences.has(key)), [...logKeys], task.session?.id);
+    // No projection or input-ledger mutation is allowed before the transaction commits.
+    this.inputStore.forgetTask(id);
     this.agentActivity.remove(id);
     this.tasks.delete(id);
-    for (const [key, operation] of [...this.operations]) if (operation.taskId === id) this.operations.delete(key);
+    this.deletedTasks.add(id);
+    for (const [key, operation] of [...this.operations]) if (operation.taskId === id) {
+      if (operation.logRef && logKeys.has(operation.logRef)) this.deletedTerminals.add(operation.logRef);
+      this.operations.delete(key);
+    }
     for (const [key, approval] of [...this.approvals]) if (approval.taskId === id) this.approvals.delete(key);
     for (const [key, input] of [...this.inputs]) if (input.taskId === id) this.inputs.delete(key);
     for (const [key, request] of [...this.clarifications]) if (request.taskId === id) this.clarifications.delete(key);
     for (let index = this.messages.length - 1; index >= 0; index--) if (this.messages[index]!.taskId === id) this.messages.splice(index, 1);
     for (const [key, terminal] of [...this.terminals]) {
       if (terminal.taskId !== id) continue;
+      this.deletedTerminals.add(key);
       this.terminals.delete(key);
       this.redactors.delete(key);
       this.logBuffer.delete(key);
     }
-    this.store.remove('tasks', id);
-    this.store.removeWhere('operations', 'taskId', id);
-    this.store.removeWhere('messages', 'taskId', id);
-    this.store.removeWhere('clarifications', 'taskId', id);
-    this.store.removeWhere('verification-reports', 'taskId', id);
-    this.store.removePrefix('model-requests', `${id}:`);
     delete this.reasoningProgress[id];
     delete this.execution[id];
     delete this.contextUsage[id];
     delete this.contextCompaction[id];
-    for (const key of logKeys) this.store.removeLogs(key);
     this.publish();
   }
 
@@ -566,12 +571,21 @@ export class AppState {
     this.record({ type: 'operation', value: structuredClone(operation) });
   }
 
+  /** Reject disposed owners before either state or reference capture sees a late Worker event. */
+  acceptsEvent(event: Parameters<AppState['record']>[0]): boolean {
+    if (this.closed) return false;
+    const owner = 'taskId' in event ? event.taskId : 'value' in event && event.value && typeof event.value === 'object'
+      && 'taskId' in event.value ? event.value.taskId : undefined;
+    return !(typeof owner === 'string' && this.deletedTasks.has(owner))
+      && !('terminalId' in event && this.deletedTerminals.has(event.terminalId));
+  }
+
   record(event: AppEvent | { type: 'approval-open'; value: AppSnapshot['approvals'][number] }
     | { type: 'approval-close'; id: string } | { type: 'operation'; value: OperationView }
     | { type: 'input-open'; value: InputRequestView } | { type: 'input-close'; id: string }
     | { type: 'task-status'; taskId: string; status: TaskView['status']; summary?: string; resumeReason?: ResumeReason; requestCount?: number }
     | { type: 'host-status'; hostId: string; status: HostView['status'] }): void {
-    if (this.closed) return;
+    if (!this.acceptsEvent(event)) return;
     switch (event.type) {
       case 'agent-lifecycle':
         if (!this.tasks.has(event.taskId) || !this.agentActivity.accept(event.taskId, event.value)) return;

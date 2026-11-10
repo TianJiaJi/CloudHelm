@@ -84,6 +84,9 @@ pnpm test:desktop:packaged
 - `pnpm test:credentials`：先 `pnpm build`，再使用全新临时数据库启动真实Electron；以故意损坏的合成密文验证启动和设置可用、以注入不可用状态验证纯投影、通过真实IPC和OS加密替换合成Key。不会读取用户凭据、请求外部模型或连接用户主机；不截图、不保存trace，结束清理临时目录。
 - `core/redaction-stream.test.ts` 与 `application/operation-output-capture.test.ts`：任意分块、ANSI/OSC、引号/转义、长行、Unicode、私钥与快照不泄漏；无限引用捕获迁移仍另列E04，不与脱敏状态修复混算。
 
+- `desktop/main/conversation-deletion.test.ts`、`conversation-cleanup.test.ts`：真实SQLite故障注入、事务回滚、共享资源保留、目录清理重试和迟到事件隔离；`conversation-ipc.test.ts`、`structured-message-ipc.test.ts`覆盖恢复/发送/删除竞争与准备阶段撤权。
+- `pnpm test:deletion`：先 `pnpm build`；在独立临时目录启动真实Electron，验证正常删除、拒绝跟随替换的目录链接、清理失败回执、重启恢复与无关数据保留。没有模型/SSH调用，不读取用户数据。
+
 ## 证据边界
 
 - 默认测试使用假模型、假认证与临时本地服务，不连接用户主机。真实 OS SSH／PTY 集成必须显式 opt-in，且仅使用独立 loopback 测试服务；默认集合中的原生 SSH 协议 fixture 不证明 OS 登录、PAM 或权限切换。

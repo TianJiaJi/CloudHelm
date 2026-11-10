@@ -48,6 +48,10 @@ export class ConversationInputStore {
   }
   removeTask(taskId: string): void {
     this.store.removeWhere('conversation-inputs', 'taskId', taskId);
+    this.forgetTask(taskId);
+  }
+  /** Called only after the owning conversation's deletion transaction commits. */
+  forgetTask(taskId: string): void {
     for (const [id, value] of this.values) if (value.taskId === taskId) this.values.delete(id);
   }
 }

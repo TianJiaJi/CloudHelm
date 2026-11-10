@@ -34,6 +34,15 @@ class MemoryStore {
       throw error;
     }
   }
+  commitConversationDeletion(taskId: string, referenceIds: string[], logIds: string[], sessionId?: string): void {
+    if (referenceIds.length) throw new Error('Use the real SQLite reference fixture');
+    this.put('conversation-cleanups', taskId, { version: 1, taskId, sessionId, createdAt: Date.now() });
+    for (const bucket of ['operations', 'messages', 'clarifications', 'verification-reports', 'conversation-inputs']) this.removeWhere(bucket, 'taskId', taskId);
+    this.removeWhere('message-receipts', 'conversationId', taskId);
+    this.removePrefix('model-requests', `${taskId}:`); this.remove('request-round-inputs', taskId);
+    for (const id of logIds) this.removeLogs(id);
+    this.remove('tasks', taskId);
+  }
   remove(bucket: string, id: string): void { this.buckets.get(bucket)?.delete(id); }
   removeWhere(bucket: string, field: string, value: string): void {
     const values = this.buckets.get(bucket);

@@ -14,10 +14,11 @@ interface Dependencies {
   send(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string, prepared?: PreparedContext, queueMode?: import('@cloudhelm/contracts').ConversationInputKind): Promise<void>;
   previewSelections?(tokens: string[]): import('@cloudhelm/contracts').LocalScope[];
   ensureRuntime?(task: TaskView): Promise<void>;
+  assertConversationAvailable?(id: string): void;
 }
 interface Receipt { fingerprint: string; state: 'preparing' | 'dispatching' | 'sent' | 'failed'; conversationId?: string }
 interface PreparationJob { canceled: boolean; dispatching: boolean; taskId?: string; allowCompaction?: boolean; current?: () => boolean; promise: Promise<{ conversationId: string }> }
-export function registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime, previewSelections }: Dependencies): void {
+export function registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime, previewSelections, assertConversationAvailable }: Dependencies): void {
   const active = new Map<string, PreparationJob>();
   state.setBudgetPreparationAuthority((id, taskId) => {
     const job = active.get(id);
@@ -68,6 +69,7 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
   async function run(input: StructuredSend, fingerprint: string, job: PreparationJob) {
     const id = input.document.requestId;
     const receipt: Receipt = { fingerprint, state: 'preparing', conversationId: input.conversationId };
+    if (input.conversationId) { assertConversationAvailable?.(input.conversationId); state.getTask(input.conversationId); }
     store.put('message-receipts', id, receipt);
     try {
       const task = input.conversationId ? state.getTask(input.conversationId) : undefined;
@@ -89,6 +91,7 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       // Bind every auxiliary attempt to this existing preparation, not a new
       // allowance or silently substituted provider/credential configuration.
       job.current = () => {
+        if (task) assertConversationAvailable?.(task.id);
         const current = task ? state.conversationProfile(state.getTask(task.id)) : state.runtimeProfile(input.model);
         return controlBinding() === boundControl && hostBinding(hostId ? [state.getHost(hostId)] : []) === boundHosts && current.provider === profile.provider && current.modelId === profile.modelId
           && current.credentialRevision === profile.credentialRevision && current.baseUrl === profile.baseUrl
@@ -146,7 +149,11 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       store.put('message-receipts', id, { fingerprint, state: 'sent', conversationId });
       return { conversationId };
     } catch (error) {
-      if (!job.dispatching || (error instanceof Error && !/timed out|运行进程|runtime stopped/iu.test(error.message))) store.put('message-receipts', id, { ...receipt, state: 'failed' });
+      let ownerExists = true;
+      if (receipt.conversationId) { try { state.getTask(receipt.conversationId); } catch { ownerExists = false; } }
+      if (ownerExists && (!job.dispatching || (error instanceof Error && !/timed out|运行进程|runtime stopped/iu.test(error.message)))) {
+        store.put('message-receipts', id, { ...receipt, state: 'failed' });
+      }
       throw error;
     }
   }
