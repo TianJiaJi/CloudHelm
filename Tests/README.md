@@ -40,6 +40,7 @@ pnpm test:ui
 pnpm test:markdown
 pnpm test:ai-panel
 pnpm test:desktop
+pnpm test:credentials
 pnpm test:desktop:packaged
 ```
 
@@ -75,6 +76,13 @@ pnpm test:desktop:packaged
 - `adapters/remote-program-syntax.test.ts`：只通过本地 Python AST 检查固定程序语法，不执行提权程序。
 - `core/operation-outcome.test.ts`：反馈版本、执行边界、影响及后续指引。
 - `desktop/worker/task-runner-verification-*.test.ts`：自然结束、旧提交工具不可用、历史缺报告不自动恢复；`desktop/renderer/result-summary.test.ts` 与 UI 冒烟覆盖折叠证据和始终可见的真实失败。
+
+## 修复专项回归入口
+
+- `scripts/repair-coverage.test.ts`：42父项与12UI包的完整性和状态约束；清单通过不代表产品验收通过。
+- `desktop/main/credential-isolation.test.ts`：合成OS凭据与真实SQLite，验证快照不解密、损坏凭据可替换、配置/密钥/审核设置事务回滚及单次通知。
+- `pnpm test:credentials`：先 `pnpm build`，再使用全新临时数据库启动真实Electron；以故意损坏的合成密文验证启动和设置可用、以注入不可用状态验证纯投影、通过真实IPC和OS加密替换合成Key。不会读取用户凭据、请求外部模型或连接用户主机；不截图、不保存trace，结束清理临时目录。
+- `core/redaction-stream.test.ts` 与 `application/operation-output-capture.test.ts`：任意分块、ANSI/OSC、引号/转义、长行、Unicode、私钥与快照不泄漏；无限引用捕获迁移仍另列E04，不与脱敏状态修复混算。
 
 ## 证据边界
 
