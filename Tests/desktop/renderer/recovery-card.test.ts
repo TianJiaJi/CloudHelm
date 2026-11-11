@@ -15,6 +15,25 @@ const snapshot = (operations: OperationView[]): AppSnapshot => ({ operations: op
 const render = (data: AppSnapshot) => renderToStaticMarkup(createElement(RecoveryCard, { snapshot: data, hostId: 'host',
   conversation: data.conversations[1], report: () => undefined }));
 
+it('projects a historical revision blocker from backend risk bindings after the current revision is blocked', () => {
+  const data = snapshot([{ ...original, hostId: 'previous-profile' }, blocked]);
+  data.conversations[0]!.hostIds = ['previous-profile'];
+  Object.assign(data, { hostRiskBindings: [
+    { hostId: 'previous-profile', riskDomainId: 'previous-profile' }, { hostId: 'host', riskDomainId: 'previous-profile' }
+  ] });
+  expect(render(data)).toContain('阻断项 old');
+  expect(render(data)).toContain('知晓风险，仅解除这条写入阻断');
+});
+
+it('does not invent cross-profile associations when the backend gives no matching risk domain', () => {
+  const data = snapshot([{ ...original, hostId: 'previous-profile' }, blocked]);
+  expect(render(data)).toBe('');
+  Object.assign(data, { hostRiskBindings: [
+    { hostId: 'previous-profile', riskDomainId: 'previous-profile' }, { hostId: 'host', riskDomainId: 'different-domain' }
+  ] });
+  expect(render(data)).toBe('');
+});
+
 it('does not display other conversations’ records before this conversation hits a write lock', () => {
   const data = snapshot([original]);
   expect(render(data)).toBe('');

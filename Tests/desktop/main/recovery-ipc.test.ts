@@ -27,6 +27,51 @@ function setup() {
   return { snapshot, acceptOperationRisk, call, readOperationLog };
 }
 
+it('allows explicit risk acceptance from a backend-linked revision but releases only the original operation', async () => {
+  const { call, snapshot, acceptOperationRisk } = setup();
+  snapshot.conversations[0]!.hostIds = ['new-profile'];
+  Object.assign(snapshot, { hostRiskBindings: [
+    { hostId: 'host', riskDomainId: 'host' }, { hostId: 'new-profile', riskDomainId: 'host' }
+  ] });
+  await invoke('old', '已检查并明确接管历史配置的未知操作风险', 'current', []);
+  expect(acceptOperationRisk).toHaveBeenCalledOnce();
+  expect(call.mock.calls[0]![0]).toMatchObject({ method: 'prepare-operation-risk', operationId: 'old', hostId: 'host' });
+  expect(call.mock.calls[1]![0]).toMatchObject({ method: 'commit-operation-risk', operation: { id: 'old', hostId: 'host', status: 'unknown' } });
+});
+
+it('does not treat shared risk identity as proof that another connection observed the original recipient', async () => {
+  const { call, snapshot, acceptOperationRisk } = setup();
+  snapshot.conversations[0]!.hostIds = ['new-profile'];
+  snapshot.operations[1]!.hostId = 'new-profile';
+  Object.assign(snapshot, { hostRiskBindings: [
+    { hostId: 'host', riskDomainId: 'host' }, { hostId: 'new-profile', riskDomainId: 'host' }
+  ] });
+  await expect(invoke('old', '已检查并明确接管历史配置的未知操作风险', 'current', ['check'])).rejects.toThrow('只能引用同主机');
+  expect(call).not.toHaveBeenCalled(); expect(acceptOperationRisk).not.toHaveBeenCalled();
+});
+
+it('refuses an unrelated risk domain even when a caller claims the current conversation', async () => {
+  const { call, snapshot, acceptOperationRisk } = setup();
+  snapshot.conversations[0]!.hostIds = ['unrelated'];
+  Object.assign(snapshot, { hostRiskBindings: [
+    { hostId: 'host', riskDomainId: 'host' }, { hostId: 'unrelated', riskDomainId: 'unrelated' }
+  ] });
+  await expect(invoke('old', '已检查并明确接管历史配置的未知操作风险', 'current', [])).rejects.toThrow('不属于此风险域');
+  expect(call).not.toHaveBeenCalled(); expect(acceptOperationRisk).not.toHaveBeenCalled();
+});
+
+it.each(['source', 'evidence', 'recipient'] as const)('revalidates %s after awaiting worker liveness, before persisting or unlocking', async (change) => {
+  const { call, snapshot, acceptOperationRisk } = setup();
+  call.mockImplementationOnce(async () => {
+    if (change === 'source') snapshot.conversations[0]!.hostIds = ['unrelated'];
+    if (change === 'evidence') snapshot.operations[1]!.status = 'unknown';
+    if (change === 'recipient') snapshot.operations[0] = { ...snapshot.operations[0]!, hostId: 'unrelated' };
+  });
+  await expect(invoke('old', '已检查并明确接管历史配置的未知操作风险', 'current', ['check'])).rejects.toThrow();
+  expect(acceptOperationRisk).not.toHaveBeenCalled();
+  expect(call.mock.calls.map(([request]) => (request as { method: string }).method)).toEqual(['prepare-operation-risk']);
+});
+
 it('shows an unresolved original log only through the recovery-specific user path', async () => {
   const { readOperationLog, snapshot } = setup();
   const read = handlers.get('cloudhelm:read-recovery-operation-log')!;

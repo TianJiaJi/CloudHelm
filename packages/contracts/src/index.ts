@@ -291,7 +291,10 @@ export interface ExecutionView {
   canStop: boolean;
 }
 
+export { sharesHostRiskDomain, type HostRiskBindingView } from './host-risk.js';
+
 export interface AppSnapshot {
+  hostRiskBindings?: import('./host-risk.js').HostRiskBindingView[];
   agentActivity?: Record<string, import('./agent-lifecycle.js').AgentActivityView>;
   queuedInputs?: import('./conversation-input.js').ConversationInputView[];
   reasoningProgress?: Record<string, ReasoningProgress>;

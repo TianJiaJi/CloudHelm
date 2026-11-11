@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { CredentialUnavailableError, decryptSecret, encryptSecret, secretConfigured } from './credential-storage.js';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
-import { OutputRedactor, type CommandAnalyzer } from '@cloudhelm/core';
+import { OutputRedactor, resolveHostRiskDomain, resolveHostRiskBindings, type CommandAnalyzer } from '@cloudhelm/core';
 import { HISTORICAL_QUERY_REPAIR, planHistoricalQueryRepair } from './historical-query-repair.js';
 import { RequestBudgetAuthority } from './request-budget-authority.js';
 import { createRequestBudget } from '@cloudhelm/core';
@@ -142,7 +142,7 @@ export class AppState {
     return {
       queuedInputs: this.inputStore.snapshot(), agentActivity: this.agentActivity.snapshot(),
       reasoningProgress: { ...this.reasoningProgress }, execution: { ...this.execution }, contextUsage: { ...this.contextUsage }, contextCompaction: { ...this.contextCompaction },
-      hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
+      hostRiskBindings: this.hostRiskBindings(), hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
       profile: { ...this.profile, hasKey: secretConfigured(this.store, this.modelSecretId(this.profile.provider))
@@ -164,6 +164,10 @@ export class AppState {
     const host = this.hosts.get(id);
     if (!host) throw new Error('Host not found');
     return host;
+  }
+
+  hostRiskBindings(): Array<{ hostId: string; riskDomainId: string }> {
+    return resolveHostRiskBindings(this.hosts);
   }
 
   editHost(id: string, draft: HostDraft, newSecret?: string, credentials?: HostCredentialsPatch): HostView {
@@ -284,8 +288,10 @@ export class AppState {
 
   runtimeHost(id: string): RuntimeHost {
     const host = this.getHost(id);
+    const riskDomainId = resolveHostRiskDomain(host, (id) => this.hosts.get(id));
     const credentials = readHostCredentials(host, (key) => this.secret(key));
-    return { ...host, credentials, secret: host.auth === 'password' ? credentials.password : host.auth === 'private-key' ? credentials.passphrase : undefined };
+    return { ...host, riskDomainId,
+      credentials, secret: host.auth === 'password' ? credentials.password : host.auth === 'private-key' ? credentials.passphrase : undefined };
   }
 
   saveSecret(id: string, value: string): void {

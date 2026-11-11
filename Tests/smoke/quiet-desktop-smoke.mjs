@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { quietElectron, QUIET_DESKTOP_PROTOCOL } from './quiet-electron.mjs';
 import { DesktopProcess, cleanupDesktopSmoke, withTimeout } from './desktop-process.mjs';
 
+import { captureQuietDesktop } from './quiet-screenshot.mjs';
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const desktop = path.join(root, 'apps/desktop');
 const userData = await mkdtemp(path.join(tmpdir(), 'cloudhelm-quiet-desktop-'));
@@ -37,6 +39,8 @@ try {
   await application.evaluate(({ app }) => app.emit('second-instance', {}, [], '', {}));
   const output = path.join(root, '.cache/quiet-desktop-smoke'); await mkdir(output, { recursive: true });
   await page.screenshot({ path: path.join(output, 'hidden-window.png'), timeout: 15_000 });
+  assert.deepEqual(await state(), expected);
+  await captureQuietDesktop(application, page, path.join(output, 'hidden-native-window.png'), { timeoutMs: 15_000 });
   assert.deepEqual(await state(), expected);
   await owner.close(); instances.delete(owner);
   console.log(JSON.stringify({ check: 'quiet-desktop-smoke', hidden: true, focusable: false, nativeWindowEvents: 0,

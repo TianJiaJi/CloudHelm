@@ -1,4 +1,5 @@
-import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation } from '@cloudhelm/core';
+import type { ExecutionOptions, HostRiskBinding, OperationExecutor, OperationResult, ProposedOperation } from '@cloudhelm/core';
+import { HostRiskDomains } from './host-risk-domains.js';
 
 /**
  * Serializes Agent writes across tasks sharing one target host.
@@ -21,11 +22,17 @@ import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOper
  */
 export class HostSerialExecutor implements OperationExecutor {
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly domains = new HostRiskDomains();
   /** Hold raw exit observations until authentication/decorators finish validating the result. */
   private readonly backgroundObservations = new Map<string, OperationResult | undefined>();
   private readonly unsettled = new Map<string, Map<string, Promise<'exited' | 'unknown'> | null>>();
 
   constructor(private readonly downstream: OperationExecutor) {}
+
+  bindRiskDomains(bindings: readonly HostRiskBinding[]): void {
+    this.domains.bind(bindings, (hostId) => this.tails.has(hostId)
+      || [...this.unsettled.get(hostId)?.values() ?? []].some((completion) => completion !== null));
+  }
 
   restore(operations: Array<{ id: string; hostId: string }>): void {
     for (const operation of operations) {
@@ -61,13 +68,17 @@ export class HostSerialExecutor implements OperationExecutor {
   }
 
   canControlOperation(hostId: string, operationId: string): boolean {
-    if (this.tails.has(hostId)) return false;
-    const pending = this.unsettled.get(hostId);
-    return !pending?.size || pending.size === 1 && !!pending.get(operationId);
+    const peers = [...this.domains.peers(hostId)];
+    if (peers.some((id) => this.tails.has(id))) return false;
+    const pending = peers.flatMap((id) => [...this.unsettled.get(id) ?? []].map(([operationId, completion]) => ({ hostId: id, operationId, completion })));
+    return !pending.length || pending.length === 1 && pending[0]!.hostId === hostId
+      && pending[0]!.operationId === operationId && !!pending[0]!.completion;
   }
 
   /** Observation only: manual scheduled maintenance must not collide with Agent work. */
-  hasPendingOrUnresolved(hostId: string): boolean { return this.tails.has(hostId) || this.unsettled.has(hostId); }
+  hasPendingOrUnresolved(hostId: string): boolean {
+    return [...this.domains.peers(hostId)].some((id) => this.tails.has(id) || this.unsettled.has(id));
+  }
 
   private track(hostId: string, operationId: string, completion: Promise<'exited' | 'unknown'> | null): void {
     const operations = this.unsettled.get(hostId) ?? new Map();
@@ -83,7 +94,8 @@ export class HostSerialExecutor implements OperationExecutor {
 
   async execute(operation: ProposedOperation, fingerprint: string, signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
     const hostId = operation.scope.hostId;
-    const previous = this.tails.get(hostId) ?? Promise.resolve();
+    const waits = [...this.domains.peers(hostId)].flatMap((id) => this.tails.has(id) ? [this.tails.get(id)!] : []);
+    const previous = waits.length > 1 ? Promise.all(waits).then(() => undefined) : waits[0] ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>((resolve) => { release = resolve; });
     const tail = previous.then(() => current);
@@ -111,8 +123,9 @@ export class HostSerialExecutor implements OperationExecutor {
       if (signal?.aborted || options?.isAuthorized?.() === false) {
         return { operationId: operation.id, status: 'failed', effects: 'none', stdoutTail: 'Authorization expired while waiting for the host write lock; no operation was sent' };
       }
-      if (this.unsettled.has(hostId) && !options?.readOnly) {
-        const blockedBy = [...this.unsettled.get(hostId)!.keys()].slice(0, 3).join(', ');
+      const unresolvedPeers = [...this.domains.peers(hostId)].filter((id) => this.unsettled.has(id));
+      if (unresolvedPeers.length && !options?.readOnly) {
+        const blockedBy = unresolvedPeers.flatMap((id) => [...this.unsettled.get(id)!.keys()]).slice(0, 3).join(', ');
         return { operationId: operation.id, status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation',
           stdoutTail: `Another command on this host has an unresolved remote outcome (${blockedBy}); verify it before further Agent writes` };
       }

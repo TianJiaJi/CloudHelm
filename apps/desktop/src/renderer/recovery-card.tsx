@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { operationNeedsVerification, operationOutcomeResolvable, type AppSnapshot, type OperationView, type TaskView } from '@cloudhelm/contracts';
+import { operationNeedsVerification, operationOutcomeResolvable, sharesHostRiskDomain, type AppSnapshot, type OperationView, type TaskView } from '@cloudhelm/contracts';
 import styles from './ui.module.css';
 
 const RISK_EXPLANATION = '用户在恢复卡明确知晓原远端操作结果未知且可能继续运行，自愿接管此项未决风险。';
 
-function RecoveryItem({ operation, snapshot, conversation, current, remaining, report }: {
-  operation: OperationView; snapshot: AppSnapshot; conversation: TaskView;
+function RecoveryItem({ operation, snapshot, conversation, current, remaining, hostId, report }: {
+  operation: OperationView; snapshot: AppSnapshot; conversation: TaskView; hostId: string;
   current?: OperationView; remaining: number; report(error: string): void;
 }): React.JSX.Element {
   const [dismissed, setDismissed] = useState(false);
@@ -38,9 +38,10 @@ function RecoveryItem({ operation, snapshot, conversation, current, remaining, r
     <strong>本次写入暂未发送 · 待处理 1 / {remaining} 项</strong>
     <p>待执行：<code>{current?.preview ?? '当前对话请求的远端变更'}</code></p>
     {request && <p>用途：{request.slice(0, 120)}</p>}
-    <p>风险：同一主机的{operation.taskId === conversation.id ? '当前' : '历史'}对话有操作结果未确认；直接继续写入可能与其影响冲突。此项确认不会证明旧操作成功，也不会自动执行本次命令。</p>
+    <p>风险：{operation.hostId === hostId ? '同一主机' : '同一风险域（含历史配置）'}的{operation.taskId === conversation.id ? '当前' : '历史'}对话有操作结果未确认；直接继续写入可能与其影响冲突。此项确认不会证明旧操作成功，也不会自动执行本次命令。</p>
     <details><summary>查看本次阻断项及原日志</summary>
       <p>阻断项 {operation.id}{source ? ` · 来源对话「${source.goal.slice(0, 80)}」` : ''}</p>
+      {operation.hostId !== hostId && <p>原配置：{snapshot.hosts?.find((item) => item.id === operation.hostId)?.label ?? operation.hostId}。风险关联不代表当前连接已核验原操作。</p>}
       <pre className={styles.command}>{operation.preview}</pre>
       {operation.outputTail && <pre className={styles.outputTail}>{operation.outputTail.slice(-1600)}</pre>}
       {resolvable && <button disabled={busy} onClick={() => void readLog()}>{log ? '继续读取脱敏日志' : '读取脱敏日志'}</button>}
@@ -64,8 +65,8 @@ export function RecoveryCard({ snapshot, hostId, conversation, report }: {
     && item.failureKind === 'unresolved-prior-operation').at(-1);
   if (!current && !snapshot.operations.some((item) => item.taskId === conversation.id && item.hostId === hostId
     && operationOutcomeResolvable(item))) return null;
-  const blockers = snapshot.operations.filter((item) => item.hostId === hostId && operationNeedsVerification(item));
+  const blockers = snapshot.operations.filter((item) => sharesHostRiskDomain(snapshot.hostRiskBindings, item.hostId, hostId) && operationNeedsVerification(item));
   if (!blockers.length) return null;
   return <RecoveryItem key={`${blockers[0]!.id}:${current?.id ?? ''}`} operation={blockers[0]!} snapshot={snapshot}
-    conversation={conversation} current={current} remaining={blockers.length} report={report} />;
+    conversation={conversation} current={current} remaining={blockers.length} hostId={hostId} report={report} />;
 }

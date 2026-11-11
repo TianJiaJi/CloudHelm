@@ -42,6 +42,7 @@ pnpm test:ai-panel
 pnpm test:desktop
 pnpm test:credentials
 pnpm test:reference-recovery
+pnpm test:host-risk
 pnpm test:reference-clipboard
 pnpm test:desktop:packaged
 ```
@@ -59,6 +60,10 @@ pnpm test:desktop:packaged
 - `desktop/renderer/execution-workspace.test.ts` 与 `smoke/check-execution-workspace.mjs`：队列两种选择及后端取消确认，独立状态、失败／未知不折叠、按操作分页、日志非重叠与隐藏暂停、后台输出／错误不抢焦点、停止请求不冒充退出。后者由 `pnpm test:ai-panel` 执行，全部为 renderer fixture，不证明真实进程已被停止。
 
 ## SSH 配置回归入口
+
+- `core/host-risk-domain.test.ts`、`application/host-risk-serialization.test.ts`：后端谱系派生风险域、跨修订串行/未决锁、排队授权失效、迟到结果与原操作归属；不凭地址或指纹合并。
+- `desktop/main/host-settings-risk-domain.test.ts`、`host-risk-restore.test.ts`：真实SQLite配置修订/重开、归档链和仅连接最新配置的Worker装配；SSH/执行是替身。`recovery-ipc.test.ts`与`renderer/recovery-card.test.ts`覆盖后端投影、人工接管及等待后复核；同风险域不能升级另一配置的核验证据。
+- `pnpm test:host-risk`：先重新 `pnpm build`；独立临时profile和隐藏不可聚焦Electron中，验证历史配置风险展示、拒绝不解除、单条人工接管后仍保留未知结果与其他未决项、重启持久化。正文与操作是合成记录，不证明真实SSH退出或业务核验；不自动重放、不启动Agent，loopback陷阱检查没有SSH连接。
 
 - `contracts/host-settings.test.ts`、`desktop/main/host-settings.test.ts`：静态类型、语义校验、凭据用途与事务回滚。
 - `adapters/ssh-proxy.test.ts`：实际 loopback HTTP(S)／SOCKS5 与 SSH，拒绝代理降级、错误证书及指纹；TLS 材料在内存生成，不读取个人证书／密钥。

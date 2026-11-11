@@ -1,6 +1,10 @@
 import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, ReviewSelection, ResumeReason, TaskStatus, TaskView } from './index.js';
 
-export interface RuntimeHost extends HostView { secret?: string; credentials?: import('./host-settings.js').HostCredentials }
+export interface RuntimeHost extends HostView {
+  /** Main-derived from durable lineage; not a renderer field or execution permission. */
+  riskDomainId?: string;
+  secret?: string; credentials?: import('./host-settings.js').HostCredentials
+}
 /** Compatibility mapping is purpose-bound; a key passphrase is never a login password. */
 export function runtimeSshCredentials(host: RuntimeHost): import('./host-settings.js').HostCredentials {
   return host.credentials ?? (host.auth === 'password' ? { password: host.secret } : host.auth === 'private-key' ? { passphrase: host.secret } : {});
@@ -21,7 +25,7 @@ export type RuntimeCall =
   | { method: 'set-conversation-thinking'; taskId: string; level: import('./index.js').ThinkingLevel }
   | { method: 'answer-clarification'; taskId: string; requestId: string; answers: ClarificationAnswer[] }
   | { method: 'cancel-clarification'; taskId: string; requestId: string }
-  | { method: 'restore-operations'; operations: Array<{ id: string; hostId: string }> }
+  | { method: 'restore-operations'; operations: Array<{ id: string; hostId: string }>; riskBindings?: Array<{ hostId: string; riskDomainId: string }> }
   | { method: 'prepare-operation-risk'; operationId: string; hostId: string }
   | { method: 'commit-operation-risk'; operation: OperationView }
   | { method: 'connect'; host: RuntimeHost; jump?: RuntimeHost }

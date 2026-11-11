@@ -253,7 +253,7 @@ void app.whenReady().then(async () => {
   // Reclassify only provably read-only completed legacy commands before the
   // worker restores host locks. Ambiguous commands remain blocked.
   await state.normalizeHistoricalQueries(new BashAnalyzer());
-  await runtime.call({ method: 'restore-operations', operations: state.snapshot().operations
+  await runtime.call({ method: 'restore-operations', riskBindings: state.hostRiskBindings(), operations: state.snapshot().operations
     .filter(operationNeedsVerification).map(({ id, hostId }) => ({ id, hostId })) });
   registerIpc();
   registerRecoveryIpc(state, runtime);

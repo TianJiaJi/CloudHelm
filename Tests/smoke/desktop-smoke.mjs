@@ -9,6 +9,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { quietElectron as electron } from './quiet-electron.mjs';
+import { captureQuietDesktop } from './quiet-screenshot.mjs';
 import { checkPrivateKeyPicker } from './private-key-picker-probe.mjs';
 import { checkHostConnectionTest } from './host-connection-probe.mjs';
 import { DesktopProcess, cleanupDesktopSmoke, withTimeout } from './desktop-process.mjs';
@@ -154,7 +155,7 @@ try {
   assert.equal(databaseBytes.subarray(0, 16).toString(), 'SQLite format 3\0');
   assert.deepEqual(rendererErrors, []);
   assert.doesNotMatch(stderr, /CloudHelm startup failed|NODE_MODULE_VERSION|Cannot find module|ERR_MODULE_NOT_FOUND/u);
-  await page.screenshot({ path: path.join(output, 'window.png'), fullPage: true });
+  await captureQuietDesktop(application, page, path.join(output, 'window.png'));
   // before-quit can repeat or be canceled by window handlers. SQLite must remain open until will-quit.
   await application.evaluate(({ app }) => {
     app.emit('before-quit', { preventDefault() {} });
@@ -167,7 +168,7 @@ try {
   // Print the original failure before diagnostics or cleanup can fail themselves.
   console.error(error);
   process.exitCode = 1;
-  if (page && !page.isClosed()) await withTimeout(() => page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, timeout: 5_000 }), 6_000, 'Failure screenshot').catch(() => {});
+  if (page && !page.isClosed()) await withTimeout(() => captureQuietDesktop(application, page, path.join(output, 'failure.png'), { timeoutMs: 5_000 }), 6_000, 'Failure screenshot').catch(() => {});
   if (stderr) console.error(stderr.slice(-8000));
   await writeFile(path.join(output, 'failure.log'), `${error instanceof Error ? error.stack : String(error)}\n${stderr}`)
     .catch((failure) => console.warn('Could not write smoke failure log', failure));

@@ -2,7 +2,7 @@ import { MessagePreparations } from './message-preparations.js';
 import { ShellMarkerParser } from '@cloudhelm/adapters';
 import { createTerminalCodec } from '@cloudhelm/adapters';
 import { PrivilegedRuntime } from './privileged-runtime.js';
-import { safeDiagnostic } from '@cloudhelm/core';
+import { resolveHostRiskDomain, safeDiagnostic } from '@cloudhelm/core';
 import { eventDiagnostic, reservationDiagnostic } from './diagnostic-events.js';
 import { HostEnvironmentRegistry, HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
@@ -123,7 +123,9 @@ export class WorkerServer {
     switch (call.method) {
       case 'cancel-message': this.preparations.cancel(call.requestId); return;
       case 'prepare-message': return this.preparations.prepare(call, call.taskId ? this.tasks.get(call.taskId) : undefined);
-      case 'restore-operations': return this.executor.restore(call.operations);
+      case 'restore-operations':
+        this.executor.bindRiskDomains(call.riskBindings ?? []);
+        return this.executor.restore(call.operations);
       case 'prepare-operation-risk':
         for (const runner of this.tasks.values()) runner.assertResolvableOutcome(call.operationId);
         if (!this.executor.canReconcile(call.hostId, call.operationId)) {
@@ -224,6 +226,7 @@ export class WorkerServer {
       case 'resize': return this.terminal.resize(call.terminalId, call.cols, call.rows);
       case 'list-remote': return this.ssh.list(call.hostId, call.path);
       case 'start-task': {
+        this.bindHostRiskDomains(call.hosts);
         if (!call.task.session || call.task.session.id !== call.task.id || !call.sessionDirectory) throw new Error('Native session binding required');
         if (!call.restored) this.send({ diagnostic: safeDiagnostic({ event: 'chat', level: 'info', taskId: call.task.id, role: 'user', size: Buffer.byteLength(call.task.goal) }) });
         if (this.tasks.has(call.task.id)) throw new Error('Task is already active');
@@ -270,6 +273,7 @@ export class WorkerServer {
       case 'authorize-task': {
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('Task runtime is unavailable; resume it before changing authorization');
+        this.bindHostRiskDomains(call.hosts);
         runner.addAuthorization(call.hosts, call.localScopes, call.prepared);
         return;
       }
@@ -371,8 +375,15 @@ export class WorkerServer {
     });
   }
 
+  private bindHostRiskDomains(hosts: RuntimeHost[]): void {
+    const known = new Map([...this.hosts, ...hosts.map((host) => [host.id, host] as const)]);
+    this.executor.bindRiskDomains(hosts.map((host) => ({ hostId: host.id,
+      riskDomainId: host.riskDomainId ?? resolveHostRiskDomain(host, (id) => known.get(id)) })));
+  }
+
   private async connect(host: RuntimeHost, jump?: RuntimeHost): Promise<void> {
     if (this.connectionAttempts.has(host.id)) throw new Error('SSH connection is already in progress');
+    this.bindHostRiskDomains(jump ? [jump, host] : [host]);
     const connectionId = randomUUID(), controller = new AbortController();
     this.connectionAttempts.set(host.id, controller);
     this.hosts.set(host.id, host);
