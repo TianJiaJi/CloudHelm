@@ -94,7 +94,8 @@ export class TaskRunner {
     private readonly storage?: SessionStorage,
     private readonly scripts?: ScriptInspector,
     private readonly environment?: HostEnvironmentAccess,
-    priorInputs: readonly ConversationInput[] = []
+    priorInputs: readonly ConversationInput[] = [],
+    private readonly readRemoteFile?: (hostId: string, path: string, cwd: string | undefined, signal?: AbortSignal) => Promise<import('./remote-tool-dependencies.js').RemoteFileSnapshot>
   ) {
     const unobservedConnection = randomUUID();
     this.terminalPool = new ConversationTerminalPool(task.id, terminal, openTerminal, (hostId) => {
@@ -159,6 +160,9 @@ export class TaskRunner {
         try { return await this.privileged.request(host, command, cwd, reason, this.intent.goal(), gate, signal, this.intent.snapshot(), method); }
         catch (error) { this.blockRemote(error instanceof PrivilegeError ? privilegeGuidance(error.feedback) : '提权上下文未建立；直接su通常需要root密码而非sudo密码。请处理后点击继续AI或明确发送下一步指令。', false, 'interrupted'); throw error; }
       }, scope: (host, id, cwd) => this.scope(host, id, cwd),
+      readRemoteFile: this.readRemoteFile
+        ? (hostId, filePath, cwd, signal) => { this.assertRemoteActive(); return this.readRemoteFile!(hostId, filePath, cwd, signal); }
+        : undefined,
       runOperation: (gate, operation, signal, label) => this.runOperation(gate, operation, signal, label) }, gate);
     const currentSystemPrompt = createTaskPrompt(this.task, this.hosts, () => this.operationViews(), () => this.verificationOperations(), this.privileged, () => this.journal.hasReport(), () => this.intent.snapshot(), () => this.journal.submissionClosed(), this.environment);
     this.agent = await createConversationSession({

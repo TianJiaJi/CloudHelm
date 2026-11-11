@@ -44,16 +44,45 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
         return deps.background(signal, execute);
       }
     };
-    const writeParameters = Type.Object({ hostId: Type.String(), path: Type.String(), content: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) });
+    const readParameters = Type.Object({ hostId: Type.String(), path: Type.String(), cwd: Type.Optional(Type.String()),
+      maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1048576 })) });
+    const readTool: BusinessTool<Static<typeof readParameters>> = {
+      access: 'query', deferred: true, available: () => !!deps.readRemoteFile,
+      name: 'read_remote_file', label: 'Read a bounded remote file for editing',
+      description: 'Read one regular remote file over SFTP, at most 1 MiB (default 128 KiB). Returns content plus sha256 only when the whole file was read; a truncated or oversized file returns no hash, so it can never authorize a full overwrite. Symlinks/directories are refused. Reading never elevates privileges.',
+      parameters: readParameters, replay: 'never',
+      execute: async (_id, params, signal) => {
+        const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
+        if (!host) return outOfScope();
+        if (!deps.readRemoteFile) return { content: [{ type: 'text' as const, text: 'Remote file reading is unavailable' }], details: undefined, isError: true };
+        try {
+          const snapshot = await deps.readRemoteFile(host.id, params.path, params.cwd, signal);
+          const details = { path: params.path, bytes: snapshot.bytes, truncated: snapshot.truncated,
+            sha256: snapshot.sha256 ?? null, mode: (snapshot.mode & 0o7777).toString(8), uid: snapshot.uid, gid: snapshot.gid };
+          return { content: [{ type: 'text' as const, text: `[Remote file ${JSON.stringify(details)}]
+${snapshot.content}` }],
+            details, structuredContent: { ...details, content: snapshot.content } };
+        } catch (error) {
+          return { content: [{ type: 'text' as const, text: `Remote read failed: ${error instanceof Error ? error.message : String(error)}` }],
+            details: undefined, isError: true };
+        }
+      }
+    };
+    const writeParameters = Type.Object({ hostId: Type.String(), path: Type.String(), content: Type.String(), cwd: Type.Optional(Type.String()),
+      sessionId: Type.Optional(Type.String()),
+      expectedSha256: Type.Optional(Type.String({ minLength: 64, maxLength: 64 })),
+      createOnly: Type.Optional(Type.Boolean()) });
     const writeTool: BusinessTool<Static<typeof writeParameters>> = {
       name: 'write_remote_file', label: 'Write an audited remote file',
-      description: 'Write a UTF-8 file over SFTP on an authorized host. Existing regular files receive a private recovery copy. Maximum 1 MiB. Parent directory must exist. sessionId may select a root SSH session; sudo/su contexts do not elevate SFTP.',
+      description: 'Write a UTF-8 file over SFTP on an authorized host. Maximum 1 MiB. Parent directory must exist. Replacing an existing regular file requires expectedSha256 from read_remote_file (compare-and-swap): a truncated read has no hash, so re-read the whole file first; a mismatch aborts without writing. Use createOnly=true to require that the target does not exist. The result reports a read-back hash; the recovery copy restores only this file, not the service state. sessionId may select a root SSH session; sudo/su contexts do not elevate SFTP.',
       parameters: writeParameters, replay: 'never',
       execute: async (_id, params, signal) => {
         const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
         if (!host) return outOfScope();
         const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
         return deps.runOperation(gate, { id: randomUUID(), kind: 'write-file', path: params.path, content: params.content,
+          ...(params.expectedSha256 ? { expectedSha256: params.expectedSha256 } : {}),
+          ...(params.createOnly ? { createOnly: true } : {}),
           scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
       }
     };
@@ -124,5 +153,5 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       }
     }
   };
-  return [createServiceTool(deps, gate), rootTool, tool, writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+  return [createServiceTool(deps, gate), rootTool, tool, readTool, writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
 }

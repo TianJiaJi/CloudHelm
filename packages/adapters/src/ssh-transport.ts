@@ -30,6 +30,11 @@ export class RemoteFileError extends Error {
   }
 }
 
+/** A read-back snapshot. sha256 is present only for a complete read. */
+export interface ReadFileSnapshot {
+  content: string; bytes: number; truncated: boolean; sha256?: string; mode: number; uid: number; gid: number;
+}
+
 export interface SshHost {
   id: string;
   label: string;
@@ -301,8 +306,31 @@ export class SshTransport {
     }, signal);
   }
 
+  /** Bounded, auditable content read for the edit loop.
+   * The hash is only returned for a complete regular-file read: a truncated excerpt
+   * must never become a token that authorizes replacing the whole file. */
+  async readFileForEdit(hostId: string, absolutePath: string, maxBytes: number, signal?: AbortSignal): Promise<ReadFileSnapshot> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1_048_576) throw new Error('Invalid remote read limit');
+    return this.withSftp(hostId, async (sftp, assertActive) => {
+      const check = () => assertActive();
+      check();
+      await this.checkSafeParent(sftp, absolutePath);
+      const entry = await this.lstatOptional(sftp, absolutePath);
+      if (!entry) throw new Error('Remote file does not exist');
+      if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('Only a regular file can be read for editing');
+      const truncated = entry.size > maxBytes;
+      if (truncated) return { content: '', bytes: entry.size, truncated: true, sha256: undefined,
+        mode: entry.mode, uid: entry.uid, gid: entry.gid };
+      const content = await readBoundedSftpFile(sftp, absolutePath, maxBytes, check);
+      check();
+      return { content: content.toString('utf8'), bytes: content.length, truncated: false,
+        sha256: createHash('sha256').update(content).digest('hex'), mode: entry.mode, uid: entry.uid, gid: entry.gid };
+    }, signal);
+  }
+
   /** Writes through a private temporary file and retains a private backup of an overwritten file. */
-  async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAuthorized: () => void = () => {}, signal?: AbortSignal): Promise<string | undefined> {
+async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAuthorized: () => void = () => {}, signal?: AbortSignal,
+    options: { preserveSpecialMode?: boolean } = {}): Promise<{ backup?: string; modeDropped?: string } | undefined> {
     if (content.length > 1_048_576) throw new Error('Structured writes are limited to 1 MiB');
     let effects: 'none' | 'possible' = 'none';
     try { return await this.withSftp(hostId, async (sftp, assertActive) => {
@@ -319,15 +347,19 @@ export class SshTransport {
         await this.writeSftpFile(sftp, backup, original, 0o600, check);
       }
       const temporary = `${absolutePath}.cloudhelm-new-${randomUUID()}`;
+      // setuid/setgid are not silently preserved: a reviewed content change must not keep
+      // privileges the service relied on for the previous binary. Sticky/rwx are kept.
+      const special = existing ? existing.mode & 0o6000 : 0;
+      const mode = existing ? (options.preserveSpecialMode ? existing.mode : existing.mode & ~0o6000) : 0o600;
       try {
         check(); effects = 'possible';
-        await this.writeSftpFile(sftp, temporary, content, existing ? existing.mode : 0o600, check);
+        await this.writeSftpFile(sftp, temporary, content, mode, check);
         if (existing) {
-          // Preserve owner/group and full mode including setuid/setgid/sticky. SFTP rename
-          // does not carry ACL/xattr; document that limitation rather than silently dropping.
+          // Preserve owner/group and the reviewed mode. SFTP rename does not carry
+          // ACL/xattr; document that limitation rather than silently dropping it.
           await new Promise<void>((resolve, reject) => {
             check();
-            sftp.setstat(temporary, { uid: existing.uid, gid: existing.gid, mode: existing.mode },
+            sftp.setstat(temporary, { uid: existing.uid, gid: existing.gid, mode },
               (error) => error ? reject(error) : resolve());
           });
         }
@@ -339,7 +371,7 @@ export class SshTransport {
         await this.unlinkOptional(sftp, temporary, check).catch(() => undefined);
         throw error;
       }
-      return backup;
+      return { backup, ...(special && !options.preserveSpecialMode ? { modeDropped: `0${special.toString(8)}` } : {}) };
     }, signal); } catch (error) {
       throw new RemoteFileError(effects, !!error && typeof error === 'object' && 'code' in error && (error.code === 3 || error.code === 'EACCES' || error.code === 'EPERM'), error instanceof Error ? error.message : undefined);
     }

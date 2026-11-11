@@ -13,9 +13,11 @@ function fixture() {
   const scope = { taskId: 'task', hostId: 'host', cwd: '/srv/app', runAs: 'deploy', terminalId: id, terminalGeneration: 1,
     policyRevision: 1, allowedWorkingRoots: ['/srv/app'], protectedPaths: [], goal: 'Deploy' };
   const writeFile = vi.fn(); const deleteFile = vi.fn();
-  const ssh = { writeFile, deleteFile, connectionGeneration: () => 1 } as unknown as SshTransport;
+  const ssh = { writeFile, deleteFile, connectionGeneration: () => 1,
+    // Default: the target does not exist yet, so a plain create/write proceeds.
+    readFileForEdit: vi.fn(async () => { throw new Error('Remote file does not exist'); }) } as unknown as SshTransport;
   const commands = { execute: vi.fn() };
-  return { terminal, id, scope, writeFile, deleteFile, commands, executor: new FileOperationExecutor(terminal, ssh, commands) };
+  return { terminal, id, scope, writeFile, deleteFile, ssh, commands, executor: new FileOperationExecutor(terminal, ssh, commands) };
 }
 
 describe('structured operation authorization continuity', () => {
@@ -75,5 +77,71 @@ describe('structured operation authorization continuity', () => {
     const operation: ProposedOperation = { id: 'read', kind: 'command', command: 'cat /srv/app/file', scope: f.scope };
     await f.executor.execute(operation, operationFingerprint(operation), undefined, options);
     expect(f.commands.execute).toHaveBeenCalledWith(operation, operationFingerprint(operation), undefined, options);
+  });
+});
+
+describe('conditional write and read-back verification', () => {
+  const writeOp = (fields: Partial<Extract<ProposedOperation, { kind: 'write-file' }>> = {}): ProposedOperation => ({
+    id: 'write', kind: 'write-file', path: '/srv/app/file', content: 'next\n', ...fields, scope: fixture().scope });
+
+  it('refuses to replace an existing file without the hash the review was based on', async () => {
+    const f = fixture();
+    const operation = { ...writeOp(), scope: f.scope } as ProposedOperation;
+    f.ssh.readFileForEdit = vi.fn(async () => ({ content: 'current\n', bytes: 8, truncated: false,
+      sha256: 'a'.repeat(64), mode: 0o644, uid: 1, gid: 1 }));
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
+    expect(result.stdoutTail).toContain('no expected hash');
+    expect(f.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('aborts without writing when the remote file changed since it was read', async () => {
+    const f = fixture();
+    const operation = { ...writeOp({ expectedSha256: 'b'.repeat(64) }), scope: f.scope } as ProposedOperation;
+    f.ssh.readFileForEdit = vi.fn(async () => ({ content: 'current\n', bytes: 8, truncated: false,
+      sha256: 'c'.repeat(64), mode: 0o644, uid: 1, gid: 1 }));
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
+    expect(result.stdoutTail).toContain('changed since it was read');
+    expect(f.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('writes with the expected hash and verifies the result by reading it back', async () => {
+    const f = fixture();
+    const intended = Buffer.from('next\n');
+    const hash = createHash('sha256').update(intended).digest('hex');
+    const operation = { ...writeOp({ expectedSha256: hash }), scope: f.scope } as ProposedOperation;
+    f.ssh.readFileForEdit = vi.fn()
+      .mockResolvedValueOnce({ content: 'current\n', bytes: 8, truncated: false, sha256: hash, mode: 0o640, uid: 1, gid: 1 })
+      .mockResolvedValueOnce({ content: 'next\n', bytes: intended.length, truncated: false, sha256: hash, mode: 0o640, uid: 1, gid: 1 });
+    f.writeFile.mockResolvedValue({ backup: '/srv/app/file.cloudhelm-backup-x' });
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result.status).toBe('succeeded');
+    expect(f.writeFile).toHaveBeenCalledOnce();
+    expect(result.stdoutTail).toContain('Verified read-back hash');
+    // A recovery copy restores this file only; it is never described as a rollback.
+    expect(result.stdoutTail).toContain('restores this file only');
+  });
+
+  it('reports an unverified write instead of claiming success when the read-back differs', async () => {
+    const f = fixture();
+    const hash = createHash('sha256').update('next\n').digest('hex');
+    const operation = { ...writeOp({ expectedSha256: hash }), scope: f.scope } as ProposedOperation;
+    f.ssh.readFileForEdit = vi.fn()
+      .mockResolvedValueOnce({ content: 'current\n', bytes: 8, truncated: false, sha256: hash, mode: 0o644, uid: 1, gid: 1 })
+      .mockRejectedValueOnce(new Error('Remote file does not exist'));
+    f.writeFile.mockResolvedValue({ backup: undefined });
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result.stdoutTail).toContain('final content is unconfirmed');
+  });
+
+  it('honours createOnly without overwriting an existing file', async () => {
+    const f = fixture();
+    const operation = { ...writeOp({ createOnly: true }), scope: f.scope } as ProposedOperation;
+    f.ssh.readFileForEdit = vi.fn(async () => ({ content: 'current\n', bytes: 8, truncated: false,
+      sha256: 'd'.repeat(64), mode: 0o644, uid: 1, gid: 1 }));
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result.stdoutTail).toContain('already exists');
+    expect(f.writeFile).not.toHaveBeenCalled();
   });
 });

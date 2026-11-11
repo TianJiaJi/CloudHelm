@@ -40,7 +40,12 @@ export type ProposedOperation =
       /** Operation-level root request, normalized before review; never an approval. */
       privilege?: 'root';
       outputExpectation?: { expectedOutput: string; expectedExitCode?: number }; scope: OperationScope }
-  | { id: string; kind: 'write-file'; path: string; content: string; scope: OperationScope }
+  | { id: string; kind: 'write-file'; path: string; content: string; scope: OperationScope;
+      /** Compare-and-swap: the exact content hash the review was based on. Required when
+       * replacing an existing file, so a truncated excerpt cannot become a full overwrite. */
+      expectedSha256?: string;
+      /** Only valid when the target must not exist yet. */
+      createOnly?: boolean }
   | { id: string; kind: 'upload'; localPath: string; remotePath: string; localRoot: string; contentSha256: string; size: number; scope: OperationScope }
   | { id: string; kind: 'delete-path'; path: string; scope: OperationScope };
 

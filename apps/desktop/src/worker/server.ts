@@ -11,6 +11,9 @@ import path from 'node:path';
 import type { RawTerminal } from '@cloudhelm/core';
 import type { ApprovalView, InputRequestView } from '@cloudhelm/contracts';
 import type { LogPage, RuntimeCall, RuntimeHost, RuntimeMessage } from '@cloudhelm/contracts/runtime';
+/** Bounded read for the model's edit loop; reading more than this requires a narrower ask. */
+const REMOTE_READ_LIMIT = 128 * 1024;
+import { assertRemoteReadAllowed, resolveRemoteReadTarget } from './remote-read-guard.js';
 import { TaskRunner } from './task-runner.js';
 import { assertCommittedRiskAcceptance } from './risk-acceptance.js';
 import { OperationInputBridge } from './operation-input-bridge.js';
@@ -258,7 +261,14 @@ export class WorkerServer {
                 path.posix.resolve(operation.scope.cwd, scriptPath));
               return inspected.sha256 === sha256;
             }
-          }, this.environment, call.priorInputs);
+          }, this.environment, call.priorInputs, (hostId, filePath, cwd, signal) => {
+            const host = call.hosts.find((candidate) => candidate.id === hostId);
+            if (!host) throw new Error('Host is outside this conversation');
+            // Reads never bypass a user protection rule or the credential boundary.
+            const target = resolveRemoteReadTarget(filePath, cwd);
+            assertRemoteReadAllowed(target, host.protectedReadPaths ?? host.protectedPaths);
+            return this.ssh.readFileForEdit(hostId, target, REMOTE_READ_LIMIT, signal);
+          });
         this.tasks.set(call.task.id, runner);
         const start = runner.start(call.restored, call.thinkingLevel, call.document, call.initialMessage, call.intent);
         if (call.restored) {

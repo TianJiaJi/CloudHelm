@@ -160,7 +160,7 @@ it('retains possible effects when staging already began before failure', async (
   await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({ effects: 'possible', permissionDenied: true });
 });
 
-it('preserves owner/group and full mode including setuid bits during atomic replace', async () => {
+it('preserves owner/group and the reviewed mode, dropping setuid/setgid unless explicitly kept', async () => {
   const calls = sftpFixture(true, () => {});
   const originalMode = 0o4764;
   calls.setstat.mockClear();
@@ -173,13 +173,21 @@ it('preserves owner/group and full mode including setuid bits during atomic repl
     }
   };
   const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
-  await ssh.writeFile('host', '/srv/app/file', Buffer.from('new'));
+  // Default policy: a content change must not inherit the previous binary's privileges.
+  const replaced = await ssh.writeFile('host', '/srv/app/file', Buffer.from('new'));
   expect(calls.setstat).toHaveBeenCalledOnce();
   const [setstatPath, setstatAttrs] = calls.setstat.mock.calls[0]!;
   expect(setstatPath).toContain('.cloudhelm-new-');
-  expect(setstatAttrs).toEqual({ uid: 2003, gid: 2004, mode: originalMode });
+  expect(setstatAttrs).toEqual({ uid: 2003, gid: 2004, mode: originalMode & ~0o6000 });
+  expect(replaced?.modeDropped).toBe('04000'); // only the setuid bit was present
   expect(calls.rename).toHaveBeenCalledOnce();
   expect(calls.setstat.mock.invocationCallOrder[0]!).toBeLessThan(calls.rename.mock.invocationCallOrder[0]!);
+  // Explicit opt-in keeps them, and the caller can then say so.
+  calls.setstat.mockClear();
+  const kept = await ssh.writeFile('host', '/srv/app/file', Buffer.from('next'), () => {}, undefined,
+    { preserveSpecialMode: true });
+  expect(calls.setstat.mock.calls[0]![1]).toEqual({ uid: 2003, gid: 2004, mode: originalMode });
+  expect(kept?.modeDropped).toBeUndefined();
 });
 
 it('caches only successful Python preflight per SSH connection generation', async () => {
