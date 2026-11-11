@@ -49,7 +49,11 @@ CloudHelm 是一个带 AI 助手的桌面 SSH 客户端，面向个人开发者�
 
 产物保留 7 天。当提交更新根目录 `version.json` 的版本号并推送到 `dev` 分支（开发仓库主线；总仓库的默认分支同理）时，CI 会自动把三平台安装包发布到 [GitHub Releases](https://github.com/TianJiaJi/CloudHelm/releases)（标记为预发布；说明正文取自 [CHANGELOG.md](CHANGELOG.md) 对应版本的更新日志，末尾附加自动提交清单，缺条目时回退为纯自动生成）；未更新版本号的提交只构建、不发布。发布失败或中断需要补发时，可在 Actions 手动运行 CI 并勾选 `force_publish`，为标签尚未创建的当前版本补建预发行。安装包当前未签名／公证。CI 构建成功不等于安装和所有交互流程已完成人工验收。
 
-修改版本号只需编辑根目录 `version.json` 并提交：`pnpm install` 会启用 pre-commit 钩子（`.githooks/pre-commit`），提交时自动把版本同步进各包 `package.json` 与 README 说明并一并暂存；也可手动运行 `pnpm version:set`。`pnpm version:check` 在 CI 中兜底校验一致性。更新版本号后请在 [CHANGELOG.md](CHANGELOG.md) 补写该版本的更新内容（上一版本到本版本之间的全部更新）；忘了写不拦截，提交升版时钩子会自动补一条「修复了一些已知问题」默认条目，之后可继续润色。
+修改版本号只需编辑根目录 `version.json` 并暂存：`pnpm install` 会启用 pre-commit 钩子（`.githooks/pre-commit`）。升版时钩子仅以**暂存内容**生成各包版本、README版本说明和缺失的默认更新日志，不从工作区整体 `git add`。普通提交只检查、不修改暂存区；工作区与暂存区选定的版本不同会阻止提交。
+
+无未暂存改动的工作文件会同步更新；混合改动、编辑期间发生变化或无法安全写回的文件保留原样并提示。如果本地版本仍旧，可显式运行 `pnpm version:set` 同步版本字段，再检查差异并只暂存需要的部分；更新日志须自行合并，不能为通过检查而整体暂存私有草稿。索引补丁成批应用，但不把Git索引与工作区写回伪装成一个事务，也不保证消除所有外部编辑器竞态。
+
+`pnpm version:check` 在 CI 中兜底校验一致性。升版时请把 [CHANGELOG.md](CHANGELOG.md) 对应版本的更新内容一并暂存；若暂存日志缺条目，钩子会在暂存区补一条「修复了一些已知问题」，不会将未选择的工作区日志草稿带入提交。
 
 从源码启动需要 Node.js 24、pnpm 11.9.0，以及本平台原生模块构建工具：
 

@@ -51,6 +51,17 @@ describe('version file synchronisation', () => {
     expect(findInconsistencies('0.2.0', good, undefined)).toEqual([]);
   });
 
+  it('does not touch formatting or nested versions when the root version already matches', () => {
+    const text = '{"nested":{"version":"0.1.0"},"version":"0.2.0"}\n';
+    expect(packageWithVersion(text, '0.2.0')).toBe(text);
+  });
+
+  it('compares complete README versions and replaces build metadata instead of appending to it', () => {
+    expect(findInconsistencies('0.2.4', new Map(), '当前版本为 **0.2.40，开发中**')).not.toEqual([]);
+    expect(readmeWithVersion('当前版本为 **0.2.4+old，开发中**', '0.3.0+new')).toBe('当前版本为 **0.3.0+new，开发中**');
+    expect(findInconsistencies('0.2.4+new', new Map(), '当前版本为 **0.2.4+old，开发中**')).not.toEqual([]);
+  });
+
   it('builds the full synchronised file set', () => {
     const files = buildSyncedFiles('0.3.0', new Map([['package.json', packageText('0.1.0')]]), '当前版本为 **0.1.0，开发中**');
     expect([...files.keys()]).toEqual(['package.json', 'README.md']);

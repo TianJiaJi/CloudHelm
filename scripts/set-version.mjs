@@ -22,7 +22,7 @@ export const PACKAGE_FILES = [
   'packages/core/package.json',
   'Tests/package.json'
 ];
-const README_VERSION = /当前版本为 \*\*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/u;
+const README_VERSION = /当前版本为 \*\*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/u;
 
 export function normalizeVersion(value) {
   const version = String(value ?? '').trim();
@@ -39,6 +39,7 @@ export function parseVersionFile(text) {
 export function packageWithVersion(text, version) {
   const parsed = JSON.parse(text);
   if (typeof parsed.version !== 'string') throw new Error('package.json 缺少 version 字段');
+  if (parsed.version === version) return text;
   // Surgical replacement keeps the original formatting of every other field;
   // the re-parse below proves the right field was rewritten.
   const updated = text.replace(/"version"\s*:\s*"[^"]*"/u, `"version": "${version}"`);
@@ -59,7 +60,7 @@ export function findInconsistencies(version, packageTexts, readmeText) {
   }
   if (readmeText !== undefined) {
     if (!README_VERSION.test(readmeText)) problems.push('README.md 未找到版本说明文字');
-    else if (!readmeText.includes(`当前版本为 **${version}`)) problems.push(`README.md 的版本说明不是 ${version}`);
+    else if (README_VERSION.exec(readmeText)[1] !== version) problems.push(`README.md 的版本说明不是 ${version}`);
   }
   return problems;
 }

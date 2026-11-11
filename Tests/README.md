@@ -90,6 +90,8 @@ pnpm test:desktop:packaged
 - `desktop/main/conversation-thinking.test.ts`：离线偏好持久化、故障回滚、用户选择与运行时观测隔离、恢复时应用及避免重复同步；`structured-preparation-integration.test.ts`保留控制变更在预算确认前撤权的真实Pi/本地模型断言。
 - `pnpm test:thinking`：先 `pnpm build`；在全新临时数据中使用真实思考菜单，验证凭据不可用时保存、零凭据访问、零loopback SSH连接、不创建Agent会话及重启保留。使用无效合成密文，不调用付费API。
 
+- `scripts/pre-commit-index-isolation.test.mjs`、`version-hook-commit.test.mjs`：独立临时Git库验证普通/升版/部分提交、未选择草稿隔离、并发冲突、索引锁、换行/文件模式与错误脱敏；清除继承的Git重定向变量并使用独立空配置，不访问操作者的索引或全局Git配置。
+
 ## 证据边界
 
 - 默认测试使用假模型、假认证与临时本地服务，不连接用户主机。真实 OS SSH／PTY 集成必须显式 opt-in，且仅使用独立 loopback 测试服务；默认集合中的原生 SSH 协议 fixture 不证明 OS 登录、PAM 或权限切换。
