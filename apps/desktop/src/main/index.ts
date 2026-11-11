@@ -1,4 +1,5 @@
 import { ReferenceStore } from './reference-store.js';
+import { acquireProfileLock } from './profile-instance.js';
 import { resumeConversationCleanup } from './conversation-cleanup.js';
 import { DiagnosticLogger, diagnosticSettings } from './diagnostic-logger.js';
 import { join } from 'node:path';
@@ -20,6 +21,13 @@ import { AppShutdown } from './app-shutdown.js';
 if (process.env.CLOUDHELM_USER_DATA) app.setPath('userData', process.env.CLOUDHELM_USER_DATA);
 
 let window: BrowserWindow | null = null;
+let windowsReady = false;
+const ownsProfile = acquireProfileLock(app, () => {
+  if (!windowsReady || shutdown.isClosed) return;
+  if (!window || window.isDestroyed()) createWindow();
+  if (window?.isMinimized()) window.restore();
+  window?.focus();
+});
 let store: SqliteStore;
 let state: AppState;
 let runtime: RuntimeBridge;
@@ -213,11 +221,13 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(async () => {
+  if (!ownsProfile || shutdown.isClosed) return;
   // Windows keeps no application menu. macOS keeps the system app and edit
   // menus minus accelerators that conflict with workspace shortcuts.
   if (process.platform === 'darwin') Menu.setApplicationMenu(macApplicationMenu());
   else Menu.setApplicationMenu(null);
   store = new SqliteStore(join(app.getPath('userData'), 'cloudhelm.sqlite'));
+  store.beginReferenceSession(randomUUID());
   state = new AppState(store, publish);
   references = new ReferenceStore(store, state);
   const diagnostics = new DiagnosticLogger(diagnosticSettings(!!process.env.ELECTRON_RENDERER_URL, process.env, app.getPath('userData')));
@@ -238,6 +248,7 @@ void app.whenReady().then(async () => {
     .filter(operationNeedsVerification).map(({ id, hostId }) => ({ id, hostId })) });
   registerIpc();
   registerRecoveryIpc(state, runtime);
+  windowsReady = true;
   createWindow();
   void resumeConversationCleanup(store, join(app.getPath('userData'), 'pi-sessions')).then((pending) => {
     if (pending) console.warn(`CloudHelm: ${pending} local conversation cleanup(s) remain pending`);

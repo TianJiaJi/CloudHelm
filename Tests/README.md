@@ -41,6 +41,7 @@ pnpm test:markdown
 pnpm test:ai-panel
 pnpm test:desktop
 pnpm test:credentials
+pnpm test:reference-recovery
 pnpm test:desktop:packaged
 ```
 
@@ -78,6 +79,8 @@ pnpm test:desktop:packaged
 - `desktop/worker/task-runner-verification-*.test.ts`：自然结束、旧提交工具不可用、历史缺报告不自动恢复；`desktop/renderer/result-summary.test.ts` 与 UI 冒烟覆盖折叠证据和始终可见的真实失败。
 
 ## 修复专项回归入口
+
+- `desktop/main/profile-instance.test.ts`、`adapters/reference-session-recovery.test.ts`：同数据目录独占启动、schema13保留旧来源、受保护进程的未绑定准备回收与故障回滚；`pnpm test:reference-recovery`使用临时双目录和真实Electron，验证第二实例在恢复前退出、不同目录互不影响、进程崩溃后安全回收。旧来源、绑定及有持久投递证据的记录不据此自动删除或重放。
 
 - `adapters/reference-preparations.test.ts`、`desktop/main/reference-preparation-lifecycle.test.ts`、`reference-start-binding.test.ts`：schema12迁移回滚、准备副本与凭据原子写入、显式归属与运行前绑定、持久归属重启及故障关闭；`conversation-deletion.test.ts`补共享排队引用，`pnpm test:deletion`补真实桌面准备副本回收/其他对话保留。原件与草稿回收不因此算完成。
 

@@ -215,6 +215,9 @@ export class SqliteStore {
     migrateReferencePreparations(this.raw);
   }
 
+  /** Exclusive-profile startup only; never call while accepting IPC or running preparations. */
+  beginReferenceSession(producerId: string): number { return this.referencePreparations.beginSession(producerId); }
+
   /** Bodies, request ownership and the dispatch receipt commit before any runtime call. */
   commitReferencePreparation(id: string, receipt: ReferencePreparationReceipt, bodies: ReferenceBody[]): void {
     this.referencePreparations.commit(id, receipt, bodies);

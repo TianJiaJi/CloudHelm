@@ -27,11 +27,18 @@ export function migrateReferencePreparations(raw: Database.Database): void {
     CREATE INDEX reference_preparations_owner ON reference_preparations(conversation_id);
     INSERT INTO schema_migrations(version, applied_at) VALUES (12, unixepoch());`);
   }).immediate();
+  raw.transaction(() => {
+    if (raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 13').get()) return;
+    // NULL means legacy/unproven provenance. Never backfill a guarded producer identity.
+    raw.exec(`ALTER TABLE reference_preparations ADD COLUMN producer_id TEXT;
+      INSERT INTO schema_migrations(version, applied_at) VALUES (13, unixepoch());`);
+  }).immediate();
 }
 
 /** Temporary send copies are retained by request until their conversation is deleted.
  * A failed/unknown runtime response is not proof that the message was never accepted. */
 export class ReferencePreparations {
+  private producerId?: string;
   constructor(private readonly raw: Database.Database, private readonly writes: Writes) {}
   private row(id: string): PreparationRow | undefined {
     return this.raw.prepare('SELECT conversation_id, reference_ids FROM reference_preparations WHERE request_id = ?').get(id) as PreparationRow | undefined;
@@ -42,6 +49,32 @@ export class ReferencePreparations {
   }
   private assertTask(id: string): void {
     if (!this.raw.prepare("SELECT 1 FROM records WHERE bucket = 'tasks' AND id = ?").get(id)) throw new Error('Reference preparation owner unavailable');
+  }
+  /** Startup only, before IPC/Worker admission and under exclusive profile ownership.
+   * Guarded producers cannot dispatch a new conversation before binding this row. */
+  beginSession(producerId: string): number {
+    if (this.producerId) throw new Error('Reference session already initialized');
+    if (!validId(producerId)) throw new Error('Invalid reference session');
+    const reclaimed = this.raw.transaction(() => {
+      const rows = this.raw.prepare(`SELECT request_id, reference_ids FROM reference_preparations
+        WHERE conversation_id IS NULL AND producer_id IS NOT NULL AND producer_id != ?`)
+        .all(producerId) as { request_id: string; reference_ids: string }[];
+      let count = 0;
+      for (const row of rows) {
+        const receipt = this.receipt(row.request_id);
+        if (receipt && receipt.state !== 'preparing' && receipt.state !== 'dispatching' && receipt.state !== 'failed') continue;
+        const published = this.raw.prepare(`SELECT 1 FROM records WHERE bucket IN ('messages', 'conversation-inputs')
+          AND json_extract(value, '$.document.requestId') = ? LIMIT 1`).get(row.request_id);
+        if (published) continue; // Conflicting delivery evidence stays conservative; never enable replay.
+        this.raw.prepare('DELETE FROM reference_preparations WHERE request_id = ?').run(row.request_id);
+        this.collect(JSON.parse(row.reference_ids) as string[]);
+        if (receipt) this.writes.receipt(row.request_id, { ...receipt, state: 'failed' });
+        count++;
+      }
+      return count;
+    }).immediate();
+    this.producerId = producerId; // Only after the recovery transaction commits.
+    return reclaimed;
   }
   commit(id: string, receipt: ReferencePreparationReceipt, bodies: ReferenceBody[]): void {
     if (!validId(id) || receipt.state !== 'dispatching' || typeof receipt.fingerprint !== 'string' || !Array.isArray(bodies)
@@ -57,9 +90,9 @@ export class ReferencePreparations {
         if (this.raw.prepare('SELECT 1 FROM content_references WHERE id = ?').get(body.reference.id)) throw new Error('Reference body already exists');
         this.writes.body(body.reference.id, body); ids.add(body.reference.id);
       }
-      this.raw.prepare(`INSERT INTO reference_preparations(request_id, conversation_id, reference_ids) VALUES(?,?,?)
+      this.raw.prepare(`INSERT INTO reference_preparations(request_id, conversation_id, reference_ids, producer_id) VALUES(?,?,?,?)
         ON CONFLICT(request_id) DO UPDATE SET reference_ids=excluded.reference_ids`)
-        .run(id, receipt.conversationId ?? null, JSON.stringify([...ids]));
+        .run(id, receipt.conversationId ?? null, JSON.stringify([...ids]), this.producerId ?? null);
       this.writes.receipt(id, receipt);
     }).immediate();
   }

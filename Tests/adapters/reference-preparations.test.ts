@@ -21,7 +21,7 @@ describe('E02: durable reference preparation records', () => {
     const file = disk(); const initial = new SqliteStore(file);
     initial.putReference('legacy', { ...body, reference: { ...body.reference, id: 'legacy' } }); initial.close();
     const raw = new Database(file); resources.push(() => raw.close());
-    raw.exec(`DROP TABLE reference_preparations; DELETE FROM schema_migrations WHERE version = 12;
+    raw.exec(`DROP TABLE reference_preparations; DELETE FROM schema_migrations WHERE version >= 12;
       CREATE TRIGGER fail_v12 BEFORE INSERT ON schema_migrations WHEN NEW.version = 12
       BEGIN SELECT RAISE(ABORT, 'synthetic migration failure'); END;`);
     expect(() => new SqliteStore(file)).toThrow('synthetic migration failure');
