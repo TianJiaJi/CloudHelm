@@ -1,11 +1,9 @@
-import { execFile } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { clearTimeout, setTimeout } from 'node:timers';
-import { promisify } from 'node:util';
-
-const execute = promisify(execFile);
+import { forceKill, ownedProcessTree, processTable, remainingIdentities, sameIdentity, validIdentity } from './desktop-process-identity.mjs';
+export { forceKill } from './desktop-process-identity.mjs';
 
 export async function withTimeout(action, timeoutMs, label) {
   let timer;
@@ -16,38 +14,7 @@ export async function withTimeout(action, timeoutMs, label) {
   } finally { clearTimeout(timer); }
 }
 
-async function processTable() {
-  // Query ancestry, never select processes by executable name: other Electron apps may be open.
-  // Loaded CI runners can exceed the query budget or fail it transiently; retry before giving up.
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const { stdout } = process.platform === 'win32'
-        ? await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-          'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId | ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.ParentProcessId }'],
-        { timeout: 30_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 })
-        : await execute('ps', ['-axo', 'pid=,ppid=,stat='], { timeout: 30_000 });
-      return stdout.trim().split(/\r?\n/u).filter(Boolean).map((line) => {
-        const [pid, parentPid, state = ''] = line.trim().split(/\s+/u);
-        return { pid: Number(pid), parentPid: Number(parentPid), zombie: state.startsWith('Z') };
-      });
-    } catch (error) {
-      if (attempt >= 3) throw error;
-      await delay(250 * attempt);
-    }
-  }
-}
-
-function descendants(table, root) {
-  const pids = new Set([root]);
-  let size;
-  do {
-    size = pids.size;
-    for (const entry of table) if (pids.has(entry.parentPid)) pids.add(entry.pid);
-  } while (size !== pids.size);
-  return pids;
-}
-
-/** Kernel liveness check: an access error is uncertainty, never proof of exit. */
+/** Liveness alone is never termination authority: the PID may have been reused. */
 export function processRunning(pid) {
   try { process.kill(pid, 0); return true; }
   catch (error) {
@@ -57,68 +24,48 @@ export function processRunning(pid) {
   }
 }
 
-async function remainingPids(pids) {
-  // Windows has no POSIX zombie state. Avoid starting PowerShell/CIM repeatedly
-  // just to inspect already-owned PIDs; retain ancestry enumeration in capture().
-  if (process.platform === 'win32') return [...pids].filter(processRunning);
-  return (await processTable()).filter((entry) => pids.has(entry.pid) && !entry.zombie).map((entry) => entry.pid);
-}
-
-export async function forceKill(pid) {
-  // Best-effort termination; waitForExit() is the authoritative exit check below.
-  // Kill only captured PIDs. Windows taskkill /T can reject an orphan after its
-  // parent exits; Node's SIGKILL terminates that PID without walking ancestry.
-  // Windows reports EPERM for a PID that already exited but is not yet reaped
-  // (POSIX reports ESRCH), and a process can disappear between the snapshot and
-  // termination, so both codes mean "already gone or racy to observe" and are
-  // tolerated here; a process that really survives still fails waitForExit().
-  try { process.kill(pid, 'SIGKILL'); }
-  catch (error) {
-    if (error.code !== 'ESRCH' && error.code !== 'EPERM') throw error;
-  }
-}
-
-/** Owns only one isolated smoke instance, including descendants orphaned by a crash. */
+/** Owns only captured identities of one isolated smoke instance. */
 export class DesktopProcess {
   constructor(application) {
     this.application = application;
     this.child = application.process();
     if (!Number.isSafeInteger(this.child.pid) || this.child.pid <= 0) throw new Error('Electron has no valid PID');
-    this.pids = new Set([this.child.pid]);
+    this.identities = new Map();
+    this.rootIdentity = undefined;
   }
 
+  get pids() { return new Set(this.identities.keys()); }
+  get exited() { return this.child.exitCode !== null || this.child.signalCode !== null; }
+
   async capture() {
-    if (!this.pids.size && (this.child.exitCode !== null || this.child.signalCode !== null)) return;
+    if (!this.identities.size && this.exited) return;
     const table = await processTable();
-    // Forget already exited processes so an old PID is not kept across smoke stages.
-    const live = new Set(table.filter((entry) => !entry.zombie).map((entry) => entry.pid));
-    this.pids = new Set([...this.pids].filter((pid) => live.has(pid)));
-    if (this.child.exitCode === null && this.child.signalCode === null && live.has(this.child.pid)) {
-      for (const pid of descendants(table, this.child.pid)) this.pids.add(pid);
-    }
+    this.identities = remainingIdentities(this.identities, table);
+    if (this.exited) return; // Keep captured orphans; never adopt a recycled root.
+    const root = table.find((entry) => entry.pid === this.child.pid);
+    if (!validIdentity(root) || root.parentPid !== process.pid
+      || (this.rootIdentity && !sameIdentity(this.rootIdentity, root))) throw new Error('Cannot verify owned Electron root');
+    this.rootIdentity ??= root;
+    for (const [pid, identity] of ownedProcessTree(table, root)) this.identities.set(pid, identity);
   }
 
   async waitForExit(timeoutMs = 10_000) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
-      const remaining = await remainingPids(this.pids);
-      if (!remaining.length && (this.child.exitCode !== null || this.child.signalCode !== null)) {
-        this.pids.clear();
-        return;
-      }
-      if (Date.now() >= deadline) throw new Error(`Electron processes did not exit: ${remaining.join(', ')}`);
+      if (this.identities.size) this.identities = remainingIdentities(this.identities, await processTable());
+      if (!this.identities.size && this.exited) return;
+      if (Date.now() >= deadline) throw new Error(`Electron processes did not exit: ${[...this.identities.keys()].join(', ')}`);
       await delay(100);
     }
   }
 
   async crash() {
     await this.capture();
-    // No app.quit()/close(): the persisted pending question must reach startup recovery.
-    if (this.pids.has(this.child.pid)) await forceKill(this.child.pid);
-    // Terminating one PID does not kill descendants; include captured orphans.
-    const live = new Set(await remainingPids(this.pids));
-    for (const pid of this.pids) if (pid !== this.child.pid && live.has(pid)) await forceKill(pid);
-    // OS process termination releases userData/SQLite handles before we reuse the directory.
+    // No app.quit(): startup recovery must observe abrupt shutdown. Each kill
+    // checks birth identity again; captured PID numbers alone are insufficient.
+    const root = this.identities.get(this.child.pid);
+    if (root) await forceKill(root);
+    for (const [pid, identity] of this.identities) if (pid !== this.child.pid) await forceKill(identity);
     await this.waitForExit();
     await withTimeout(() => this.application.close(), 5_000, 'Disconnect crashed Electron');
   }
@@ -129,7 +76,7 @@ export class DesktopProcess {
       await withTimeout(() => this.application.close(), 5_000, 'Close Electron');
       await this.waitForExit(2_000);
     } catch {
-      // An active task may cancel app.quit() with a modal dialog, including on test failure.
+      // An active task may cancel app.quit() with a modal dialog.
       await this.crash();
     }
   }

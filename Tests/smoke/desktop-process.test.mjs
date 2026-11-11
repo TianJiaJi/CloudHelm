@@ -77,18 +77,13 @@ describe('desktop smoke process lifecycle', () => {
     await expect(withTimeout(() => Promise.resolve('closed'), 1000, 'Close Electron')).resolves.toBe('closed');
   });
 
-  it('tolerates EPERM like ESRCH for an already-exited PID and keeps unexpected errors', async () => {
-    // Windows reports EPERM instead of ESRCH for a PID that already exited but is
-    // not yet reaped; waitForExit() still proves whether anything survived.
-    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
-    });
+  it('refuses to terminate a bare PID or unverifiable identity', async () => {
+    const kill = vi.spyOn(process, 'kill');
     try {
-      await expect(forceKill(4242)).resolves.toBeUndefined();
-      kill.mockImplementation(() => { throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); });
-      await expect(forceKill(4242)).resolves.toBeUndefined();
-      kill.mockImplementation(() => { throw Object.assign(new Error('kill UNKNOWN'), { code: 'UNKNOWN' }); });
-      await expect(forceKill(4242)).rejects.toThrow('kill UNKNOWN');
+      await expect(forceKill(4242)).rejects.toThrow('Tracked process identity required');
+      await expect(forceKill({ pid: 4242 })).rejects.toThrow('Tracked process identity required');
+      await expect(forceKill({ pid: -1, birth: '123' })).rejects.toThrow('Tracked process identity required');
+      expect(kill).not.toHaveBeenCalled();
     } finally { kill.mockRestore(); }
   });
 
