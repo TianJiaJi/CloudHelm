@@ -8,7 +8,8 @@ const host: RuntimeHost = { id: 'host', label: 'fixture', address: '127.0.0.1', 
   status: 'connected', defaultMode: 'ask', protectedPaths: [], policyRevision: 1 };
 const observation: HostEnvironmentObservation = { version: 1, hostId: 'host', loginAs: 'fixture', connectionId: 'worker:1', observedAt: 100,
   status: 'observed', data: { os: 'Linux', distribution: 'debian', version: '12', kernel: '6.1', architecture: 'x86_64',
-    username: 'fixture', uid: 1000, directory: '/home/fixture', tools: { systemctl: true } } };
+    username: 'fixture', uid: 1000, directory: '/home/fixture', tools: { systemctl: true }, source: 'python' },
+  readiness: { ssh: 'connected', metadata: 'ready', execution: 'ready' } };
 const environment: HostEnvironmentAccess = { snapshot: () => structuredClone(observation), refresh: vi.fn(async () => structuredClone(observation)) };
 const op = (id: string, fields: Partial<OperationView> = {}): OperationView => ({ id, taskId: 'task', hostId: 'host',
   kind: 'command', preview: 'printf observation', status: 'succeeded', createdAt: 1, loginAs: 'fixture', runAs: 'fixture',

@@ -6,7 +6,8 @@ import { mergeOperationViews } from './runtime-facts.js';
 
 export function hostEnvironmentSnapshot(host: RuntimeHost, access?: HostEnvironmentAccess): HostEnvironmentObservation {
   return access?.snapshot(host.id, host.username) ?? {
-    version: 1, hostId: host.id, loginAs: host.username, connectionId: null, observedAt: null, status: 'unknown', reason: 'not-observed'
+    version: 1, hostId: host.id, loginAs: host.username, connectionId: null, observedAt: null, status: 'unknown', reason: 'not-observed',
+    readiness: { ssh: 'disconnected', metadata: 'unknown', execution: 'unknown' }
   };
 }
 export function environmentProjection(hosts: RuntimeHost[], access?: HostEnvironmentAccess, now = Date.now()) {

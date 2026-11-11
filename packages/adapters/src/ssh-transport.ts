@@ -2,7 +2,7 @@ import { openSshControlPipe } from './ssh-control-pipe.js';
 import { withSftpSession } from './ssh-sftp-session.js';
 import { readBoundedSftpFile } from './sftp-read.js';
 import { runFixedSshCommand } from './ssh-fixed-exec.js';
-import { probeHostEnvironment } from './host-environment-probe.js';
+import { readHostEnvironment } from './host-environment-probe.js';
 import { onDemandAuthHandler, type SshLoginChallenge } from './ssh-authentication.js';
 export { SshAuthenticationError } from './ssh-authentication.js';
 export type { SshLoginPrompt, SshLoginChallenge } from './ssh-authentication.js';
@@ -189,7 +189,7 @@ export class SshTransport {
   async readEnvironment(hostId: string, loginAs: string, signal?: AbortSignal) {
     const client = this.connections.get(hostId), generation = this.connectionGeneration(hostId);
     if (!client || this.identities.get(hostId) !== loginAs) throw new Error('Host metadata identity unavailable');
-    const data = await probeHostEnvironment(client, signal);
+    const data = await readHostEnvironment(client, signal);
     if (this.connections.get(hostId) !== client || this.connectionGeneration(hostId) !== generation)
       throw new Error('Host metadata connection changed');
     return data;

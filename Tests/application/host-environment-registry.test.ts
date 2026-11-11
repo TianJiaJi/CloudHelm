@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { HostEnvironmentRegistry } from '@cloudhelm/application';
 import type { HostEnvironmentData } from '@cloudhelm/core';
 const data: HostEnvironmentData = { os: 'Linux', distribution: 'debian', version: '12', architecture: 'aarch64', kernel: '6.1',
-  username: 'fixture', uid: 1000, directory: '/home/fixture', tools: { python3: true } };
+  username: 'fixture', uid: 1000, directory: '/home/fixture', tools: { python3: true }, source: 'python' };
 it('does not probe or connect for snapshots, disconnected hosts or recovery', async () => {
   const read = vi.fn(async () => data);
   const registry = new HostEnvironmentRegistry({ connectionId: () => null, read });
@@ -48,4 +48,30 @@ it('does not cache a cancelled read or turn cancellation into an observed succes
   const pending = registry.refresh('host', 'fixture', controller.signal);
   const failed = expect(pending).rejects.toThrow(); controller.abort(); finish(data); await failed;
   expect(registry.snapshot('host', 'fixture').status).toBe('unknown');
+});
+
+it('reports SSH, metadata and exec-channel readiness as separate facts', async () => {
+  const read = vi.fn(async () => data);
+  const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read }, () => 30);
+  // Before any probe: the SSH session exists, but nothing is known about the host.
+  expect(registry.snapshot('host', 'fixture').readiness)
+    .toEqual({ ssh: 'connected', metadata: 'unknown', execution: 'unknown' });
+  expect((await registry.refresh('host', 'fixture')).readiness)
+    .toEqual({ ssh: 'connected', metadata: 'ready', execution: 'ready' });
+  const shell = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read: async () => ({ ...data, source: 'shell' }) }, () => 31);
+  expect((await shell.refresh('host', 'fixture')).readiness)
+    .toEqual({ ssh: 'connected', metadata: 'degraded', execution: 'ready' });
+  expect(new HostEnvironmentRegistry({ connectionId: () => null, read }).snapshot('host', 'fixture').readiness)
+    .toEqual({ ssh: 'disconnected', metadata: 'unknown', execution: 'unknown' });
+});
+
+it('keeps a bounded cause instead of one undifferentiated probe failure', async () => {
+  const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1',
+    read: async () => { throw Object.assign(new Error('Host metadata unavailable'), { reason: 'python-missing' }); } }, () => 40);
+  const observation = await registry.refresh('host', 'fixture');
+  expect(observation).toMatchObject({ status: 'unknown', reason: 'python-missing' });
+  expect(JSON.stringify(observation)).not.toContain('Host metadata unavailable');
+  const unrelated = new HostEnvironmentRegistry({ connectionId: () => 'worker:1',
+    read: async () => { throw Object.assign(new Error('private-detail'), { reason: 'not-a-real-reason' }); } }, () => 41);
+  expect(await unrelated.refresh('host', 'fixture')).toMatchObject({ reason: 'unavailable' });
 });

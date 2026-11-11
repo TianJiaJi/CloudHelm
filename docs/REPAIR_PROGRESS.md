@@ -56,7 +56,7 @@
 | C07 | 拆分空闲释放、显式人工接管及单任务/终端/会话停止；避免暂停自动开启人工 Shell、遗留条目耗尽池；用户局部控制复用精确 job 控制。 | 4 终端与生命周期 | 待开始 | 未验收 |
 | D01 | 保留现有探测→缓存→模型投影链，统一探测与实际执行的 PATH、身份、目录；架构保留原始值并归一，区分内核、发行版用户空间和按需确认的 ABI。 | 3 工具/文件/环境 | 待开始 | 未验收 |
 | D02 | 环境事实分层：基础系统/架构、执行上下文、按需业务能力；拆开程序存在、运行就绪、当前身份可调用与近期状态，并按事实类型刷新/失效。 | 3 工具/文件/环境 | 待开始 | 未验收 |
-| D03 | 基础系统/架构探测不再把 Python 作为唯一引导依赖；短预算先提供基础事实，扩展能力按需探测；区分 SSH 已连接、元数据就绪和执行通道就绪，保留有界失败原因。 | 3 工具/文件/环境 | 待开始 | 未验收 |
+| D03 | 基础系统/架构探测不再把 Python 作为唯一引导依赖；短预算先提供基础事实，扩展能力按需探测；区分 SSH 已连接、元数据就绪和执行通道就绪，保留有界失败原因。 | 3 工具与权限 | 已实现待验收 | 新增 POSIX shell 降级探测（不安装、不提权、不 source）：Python 不可用时仍取得 os/内核/架构/身份/目录/工具可用性，并标记 source=shell；观察新增 readiness（ssh/metadata/execution 三分），失败原因细分为 python-missing/timeout/unsupported/unavailable/invalid/too-large/cancelled 且不含服务器原文。adapters/application 共 36 项通过（含 5 项新增反例），工程检查通过；真实无 Python 主机与超时链待 H03。 |
 | E01 | 对话删除采用数据库原子处理和跨会话文件目录的可恢复阶段；内存跟随已提交状态。 | 1 安全与数据 | 已完成 | Tests/desktop/main/conversation-deletion.test.ts、conversation-cleanup.test.ts、conversation-ipc.test.ts及structured-message-ipc.test.ts；Tests/smoke/conversation-deletion-smoke.mjs真实Windows桌面删除/失败/重启恢复通过 |
 | E02 | 为原终端引用、发送副本、草稿和共享正文建立归属及回收策略。 | 1 安全与数据 | 已实现待验收 | 前两批`56b9280`/`8428788`完成副本归属与独占启动恢复；第三批schema14原件/草稿lease、接收方撤权、撤销历史、跨草稿复制、共享延迟回收已接入。Tests/adapters/reference-drafts.test.ts、Tests/desktop/main/reference-draft-ipc.test.ts及Tests/smoke/reference-recovery-smoke.mjs等通过；最终252文件2338项及隐藏Windows桌面/剪贴板/UI通过，25项条件跳过。真实SSH终端捕获链仍待H03；旧无来源正文保守保留，不猜测回收，捕获字节预算另属E04 |
 | E03 | 以操作身份绑定日志与脱敏缓冲；unknown/断线关闭也正确归档无换行尾部。 | 2 执行与审核 | 已实现待验收 | 终端关闭/命令结束时先 flush 脱敏缓冲的未终止尾部再删除捕获；redaction/sqlite-store/terminal-manager 回归通过；真实断线关闭链待 H03 |
