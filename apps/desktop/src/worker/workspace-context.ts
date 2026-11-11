@@ -15,7 +15,9 @@ export function environmentProjection(hosts: RuntimeHost[], access?: HostEnviron
     const snapshot = hostEnvironmentSnapshot(host, access);
     const fresh = snapshot.status === 'observed' && snapshot.observedAt !== null
       && now >= snapshot.observedAt && now - snapshot.observedAt < HOST_ENVIRONMENT_MAX_AGE_MS;
-    const { version: _version, reason: _reason, ...publicSnapshot } = snapshot;
+    // Readiness is an operator-facing fact (SSH/metadata/exec channel); the model
+    // context stays lean and never treats "connected" as permission to run anything.
+    const { version: _version, reason: _reason, readiness: _readiness, ...publicSnapshot } = snapshot;
     return { ...publicSnapshot, freshness: fresh ? 'recent-observation' : 'unknown-or-stale' };
   });
 }

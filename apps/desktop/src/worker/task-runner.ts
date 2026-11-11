@@ -268,12 +268,17 @@ export class TaskRunner {
     if (this.agent.isStreaming) return this.inputQueue.enqueue({ id: document?.requestId ?? randomUUID(), kind: queueMode,
       text, document, intent: deriveInputIntent(text, document, intent) }).then(() => {});
     this.controlVersion++;
-    // Replay protection belongs to the previous execution's remote outcome, never to
-    // report bookkeeping. Once no outcome is unresolved and nothing is still streaming,
-    // an explicit user instruction may re-review the same intent; a real unresolved
-    // risk keeps every prior intent protected.
+    // Replay protection is released by backend facts, never by report wording alone:
+    // nothing may be unresolved, and any change this round recorded must be verified.
+    // A round that recorded no change releases immediately, so report bookkeeping
+    // cannot keep an identical intent blocked forever; a repeat of an unverified
+    // change stays blocked under any new ID, because that is a retry, not a new
+    // operation. Genuinely different operations are never blocked by this set.
+    const recordedChange = this.verification.operations(this.operationViews())
+      .some((operation) => operation.status === 'succeeded' && operation.readOnly !== true);
     const settled = !this.remoteBlocked
-      && !this.operationViews().some((operation) => operationNeedsVerification(operation));
+      && !this.operationViews().some((operation) => operationNeedsVerification(operation))
+      && (!recordedChange || this.journal.completionReport().reportStatus === 'verified');
     if (settled) this.replayProtected.clear();
     if (['paused', 'failed', 'recovering', 'human-control'].includes(this.status)) this.needsRecovery = true;
     this.remoteBlocked = undefined;

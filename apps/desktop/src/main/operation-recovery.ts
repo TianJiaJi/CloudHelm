@@ -8,7 +8,8 @@ export function recoverOperation(value: OperationView, reason: string): Operatio
   if (operation.status === 'running') Object.assign(operation, { status: 'unknown', reason });
   else if (operation.status === 'proposed' || (operation.status === 'approved' && !operation.executionJob)) {
     // Provably never dispatched: proposed was never approved, or approved but no execution record exists.
-    Object.assign(operation, { status: 'failed', effects: 'none', reason: '操作未派发，已安全终止。' });
+    Object.assign(operation, { status: 'failed', effects: 'none', failureKind: 'not-dispatched',
+      reason: '操作未派发，已安全终止。' });
   } else if (operation.status === 'approved') Object.assign(operation, { status: 'unknown', reason });
   if (!operation.executionJob) return operation;
   const job = operation.executionJob;

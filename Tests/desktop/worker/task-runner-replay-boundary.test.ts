@@ -7,40 +7,52 @@ import { openAiFixture } from './openai-sse-fixture.js';
 
 const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', port: 22, username: 'user', auth: 'agent',
   status: 'connected', defaultMode: 'ask', protectedPaths: [], policyRevision: 1 };
-const task = (): TaskView => ({ id: 'triangle', goal: '重启服务并检查结果', hostIds: ['host'], localScopes: [], status: 'draft',
-  provider: 'cloudhelm-custom', modelId: 'fixture', requestCount: 0, requestLimit: 100, createdAt: 1, updatedAt: 1 });
-const prior = (status: OperationView['status']): OperationView => ({ id: 'restart', taskId: 'triangle', hostId: 'host',
+const task = (): TaskView => ({ id: 'replay', goal: '观察当前目录', hostIds: ['host'], localScopes: [], status: 'draft',
+  provider: 'cloudhelm-custom', modelId: 'fixture', requestCount: 0, requestLimit: 40, createdAt: 1, updatedAt: 1 });
+const prior = (status: OperationView['status']): OperationView => ({ id: 'restart', taskId: 'replay', hostId: 'host',
   kind: 'command', readOnly: false, status, exitCode: status === 'succeeded' ? 0 : undefined,
   preview: 'systemctl restart nginx', intentKey: 'nginx-restart', createdAt: 1 });
 
-async function opened(status: OperationView['status']) {
-  const fixture = await openAiFixture(async () => ({ text: '按用户要求继续。' }));
+async function opened(priorStatus?: OperationView['status']) {
+  let requests = 0;
+  const fixture = await openAiFixture(async () => {
+    requests++;
+    if (requests === 1) return { calls: [{ id: 'run', name: 'run_remote', arguments: { hostId: 'host', command: 'pwd' } }] };
+    return { text: '已观察。' };
+  });
   const view = task(); const terminal = new TerminalManager({ data() {}, state() {} });
   const runner = new TaskRunner(view, [host], { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: fixture.baseUrl },
-    [prior(status)], terminal, { execute: vi.fn() }, async () => { throw new Error('No terminal needed'); },
-    { event() {}, requestApproval: async () => false, cancelApproval() {} });
-  await runner.start(true);
-  Object.assign(runner, { status: 'answered', needsRecovery: false });
-  return { fixture, view, runner, protectedIds: () => [...(runner as unknown as { replayProtected: Set<string> }).replayProtected] };
+    priorStatus ? [prior(priorStatus)] : [], terminal,
+    { execute: vi.fn(async (operation: { id: string }) => ({ operationId: operation.id, status: 'succeeded' as const, exitCode: 0, stdoutTail: '/srv\n' })) },
+    async () => terminal.open(host.id, { write() {}, resize() {}, close() {}, onData() {}, onClose() {} }, view.id, '/srv'),
+    { event() {}, requestApproval: async () => true, cancelApproval() {} });
+  // The runner stays the authority for its own protection set; the test only reads it.
+  const protectedIds = () => [...(runner as unknown as { replayProtected: Set<string> }).replayProtected];
+  const closed = () => (runner as unknown as { verification: { closed: boolean } }).verification.closed;
+  return { fixture, view, runner, protectedIds, closed };
 }
 
-it('lets an explicit new request re-review a settled operation without a verified report', async () => {
+it('releases replay protection after a closed round without waiting for report wording', async () => {
   const f = await opened('succeeded');
   try {
+    // A prior persisted operation is protected before the first round runs.
     expect(f.protectedIds()).toEqual(['restart']);
-    f.runner.message('同一个服务再重启一次');
-    expect(f.protectedIds()).toEqual([]);
+    await f.runner.start();
     await vi.waitFor(() => expect(f.view.status).toBe('answered'), { timeout: 15000 });
     expect(f.fixture.errors).toEqual([]);
+    expect(f.closed()).toBe(true);
+    f.runner.message('同一个服务再重启一次');
+    // Report state never decides this: the closed round plus no unresolved outcome does.
+    expect(f.protectedIds()).toEqual([]);
   } finally { f.runner.dispose(); await f.fixture.close(); }
 });
 
-it('keeps replay protection while the previous remote outcome is still unresolved', async () => {
+it('keeps protection while a previous remote outcome is still unresolved', async () => {
   const f = await opened('unknown');
   try {
-    f.runner.message('同一个服务再重启一次');
+    await f.runner.start(true);
     expect(f.protectedIds()).toEqual(['restart']);
-    await vi.waitFor(() => expect(f.fixture.requests).toHaveLength(1), { timeout: 15000 });
+    f.runner.message('同一个服务再重启一次');
     expect(f.protectedIds()).toEqual(['restart']);
   } finally { f.runner.dispose(); await f.fixture.close(); }
 });

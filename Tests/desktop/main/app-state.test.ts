@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BashAnalyzer, type SqliteStore } from '@cloudhelm/adapters';
 import type { AppEvent, ModelProfileDraft, TaskIntentState, TaskView } from '@cloudhelm/contracts';
-import { operationNeedsVerification } from '@cloudhelm/contracts';
+import { operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
 import { AppState } from '../../../apps/desktop/src/main/app-state.js';
 
 const encryption = vi.hoisted(() => ({ available: true }));
@@ -649,15 +649,24 @@ it('does not accept still-running, read-only or completed operations', () => {
   }
 });
 
-it('restores a proposed operation as an unknown but resolvable outcome after restart', () => {
+it('restores a never-dispatched proposal as a proven no-effect failure, not as unknown', () => {
   const { state, store } = setup();
   state.saveProfile(customProfile());
   const task = conversation(state);
   state.record({ type: 'operation', value: { id: 'reviewing', taskId: task.id, hostId: 'host', kind: 'command',
     preview: 'command', status: 'proposed', createdAt: 1 } });
-  const restored = setup(store).state.snapshot().operations.find((item) => item.id === 'reviewing')!;
-  expect(restored.status).toBe('unknown');
-  expect(operationNeedsVerification(restored)).toBe(true);
+  state.record({ type: 'operation', value: { id: 'running', taskId: task.id, hostId: 'host', kind: 'command',
+    preview: 'command', status: 'running', createdAt: 2 } });
+  const restored = setup(store).state.snapshot().operations;
+  const proposal = restored.find((item) => item.id === 'reviewing')!;
+  // A proposal was never approved, so it cannot have reached the host.
+  expect(proposal).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
+  expect(operationNeedsVerification(proposal)).toBe(false);
+  expect(operationOutcomeResolvable(proposal)).toBe(false);
+  // An operation that was already running may have executed and stays unresolved.
+  const running = restored.find((item) => item.id === 'running')!;
+  expect(running.status).toBe('unknown');
+  expect(operationNeedsVerification(running)).toBe(true);
 });
 
 it('preserves execution state across model selection and projects uncertainty after restart', () => {

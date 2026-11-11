@@ -16,7 +16,10 @@ describe('shared Docker permission prerequisite', () => {
     const execute = vi.fn(async (op: ProposedOperation) => ({ operationId: op.id, status: 'failed' as const, exitCode: 1,
       stdoutTail: 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock' }));
     const queue = new HostSerialExecutor(new PermissionAwareExecutor({ execute }, analyzer));
-    const results = await Promise.all(['docker version', 'docker network ls', 'docker ps -a'].map((command) => queue.execute(operation(command), 'hash')));
+    // These are effect-free queries; the safety gate marks them read-only, so they must
+    // not create a host write lock from a permission failure with unclassified effects.
+    const results = await Promise.all(['docker version', 'docker network ls', 'docker ps -a']
+      .map((command) => queue.execute(operation(command), 'hash', undefined, { readOnly: true })));
     expect(execute).toHaveBeenCalledTimes(1); expect(results[1]).toMatchObject({ effects: 'none', failureKind: 'permission-denied' });
     expect(results[2]?.stdoutTail).toContain('Not executed');
     await queue.execute(operation('sudo docker ps'), 'new-review'); expect(execute).toHaveBeenCalledTimes(2);

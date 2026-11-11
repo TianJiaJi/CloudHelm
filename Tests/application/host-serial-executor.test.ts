@@ -154,3 +154,30 @@ it('keeps one unresolved verdict for a failure whose effects were never classifi
   expect(serial.reconcile('host', 'one')).toBe(true);
   expect((await serial.execute({ ...operation, id: 'after-review' }, 'fingerprint')).status).toBe('succeeded');
 });
+
+it('names a live background job as a running resource instead of an unknown outcome', async () => {
+  // A live completion promise means the background job is still running.
+  const remoteCompletion = new Promise<'exited' | 'unknown'>(() => {});
+  const downstream = { execute: vi.fn()
+    .mockResolvedValueOnce({ operationId: 'bg', status: 'handed-over', stdoutTail: '', remoteCompletion })
+    .mockResolvedValue({ operationId: 'later', status: 'succeeded', stdoutTail: '' }) };
+  const serial = new HostSerialExecutor(downstream);
+  const background: ProposedOperation = { ...operation, id: 'bg', executionMode: 'background' };
+  await serial.execute(background, 'fingerprint');
+  const blocked = await serial.execute({ ...operation, id: 'write' }, 'fingerprint');
+  expect(blocked).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation' });
+  expect(blocked.stdoutTail).toContain('still running in the background');
+  expect(blocked.stdoutTail).toContain('bg');
+  // Marking a command background never releases the host write lock on its own...
+  expect(blocked.status).toBe('failed');
+  // ...and a live completion cannot be reconciled away while it may still report an exit.
+  expect(serial.canReconcile('host', 'bg')).toBe(false);
+  // ...and read-only inspection is still allowed while it runs.
+  expect((await serial.execute({ ...operation, id: 'read' }, 'fingerprint', undefined, { readOnly: true })).status).toBe('succeeded');
+  serial.observe('host', { operationId: 'bg', status: 'unknown', stdoutTail: '' });
+  const verified = await serial.execute({ ...operation, id: 'after' }, 'fingerprint');
+  expect(verified.stdoutTail).toContain('unresolved remote outcome');
+  // After a late transport observation the outcome is unknown and may be reconciled.
+  expect(serial.canReconcile('host', 'bg')).toBe(true);
+  expect(serial.reconcile('host', 'bg')).toBe(true);
+});

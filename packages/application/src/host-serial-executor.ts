@@ -130,9 +130,19 @@ export class HostSerialExecutor implements OperationExecutor {
       }
       const unresolvedPeers = [...this.domains.peers(hostId)].filter((id) => this.unsettled.has(id));
       if (unresolvedPeers.length && !options?.readOnly) {
-        const blockedBy = unresolvedPeers.flatMap((id) => [...this.unsettled.get(id)!.keys()]).slice(0, 3).join(', ');
+        // A tracked, still-alive background job is a running resource, not an unknown
+        // outcome. Both keep the write lock (a background marker is never permission),
+        // but they need different next actions: wait for it to finish, or verify what
+        // already happened. Read-only inspection is allowed in both cases.
+        const alive = (id: string) => [...this.unsettled.get(id)!.entries()].filter(([, completion]) => completion !== null).map(([operationId]) => operationId);
+        const unknown = (id: string) => [...this.unsettled.get(id)!.entries()].filter(([, completion]) => completion === null).map(([operationId]) => operationId);
+        const running = unresolvedPeers.flatMap(alive).slice(0, 3).join(', ');
+        const unresolved = unresolvedPeers.flatMap(unknown).slice(0, 3).join(', ');
+        const detail = running && unresolved ? `still running in the background (${running}); unresolved outcome (${unresolved})`
+          : running ? `still running in the background (${running}); its outcome is unknown until it exits`
+            : `has an unresolved remote outcome (${unresolved})`;
         return { operationId: operation.id, status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation',
-          stdoutTail: `Another command on this host has an unresolved remote outcome (${blockedBy}); verify it before further Agent writes` };
+          stdoutTail: `Another command on this host is ${detail}. Read-only inspection may continue; verify the original outcome before further Agent writes` };
       }
       let result: OperationResult;
       try { result = await this.downstream.execute(operation, fingerprint, signal, executionOptions); }

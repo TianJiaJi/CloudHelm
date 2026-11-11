@@ -43,7 +43,9 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
     }
     // Known-impossible dispatch is refused before an approval card or an AI review is
     // paid for; the serial executor still re-checks the same condition at dispatch.
-    if (!analysis || !isEffectFreeQuery(analysis)) {
+    // A bound stop request is the remedy for a running operation, never a new write;
+    // blocking it because that operation is running would make it unstoppable.
+    if ((!analysis || !isEffectFreeQuery(analysis)) && !(operation.kind === 'command' && operation.processControl)) {
       const blocker = deps.hostBlocked?.(operation.scope.hostId);
       if (blocker) return blockedOperationFeedback(operation.id, 'unresolved-prior-operation',
         `Not executed; effects: none. ${blocker} Read-only inspection may continue; a new write needs its own review after the original outcome is verified.`);
