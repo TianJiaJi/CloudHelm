@@ -38,6 +38,7 @@ import { createRemoteTools } from './remote-tools.js';
 import { createTaskPrompt } from './task-prompt.js';
 import { approvalPresentation } from './approval-presentation.js';
 import { taskOperationPreflight } from './task-operation-preflight.js';
+import { reviewCoordination } from './review-coordination.js';
 import { reviewDeniedOperation } from './task-denial-review.js';
 import { WorkJournal } from './work-journal.js';
 import { LocalFileAccess } from './local-file-access.js';
@@ -267,7 +268,13 @@ export class TaskRunner {
     if (this.agent.isStreaming) return this.inputQueue.enqueue({ id: document?.requestId ?? randomUUID(), kind: queueMode,
       text, document, intent: deriveInputIntent(text, document, intent) }).then(() => {});
     this.controlVersion++;
-    if (newRound && this.journal.completionReport().reportStatus === 'verified') this.replayProtected.clear();
+    // Replay protection belongs to the previous execution's remote outcome, never to
+    // report bookkeeping. Once no outcome is unresolved and nothing is still streaming,
+    // an explicit user instruction may re-review the same intent; a real unresolved
+    // risk keeps every prior intent protected.
+    const settled = !this.remoteBlocked
+      && !this.operationViews().some((operation) => operationNeedsVerification(operation));
+    if (settled) this.replayProtected.clear();
     if (['paused', 'failed', 'recovering', 'human-control'].includes(this.status)) this.needsRecovery = true;
     this.remoteBlocked = undefined;
     this.intent.input(deriveInputIntent(text, document, intent), newRound, document?.requestId);
@@ -425,16 +432,26 @@ export class TaskRunner {
     };
   }
 
+  /** Same fact the host write lock uses, checked before an approval card or AI review. */
+  private pendingOutcomeBlocker(hostId: string): string | undefined {
+    const unresolved = this.operationViews().find((operation) => operation.hostId === hostId && operationNeedsVerification(operation));
+    return unresolved
+      ? `A previous operation on this host (${unresolved.id}, ${unresolved.status}) still has an unresolved remote outcome; writes are locked until it is verified.`
+      : undefined;
+  }
+
   private async performOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined,
     hostLabel: string, manualReview = false) {
     this.assertRemoteActive();
     const prepared = await taskOperationPreflight(operation, { privileged: this.privileged, analyzer: this.analyzer,
-      operations: () => this.operationViews(), replayProtected: this.replayProtected }, manualReview);
+      operations: () => this.operationViews(), replayProtected: this.replayProtected,
+      hostBlocked: (hostId) => this.pendingOutcomeBlocker(hostId) }, manualReview);
     if (!('operation' in prepared)) return prepared;
     operation = prepared.operation;
     const outcome = await gate.execute(operation, signal, manualReview,
       operation.kind === 'command' && operation.executionMode === 'background'
         ? { onProcessStarted: (event) => this.background.started(operation.id, event) } : undefined);
+    this.coordinateDecision(outcome.decision);
     if (!outcome.result) return blockedOperationFeedback(operation.id, outcome.decision.ruleId,
       `Executed: false; effects: none. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}`, undefined, outcome.readOnly);
     const result = outcome.result;
@@ -489,6 +506,17 @@ export class TaskRunner {
     void this.inputQueue.stop().catch(() => {});
     this.setStatus(human || this.status === 'human-control' ? 'human-control' : 'paused', reason, resumeReason);
     this.agent?.abort();
+  }
+
+  /** Round-level coordination for one review outcome; never a side effect of the audit record. */
+  private coordinateDecision(decision: SafetyDecision): void {
+    if (decision.ruleId === 'ai-review-deny' && this.consecutiveAiDenials >= 3) {
+      this.blockRemote('独立审核连续拒绝三次，已暂停以避免反复试探。请检查目标或人工处理。');
+      return;
+    }
+    if (reviewCoordination(decision) === 'pause-round') {
+      this.blockRemote(`操作未执行，审核未放行（${decision.ruleId}）：${decision.reason}。已暂停，请处理后手动继续。`);
+    }
   }
 
   private createGate(executor: OperationExecutor = this.executor): SafetyGate {

@@ -18,7 +18,7 @@ beforeEach(() => { state.clients.length = 0; state.sftp = {}; });
 
 function sftpFixture(existing: boolean, afterWrite: () => void, regular = true) {
   const directory = { isDirectory: () => true, isSymbolicLink: () => false };
-  const file = { isFile: () => regular, isDirectory: () => false, isSymbolicLink: () => false, size: 3, mode: 0o600 };
+  const file = { isFile: () => regular, isDirectory: () => false, isSymbolicLink: () => false, size: 3, mode: 0o600, uid: 1000, gid: 1000 };
   const write = vi.fn((_path: string, _data: Buffer, _options: unknown, callback: (error: null) => void) => { afterWrite(); callback(null); });
   const rename = vi.fn((_from: string, _to: string, callback: (error: null) => void) => callback(null));
   const unlink = vi.fn((_path: string, callback: (error: null) => void) => callback(null));
@@ -37,9 +37,9 @@ function sftpFixture(existing: boolean, afterWrite: () => void, regular = true) 
       else callback({ code: 2 });
     },
     readFile: (_path: string, callback: (error: null, value: Buffer) => void) => callback(null, Buffer.from('old')),
-    writeFile: write, ext_openssh_rename: rename, unlink, end: vi.fn()
+    writeFile: write, ext_openssh_rename: rename, unlink, setstat: vi.fn((_p: string, _attrs: unknown, cb: (e: null) => void) => cb(null)), end: vi.fn()
   };
-  return { write, rename, unlink, open, read };
+  return { write, rename, unlink, open, read, setstat: state.sftp.setstat as ReturnType<typeof vi.fn> };
 }
 
 describe('SFTP commit authorization', () => {
@@ -158,6 +158,28 @@ it('retains possible effects when staging already began before failure', async (
   state.sftp.writeFile = (_path: string, _data: Buffer, _options: unknown, callback: (error: unknown) => void) => callback({ code: 3 });
   const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
   await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({ effects: 'possible', permissionDenied: true });
+});
+
+it('preserves owner/group and full mode including setuid bits during atomic replace', async () => {
+  const calls = sftpFixture(true, () => {});
+  const originalMode = 0o4764;
+  calls.setstat.mockClear();
+  state.sftp.lstat = (path: string, callback: (error: null, stat: unknown) => void) => {
+    if (path === '/srv/app/file') {
+      callback(null, { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, size: 3,
+        mode: originalMode, uid: 2003, gid: 2004 });
+    } else {
+      callback(null, { isDirectory: () => true, isSymbolicLink: () => false });
+    }
+  };
+  const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+  await ssh.writeFile('host', '/srv/app/file', Buffer.from('new'));
+  expect(calls.setstat).toHaveBeenCalledOnce();
+  const [setstatPath, setstatAttrs] = calls.setstat.mock.calls[0]!;
+  expect(setstatPath).toContain('.cloudhelm-new-');
+  expect(setstatAttrs).toEqual({ uid: 2003, gid: 2004, mode: originalMode });
+  expect(calls.rename).toHaveBeenCalledOnce();
+  expect(calls.setstat.mock.invocationCallOrder[0]!).toBeLessThan(calls.rename.mock.invocationCallOrder[0]!);
 });
 
 it('caches only successful Python preflight per SSH connection generation', async () => {

@@ -58,8 +58,7 @@ export function AgentPlan({ steps, operations = [] }: { steps: PlanStep[]; opera
   const active = steps.find((step) => step.status === 'running');
   const blocked = steps.some((step) => step.status === 'blocked');
   const executing = operations.some((operation) => ['proposed', 'approved', 'running'].includes(operation.status));
-  const uncertain = operations.some((operation) => operationNeedsVerification(operation)
-    || operation.status === 'unknown' && !operation.reconciledAt);
+  const uncertain = operations.some((operation) => operationNeedsVerification(operation));
   const label = executing ? '操作尚未结束' : uncertain ? '执行结果待核对' : blocked ? '计划受阻'
     : active ? '正在进行' : done === steps.length ? '步骤已处理' : '执行计划';
   return <section className={styles.planDock} aria-label="执行计划">

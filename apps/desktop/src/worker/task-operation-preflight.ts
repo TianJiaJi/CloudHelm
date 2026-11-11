@@ -1,4 +1,4 @@
-import { isReadOnlyQuery, isSudoStatusProbe, operationIntentKey, sudoTarget, type CommandAnalyzer, type ProposedOperation } from '@cloudhelm/core';
+import { isEffectFreeQuery, isSudoStatusProbe, operationIntentKey, sudoTarget, type CommandAnalyzer, type ProposedOperation } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
@@ -13,6 +13,8 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
   analyzer: CommandAnalyzer;
   operations(): readonly OperationView[];
   replayProtected: ReadonlySet<string>;
+  /** Known dispatch blockers (unresolved host outcomes) discovered before review. */
+  hostBlocked?(hostId: string): string | undefined;
 }, manualReview = false): Promise<{ operation: ProposedOperation } | Feedback> {
     if (operation.kind !== 'command' || !operation.processControl) operation = await deps.privileged?.prepare?.(operation) ?? operation;
     if (operation.kind === 'command' && !operation.scope.sessionId) {
@@ -24,15 +26,27 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
       }
     }
     const analysis = operation.kind === 'command' ? await deps.analyzer.analyze(operation.command).catch(() => undefined) : undefined;
-    if (!analysis || !isReadOnlyQuery(analysis)) {
-      const key = operationIntentKey(operation);
-      const denied = !manualReview && deps.operations().find((item) =>
-        item.intentKey === key && item.status === 'denied' && item.ruleId === 'ai-review-deny');
-      if (denied) return blockedOperationFeedback(operation.id, 'prior-review-denied',
-        `Not executed; effects: none. Independent AI review already denied the same operation (${denied.id}). Do not retry it under a new ID or wrapper. Propose a substantively safer action or let the user request exact manual review.`, denied.id);
+    // Replay protection answers one question: could repeating this request re-apply
+    // effects that were already dispatched? Effect-free queries use exactly the safety
+    // gate's own classification, so a repeated observation (ss, ip, ping, literal reads)
+    // is a new observation, not a replay of a change. A prior denial still binds its exact
+    // intent, and unknown results or in-flight dispatches still block non-query requests.
+    const key = operationIntentKey(operation);
+    const denied = !manualReview && deps.operations().find((item) =>
+      item.intentKey === key && item.status === 'denied' && item.ruleId === 'ai-review-deny');
+    if (denied) return blockedOperationFeedback(operation.id, 'prior-review-denied',
+      `Not executed; effects: none. Independent AI review already denied the same operation (${denied.id}). Do not retry it under a new ID or wrapper. Propose a substantively safer action or let the user request exact manual review.`, denied.id);
+    if (!analysis || !isEffectFreeQuery(analysis)) {
       const previous = deps.operations().find((item) => item.intentKey === key
         && (['running', 'proposed', 'approved', 'unknown'].includes(item.status) || (item.status === 'succeeded' && deps.replayProtected.has(item.id))));
       if (previous) return blockedOperationFeedback(operation.id, 'replay-protected', `Not executed: operation ${previous.id} already records this action (${previous.status}). Read its log and inspect the actual result; do not replay it. A new operation ID does not make a retry safe.`, previous.id);
+    }
+    // Known-impossible dispatch is refused before an approval card or an AI review is
+    // paid for; the serial executor still re-checks the same condition at dispatch.
+    if (!analysis || !isEffectFreeQuery(analysis)) {
+      const blocker = deps.hostBlocked?.(operation.scope.hostId);
+      if (blocker) return blockedOperationFeedback(operation.id, 'unresolved-prior-operation',
+        `Not executed; effects: none. ${blocker} Read-only inspection may continue; a new write needs its own review after the original outcome is verified.`);
     }
     // Refuse sudo capability probes before review: they deserve no approval card and no pause.
     if (analysis && isSudoStatusProbe(analysis)) return blockedOperationFeedback(operation.id, 'unsupported-probe',

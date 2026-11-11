@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SshTransport } from '@cloudhelm/adapters';
 import { TerminalManager } from '@cloudhelm/application';
-import { operationFingerprint, type ProposedOperation } from '@cloudhelm/core';
+import { operationFingerprint, operationOutcome, type ProposedOperation } from '@cloudhelm/core';
 import { FileOperationExecutor } from '../../../apps/desktop/src/worker/file-operation-executor.js';
 import { LocalFileAccess } from '../../../apps/desktop/src/worker/local-file-access.js';
 
@@ -27,6 +27,25 @@ describe('structured operation authorization continuity', () => {
     const operation: ProposedOperation = { id: 'upload', kind: 'upload', localRoot: '/source', localPath: '/source/file', remotePath: '/srv/app/file',
       size: data.length, contentSha256: createHash('sha256').update(data).digest('hex'), scope: f.scope };
     expect((await f.executor.execute(operation, operationFingerprint(operation), undefined, { isAuthorized: () => authorized })).status).toBe('failed');
+    expect(f.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('reports a post-review local change as not dispatched, with no remote effects to verify', async () => {
+    const f = fixture(); const data = Buffer.from('file');
+    vi.spyOn(LocalFileAccess.prototype, 'read').mockResolvedValue({ data: Buffer.from('changed'), scope: { path: '/source', kind: 'directory' } });
+    const operation: ProposedOperation = { id: 'upload', kind: 'upload', localRoot: '/source', localPath: '/source/file', remotePath: '/srv/app/file',
+      size: data.length, contentSha256: createHash('sha256').update(data).digest('hex'), scope: f.scope };
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
+    expect(operationOutcome(result)).toMatchObject({ execution: 'not-started', effects: 'none', nextAction: 'revise-operation' });
+    expect(f.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('treats an expired lease before dispatch as a correctable refusal, not an unknown remote outcome', async () => {
+    const f = fixture();
+    const operation: ProposedOperation = { id: 'write', kind: 'write-file', path: '/srv/app/file', content: 'new', scope: f.scope };
+    const result = await f.executor.execute(operation, operationFingerprint(operation), undefined, { isAuthorized: () => false });
+    expect(result).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
     expect(f.writeFile).not.toHaveBeenCalled();
   });
 

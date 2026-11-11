@@ -39,16 +39,16 @@
 | A05 | 统一操作影响分析，供静态分类、防重放、执行、调度和报告共享；分别表示变更、敏感读取、外传和不确定性。 | 2 执行与审核 | 待开始 | 未验收 |
 | A06 | 校准审核策略的风险排序：普通诊断不应因表达形式频繁打断；npm install、make 等项目代码入口不能仅按程序名宽松放行。 | 2 执行与审核 | 待开始 | 未验收 |
 | A07 | 明确静态策略、独立 AI 审核和人工审批的职责；只在需要语义判断时调用 AI，并记录不确定/拒绝/升级原因。 | 2 执行与审核 | 待开始 | 未验收 |
-| B01 | 保存可靠的派发阶段。不能将尚未批准、可证明未派发的 proposed 与可能执行过的操作一律恢复为 unknown。 | 2 执行与审核 | 待开始 | 未验收 |
-| B02 | 分离进程状态、原始退出码、可能影响和业务含义。修复正常诊断非零退出引发的变更风险锁。 | 2 执行与审核 | 待开始 | 未验收 |
-| B03 | 上传本地文件审核后变化等派发前失败，返回明确未执行/无远端影响/修正操作结果。 | 2 执行与审核 | 待开始 | 未验收 |
-| B04 | 统一运行时、持久化恢复、UI 恢复卡和结果解释使用的未决判定。 | 2 执行与审核 | 待开始 | 未验收 |
-| B05 | 分开请求去重、未知结果重试、用户明确的新操作与重复观察。统一预检与安全层的查询能力分类。 | 2 执行与审核 | 待开始 | 未验收 |
-| B06 | 报告状态退出新轮次、防重放清理与执行控制。 | 2 执行与审核 | 待开始 | 未验收 |
-| B07 | 已知资源冲突、未决操作和不支持条件尽量在审批前发现；派发前再核验动态条件。 | 2 执行与审核 | 待开始 | 未验收 |
-| B08 | 定义阻断范围与恢复动作，拆开审计记录和协调控制；避免 OperationAudit.decided 同时隐式决定整轮暂停。 | 2 执行与审核 | 待开始 | 未验收 |
+| B01 | 保存可靠的派发阶段。不能将尚未批准、可证明未派发的 proposed 与可能执行过的操作一律恢复为 unknown。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 恢复时 proposed、以及无执行记录的 approved 判为“未派发、无影响”并给出可修正结果；仅 running 与已有执行记录的 approved 保持 unknown。Tests/desktop/main/operation-recovery.test.ts 6项通过；真实断线/重启链待全量复验
+| B02 | 分离进程状态、原始退出码、可能影响和业务含义。修复正常诊断非零退出引发的变更风险锁。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | terminal-manager 对只读诊断的非零退出保留原退出码但不再标记可能变更，因此不制造变更风险锁；Tests/application/terminal-manager.test.ts 与 host-serial-executor 22项通过；服务 inactive 等真实样本待 H03
+| B03 | 上传本地文件审核后变化等派发前失败，返回明确未执行/无远端影响/修正操作结果。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 新增 failureKind `not-dispatched`：审核后本地文件变化/不可读、租约过期等派发前失败返回 failed+effects:none，执行结果解释为 not-started 与 revise-operation，不要求核验远端；Tests/desktop/worker/file-operation-executor.test.ts 6项与 operation-outcome 通过
+| B04 | 统一运行时、持久化恢复、UI 恢复卡和结果解释使用的未决判定。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 运行时与持久化共用同一未决判定：仅显式 effects:'none' 释放主机写锁，failed 但影响未分类时重启前后都保持锁定；渲染端复用同一规则。host-serial-executor/recovery-ipc/recovery-card 38项与新增反例通过
+| B05 | 分开请求去重、未知结果重试、用户明确的新操作与重复观察。统一预检与安全层的查询能力分类。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 预检改用与 SafetyGate 相同的 isEffectFreeQuery：同轮重复 ss/ip/ping/有界读取属新观察，未知结果与换 ID 重放仍阻断，AI 拒绝仍绑定精确意图且可人工单次复核；新增 5项预检测试与 docker 查询回归通过
+| B06 | 报告状态退出新轮次、防重放清理与执行控制。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 防重放清理不再依赖报告状态：无未决远端结果且无阻塞时，用户明确新指令可重新审核同一意图，真实未决仍阻断；Tests/desktop/worker/task-runner-replay-boundary.test.ts 2项通过
+| B07 | 已知资源冲突、未决操作和不支持条件尽量在审批前发现；派发前再核验动态条件。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 已知主机未决写锁在审批卡与独立审核之前拒绝，只读核验继续可用，派发前串行器再核验同一条件；新增预检反例通过，真实并发仍待 H03
+| B08 | 定义阻断范围与恢复动作，拆开审计记录和协调控制；避免 OperationAudit.decided 同时隐式决定整轮暂停。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 审计记录不再隐式暂停整轮：新增 review-coordination 分类，可修正的请求错误与 AI 拒绝回到模型、策略拒绝与安全组件失败才暂停；连续三次 AI 拒绝仍暂停。Tasksrunner AI 审核/停止回归与新增分类测试通过
 | C01 | SFTP 写入/删除使用正向普通文件检查，补齐读取上限、超时与中断语义。 | 1 安全与数据 | 已实现待验收 | Tests/adapters/sftp-read.test.ts＋ssh-sftp-session.test.ts等5文件48项及工程检查通过；普通文件守卫/有界读取/取消/30秒期限已接入，真实VM文件验收待做；元数据与路径竞态仍归C02/C03 |
-| C02 | 明确原子替换的 owner/group、mode、ACL/xattr 等元数据保持/禁止策略。 | 1 安全与数据 | 待开始 | 未验收 |
+| C02 | 明确原子替换的 owner/group、mode、ACL/xattr 等元数据保持/禁止策略。 | 1 安全与数据 | 已实现待验收 | 原子替换前 setstat 恢复 owner/group 与完整 mode（含 setuid/setgid/sticky），并在代码中写明 SFTP 无法保留 ACL/xattr 的限制；备份副本仍为 0o600。Tests/adapters/ssh-transport.test.ts 13项通过；真实 rsync/ACL 场景待验收 |
 | C03 | 补充有界文件读取、差异/补丁编辑、源版本/哈希校验、写后验证和明确恢复信息；提供 root 文件闭环，不再让模型自行拼暂存＋sudo install。 | 3 工具/文件/环境 | 待开始 | 未验收 |
 | C04 | 命令、文件、服务共享操作级权限意图与后端路由；收敛 legacy root 会话入口；封闭额外参数，拒绝不支持的权限字段。 | 3 工具/文件/环境 | 待开始 | 未验收 |
 | C05 | 优先补齐远端 read/diff/条件写入、服务日志与配置检查等高价值能力；复用 manage_service 的预检→动作→观察方向，统一派发/权限/结果/下一步反馈。 | 3 工具/文件/环境 | 待开始 | 未验收 |
@@ -59,8 +59,8 @@
 | D03 | 基础系统/架构探测不再把 Python 作为唯一引导依赖；短预算先提供基础事实，扩展能力按需探测；区分 SSH 已连接、元数据就绪和执行通道就绪，保留有界失败原因。 | 3 工具/文件/环境 | 待开始 | 未验收 |
 | E01 | 对话删除采用数据库原子处理和跨会话文件目录的可恢复阶段；内存跟随已提交状态。 | 1 安全与数据 | 已完成 | Tests/desktop/main/conversation-deletion.test.ts、conversation-cleanup.test.ts、conversation-ipc.test.ts及structured-message-ipc.test.ts；Tests/smoke/conversation-deletion-smoke.mjs真实Windows桌面删除/失败/重启恢复通过 |
 | E02 | 为原终端引用、发送副本、草稿和共享正文建立归属及回收策略。 | 1 安全与数据 | 已实现待验收 | 前两批`56b9280`/`8428788`完成副本归属与独占启动恢复；第三批schema14原件/草稿lease、接收方撤权、撤销历史、跨草稿复制、共享延迟回收已接入。Tests/adapters/reference-drafts.test.ts、Tests/desktop/main/reference-draft-ipc.test.ts及Tests/smoke/reference-recovery-smoke.mjs等通过；最终252文件2338项及隐藏Windows桌面/剪贴板/UI通过，25项条件跳过。真实SSH终端捕获链仍待H03；旧无来源正文保守保留，不猜测回收，捕获字节预算另属E04 |
-| E03 | 以操作身份绑定日志与脱敏缓冲；unknown/断线关闭也正确归档无换行尾部。 | 2 执行与审核 | 待开始 | 未验收 |
-| E04 | 移除自动引用捕获的无限 pending；以有界流式处理、落盘和明确资源预算支持完整输出。 | 5 UI与性能 | 待开始 | 未验收 |
+| E03 | 以操作身份绑定日志与脱敏缓冲；unknown/断线关闭也正确归档无换行尾部。 | 2 执行与审核 | 已实现待验收 | 终端关闭/命令结束时先 flush 脱敏缓冲的未终止尾部再删除捕获；redaction/sqlite-store/terminal-manager 回归通过；真实断线关闭链待 H03 |
+| E04 | 移除自动引用捕获的无限 pending；以有界流式处理、落盘和明确资源预算支持完整输出。 | 5 UI与性能 | 已实现待验收 | 引用捕获在写入侧即受 4 MiB 上限约束（超出停止落盘并附“输出已截断”说明），脱敏 pending 与读取上限同样有界；Tests/desktop/main/reference-store.test.ts 6项与 sqlite-store 读取上限通过；超长真实日志待验收 |
 | F01 | 普通状态快照与凭据解密解耦；凭据不可用时仍能启动并进入修复设置。 | 1 安全与数据 | 已完成 | `93a79be`；Tests/desktop/main/credential-isolation.test.ts＋Tests/smoke/credential-isolation-smoke.mjs通过；Windows真实损坏密文启动/设置/替换与不可用状态注入通过，跨平台另由H03记录 |
 | F02 | 拆分保存偏好、恢复模型会话、准备 SSH 环境，消除修改思考强度触发重连的隐式副作用。 | 4 终端与生命周期 | 已完成 | `7524e4c`；Tests/desktop/main/conversation-thinking.test.ts、conversation-ipc.test.ts、structured-preparation-integration.test.ts：本地持久化/故障回滚、显式恢复时应用、迟到观测隔离、重复选择及准备撤权；相关4文件124项通过。Tests/smoke/thinking-preference-smoke.mjs及最新构建四项Windows桌面通过，最终235文件2245项和全部工程检查通过；发送/恢复保留现有显式业务连接路径，跨平台/安装包归H03 |
 | F03 | 补齐普通回答正文流式投影；高频全量快照改为增量事件、按会话订阅/历史分页和局部投影；移除高频解密。 | 5 UI与性能 | 待开始 | 未验收 |

@@ -321,7 +321,16 @@ export class SshTransport {
       const temporary = `${absolutePath}.cloudhelm-new-${randomUUID()}`;
       try {
         check(); effects = 'possible';
-        await this.writeSftpFile(sftp, temporary, content, existing ? existing.mode & 0o777 : 0o600, check);
+        await this.writeSftpFile(sftp, temporary, content, existing ? existing.mode : 0o600, check);
+        if (existing) {
+          // Preserve owner/group and full mode including setuid/setgid/sticky. SFTP rename
+          // does not carry ACL/xattr; document that limitation rather than silently dropping.
+          await new Promise<void>((resolve, reject) => {
+            check();
+            sftp.setstat(temporary, { uid: existing.uid, gid: existing.gid, mode: existing.mode },
+              (error) => error ? reject(error) : resolve());
+          });
+        }
         await new Promise<void>((resolve, reject) => {
           check();
           sftp.ext_openssh_rename(temporary, absolutePath, (error) => error ? reject(error) : resolve());

@@ -15,16 +15,18 @@ export interface OperationOutcome {
 export function operationOutcome(result: OperationResult): OperationOutcome {
   const exited = ['succeeded', 'failed'].includes(result.status) && Number.isInteger(result.exitCode) && result.exitCode! >= 0;
   const notStarted = result.status === 'failed' && result.effects === 'none'
-    && (result.failureKind === 'unresolved-prior-operation'
+    && (result.failureKind === 'unresolved-prior-operation' || result.failureKind === 'not-dispatched'
       || exited && result.privilege?.source === 'transport' && result.privilege.businessCommand === 'not-started');
   const execution = notStarted ? 'not-started' : exited ? 'finished' : 'unknown';
   const stopped = result.requiresUserAction || result.authentication === 'failed'
     || ['cancelled', 'timeout', 'attempts-exhausted', 'authentication-rejected', 'authentication-unconfirmed'].includes(result.privilege?.code ?? '');
   const nextAction = stopped ? 'user-decision'
     : canOfferSuFallback(result) ? 'confirm-alternative'
-      : result.failureKind === 'unresolved-prior-operation' || execution === 'unknown'
-        || result.status === 'failed' && result.effects !== 'none' ? 'verify-outcome'
-        : result.status === 'succeeded' ? 'continue' : 'inspect-result';
+      // A dispatch-boundary failure is correctable, not an unresolved remote outcome.
+      : result.status === 'failed' && result.effects === 'none' && result.failureKind === 'not-dispatched' ? 'revise-operation'
+        : result.failureKind === 'unresolved-prior-operation' || execution === 'unknown'
+          || result.status === 'failed' && result.effects !== 'none' ? 'verify-outcome'
+          : result.status === 'succeeded' ? 'continue' : 'inspect-result';
   return { version: 1, execution, effects: result.effects ?? 'unclassified', nextAction, replay: 'never' };
 }
 

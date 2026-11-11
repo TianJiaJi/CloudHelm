@@ -134,7 +134,7 @@ export interface OperationResult {
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
   privilege?: import('./privilege.js').PrivilegeFeedback;
-  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'unknown';
+  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'not-dispatched' | 'unknown';
   effects?: 'none' | 'possible';
   stdoutTail: string;
   /** Redacted observation counts; not evidence of process exit or durable log retention. */

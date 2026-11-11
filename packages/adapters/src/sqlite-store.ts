@@ -412,6 +412,7 @@ export class SqliteStore {
   }
   removeReference(id: string): void { this.raw.prepare('DELETE FROM content_references WHERE id = ?').run(id); }
   readCompleteLog(id: string, expectedLength: number): string {
+    if (expectedLength > 10_485_760) throw new Error('引用捕获日志超过安全限额，请手动选择引用内容');
     const rows = this.raw.prepare('SELECT data FROM terminal_logs WHERE terminal_id = ? ORDER BY id').all(id) as { data: string }[];
     const value = rows.map((row) => row.data).join('');
     if (value.length !== expectedLength) throw new Error('命令日志已不完整，请手动选择引用内容');

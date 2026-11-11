@@ -53,3 +53,33 @@ describe('terminal reference snapshots', () => {
     expect(f.refs.read(f.quote().id).original).toBe('$ print json\n' + chunk + chunk);
   });
 });
+
+describe('bounded reference capture', () => {
+  function bounded(limit: number) {
+    const store = new SqliteStore(':memory:'); stores.push(store);
+    const state = { snapshot: () => ({ terminals: [{ id: 'term', hostId: 'host' }] }), getHost: () => ({ label: 'Production' }),
+      getTask: () => ({ hostIds: ['host'] }) } as unknown as AppState;
+    store.beginReferenceSession('boot'); store.put('hosts', 'host', { id: 'host' });
+    store.createReferenceDraft('draft', 'renderer', { hostId: 'host' });
+    // A small injected bound exercises the same append path as the 4 MiB default.
+    return new ReferenceStore(store, state, limit);
+  }
+  it('stops storing past the capture limit and explains the cut instead of growing forever', () => {
+    const refs = bounded(4096);
+    refs.record({ type: 'terminal-command', terminalId: 'term', generation: 1, phase: 'start', command: 'yes' });
+    const chunk = 'y\n'.repeat(1000);
+    for (let index = 0; index < 6; index++) refs.record({ type: 'terminal-data', terminalId: 'term', data: chunk });
+    refs.record({ type: 'terminal-command', terminalId: 'term', generation: 1, phase: 'end', exitCode: 0 });
+    const text = refs.read(refs.quote({ draftId: 'draft', terminalId: 'term', hostId: 'host' }, 'renderer').id).original;
+    expect(text.length).toBeLessThanOrEqual(4096 + 200);
+    expect(text).toContain('输出已截断');
+  });
+  it('keeps a short capture complete without a truncation marker', () => {
+    const refs = bounded(4096);
+    refs.record({ type: 'terminal-command', terminalId: 'term', generation: 1, phase: 'start', command: 'ls' });
+    refs.record({ type: 'terminal-data', terminalId: 'term', data: 'a b\n' });
+    refs.record({ type: 'terminal-command', terminalId: 'term', generation: 1, phase: 'end', exitCode: 0 });
+    const text = refs.read(refs.quote({ draftId: 'draft', terminalId: 'term', hostId: 'host' }, 'renderer').id).original;
+    expect(text).toBe('$ ls\na b\n');
+  });
+});

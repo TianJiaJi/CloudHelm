@@ -195,7 +195,7 @@ export interface OperationView {
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
   privilege?: import('./privilege.js').PrivilegeFeedbackView;
-  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'unknown';
+  failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'not-dispatched' | 'unknown';
   effects?: 'none' | 'possible';
   loginAs?: string;
   runAs?: string;
@@ -222,6 +222,9 @@ export type OperationOutcomeState = Pick<OperationView, 'readOnly' | 'status' | 
  * True while a non-read-only operation's recorded remote outcome still gates
  * host writes and blocks acceptance. In-flight operations count as unresolved:
  * they are never resolved by guessing, only by their real completion.
+ * HostSerialExecutor applies the same verdict to a fresh OperationResult
+ * (unknown / handed-over / failed without effects:'none'), so one fact cannot
+ * unlock now and lock again after a restart.
  */
 export function operationNeedsVerification(operation: OperationOutcomeState): boolean {
   if (operation.readOnly || operation.reconciledAt) return false;

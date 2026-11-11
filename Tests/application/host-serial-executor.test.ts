@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OperationResult, ProposedOperation } from '@cloudhelm/core';
+import { operationNeedsVerification } from '@cloudhelm/contracts';
 import { HostSerialExecutor } from '../../packages/application/src/host-serial-executor.js';
 
 const operation: ProposedOperation = { id: 'one', kind: 'command', command: 'sleep 10', scope: {
@@ -135,4 +136,21 @@ it('retains a write lock when a stopped process later exits with partial effects
   await remoteCompletion;
   expect(await serial.execute({ ...operation, id: 'retry' }, 'fingerprint')).toMatchObject({ status: 'failed', effects: 'none' });
   expect(serial.reconcile('host', 'one')).toBe(true);
+});
+
+it('keeps one unresolved verdict for a failure whose effects were never classified', async () => {
+  // Runtime and restart must agree: only an explicit effects:'none' releases the lock,
+  // so a failure without effect evidence still holds it before and after recovery.
+  const downstream = { execute: vi.fn().mockResolvedValueOnce({ operationId: 'one', status: 'failed', stdoutTail: '' })
+    .mockResolvedValue({ operationId: 'two', status: 'succeeded', stdoutTail: '' }) };
+  const serial = new HostSerialExecutor(downstream);
+  const result = await serial.execute(operation, 'fingerprint');
+  expect(result.status).toBe('failed');
+  expect(result.effects).toBeUndefined();
+  expect(await serial.execute({ ...operation, id: 'retry' }, 'fingerprint'))
+    .toMatchObject({ status: 'failed', failureKind: 'unresolved-prior-operation' });
+  // The persisted view of the same fact is unresolved too (contracts rule).
+  expect(operationNeedsVerification({ readOnly: false, status: 'failed', effects: undefined })).toBe(true);
+  expect(serial.reconcile('host', 'one')).toBe(true);
+  expect((await serial.execute({ ...operation, id: 'after-review' }, 'fingerprint')).status).toBe('succeeded');
 });

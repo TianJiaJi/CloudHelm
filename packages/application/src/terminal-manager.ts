@@ -9,6 +9,7 @@ type Owner = 'agent' | 'human' | 'suspended' | 'closed';
 interface PendingCommand {
   generation: number;
   pid?: number;
+  readOnly?: boolean;
   isAuthorized(): boolean;
   onProcessStarted?: (event: { pid: number }) => void;
   capture: OperationOutputCapture;
@@ -221,7 +222,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       const current = () => !signal?.aborted && terminal.owner === 'agent'
         && terminal.generation === operation.scope.terminalGeneration && options?.isAuthorized?.() !== false;
       const pending: PendingCommand = { generation: operation.scope.terminalGeneration, isAuthorized: current, onProcessStarted: options?.onProcessStarted,
-        capture: new OperationOutputCapture(), operationId: operation.id, settle: resolve,
+        readOnly: options?.readOnly, capture: new OperationOutputCapture(), operationId: operation.id, settle: resolve,
         remoteCompletion, completeRemote, reported: false };
       terminal.pending = pending;
       this.events.command?.(terminal.id, terminal.generation, { phase: 'start', command: operation.command });
@@ -264,7 +265,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     const result: OperationResult = { operationId: pending.operationId,
       status: exitCode === undefined ? 'unknown' : exitCode === 0 ? 'succeeded' : 'failed',
       failureKind: exitCode === undefined ? 'unknown' : exitCode && /permission denied|operation not permitted/iu.test(pending.capture.text) ? 'permission-denied' : undefined,
-      effects: exitCode === 0 ? undefined : 'possible', ...pending.failure,
+      effects: exitCode === 0 || pending.readOnly ? undefined : 'possible', ...pending.failure,
       exitCode, ...pending.capture.snapshot(), logRef: terminal.id };
     this.events.completed?.(result);
     if (!pending.reported) pending.settle(result);

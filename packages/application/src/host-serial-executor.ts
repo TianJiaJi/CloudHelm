@@ -1,6 +1,13 @@
 import type { ExecutionOptions, HostRiskBinding, OperationExecutor, OperationResult, ProposedOperation } from '@cloudhelm/core';
 import { HostRiskDomains } from './host-risk-domains.js';
 
+/** Same verdict as the persisted view rule (contracts operationNeedsVerification):
+ * a failure whose effects were not proven absent still holds the host write lock,
+ * both now and after a restart. Only an explicit effects:'none' releases it. */
+const unresolvedResult = (result: Pick<OperationResult, 'status' | 'effects'>): boolean =>
+  result.status === 'unknown' || result.status === 'handed-over'
+  || (result.status === 'failed' && result.effects !== 'none');
+
 /**
  * Serializes Agent writes across tasks sharing one target host.
  *
@@ -46,9 +53,7 @@ export class HostSerialExecutor implements OperationExecutor {
     if (this.backgroundObservations.has(key)) { this.backgroundObservations.set(key, result); return; }
     const pending = this.unsettled.get(hostId);
     if (!pending?.has(result.operationId)) return;
-    const unresolved = result.status === 'unknown' || result.status === 'handed-over'
-      || (result.status === 'failed' && result.effects === 'possible');
-    if (unresolved) pending.set(result.operationId, null);
+    if (unresolvedResult(result)) pending.set(result.operationId, null);
     else pending.delete(result.operationId);
     if (!pending.size) this.unsettled.delete(hostId);
   }
@@ -137,9 +142,7 @@ export class HostSerialExecutor implements OperationExecutor {
       }
       const late = this.backgroundObservations.get(observationKey);
       this.backgroundObservations.delete(observationKey);
-      const unresolved = result.status === 'unknown' || result.status === 'handed-over'
-        || (result.status === 'failed' && result.effects === 'possible');
-      if (!options?.readOnly && unresolved) {
+      if (!options?.readOnly && unresolvedResult(result)) {
         this.track(hostId, operation.id, result.remoteCompletion ?? null);
         if (late && ['unknown', 'handed-over'].includes(result.status)) this.observe(hostId, late);
       }
