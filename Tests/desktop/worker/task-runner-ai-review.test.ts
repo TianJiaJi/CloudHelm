@@ -56,8 +56,11 @@ describe('AI denial manual review', () => {
       const approvedTerminal = opened[takeover ? 1 : 0]!;
       expect(requestApproval).toHaveBeenCalledOnce();
       expect(execute).toHaveBeenCalledOnce();
+      // The reviewed scope must name the approval terminal's current authorization
+      // generation. Stopping the round no longer bumps it implicitly, so an idle
+      // terminal keeps exactly the generation the fresh approval reviewed.
       expect(execute.mock.calls[0]![0]).toMatchObject({ command: 'python3 -c "print(1)"',
-        scope: { terminalId: approvedTerminal, terminalGeneration: terminal.currentGeneration(approvedTerminal) - 1 } });
+        scope: { terminalId: approvedTerminal, terminalGeneration: terminal.currentGeneration(approvedTerminal) } });
       expect(execute.mock.calls[0]![0].id).not.toBe(denied.value.id);
       await expect(runner.requestAiDenialReview(denied.value.id)).rejects.toThrow('不可复核');
       runner.setReviewProfile({ selection: { kind: 'model', provider: 'cloudhelm-custom', modelId: 'auditor-2' },

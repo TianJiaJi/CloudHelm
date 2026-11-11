@@ -653,7 +653,8 @@ export class TaskRunner {
     this.publishExecution();
     if (this.status === 'answered') this.finishRun();
     else if (!this.isRunning()) this.journal.finalize(this.verification.id);
-    if (!this.isRunning() && this.status !== 'answered' && operation.logRef) this.terminal.releaseIdle(operation.logRef);
+    // A finished operation never converts its terminal into a human shell by itself;
+    // only the user typing (or an explicit takeover request) does that.
   }
 
   /** Cross-conversation recovery resolves outcomes this task may have created earlier. */
@@ -718,11 +719,16 @@ export class TaskRunner {
   isRunning(): boolean { return ['running', 'waiting-review', 'waiting-user', 'recovering'].includes(this.status); }
 
   terminalInput(terminalId: string, data: string): void {
-    if (data === '\u0003' && (this.isRunning() || this.terminal.hasPending(terminalId))) {
-      this.stopOperation('ctrl-c'); return;
+    // Ctrl+C is precise job control first: it interrupts exactly the command this
+    // terminal is running, never unrelated work in the same conversation or task.
+    if (data === '\u0003' && this.terminal.hasPending(terminalId)) {
+      this.terminal.stopCommand(terminalId); return;
     }
+    if (data === '\u0003' && this.isRunning()) { this.stopOperation('ctrl-c'); return; }
     if (this.isRunning()) throw new Error('AI 正在运行，请先停止再输入');
     if (this.terminal.hasPending(terminalId)) throw new Error('终端暂不可输入，请先停止 AI 并等待命令退出');
+    // Typing is the explicit human takeover, and only this call makes the channel
+    // human-owned; nothing else in the backend hands the AI terminal to a shell.
     this.terminal.releaseIdle(terminalId);
     this.terminal.input(terminalId, data, true);
   }
@@ -799,7 +805,8 @@ export class TaskRunner {
     if (status === 'paused' || status === 'failed') this.journal.finalize(this.verification.id);
     this.publishExecution();
     if (!this.isRunning()) { this.signals.clearCredentials?.(); if (!this.background.hasLive) this.privileged?.close(); }
-    if (!this.isRunning() && status !== 'answered') this.terminalPool.releaseIdle();
+    // Pausing must not silently open a usable human shell; the channel stays
+    // Agent-owned and idle so it can be reused instead of being consumed.
     this.signals.event({ type: 'task-status', taskId: this.task.id, status, summary, resumeReason, requestCount: this.requestCount });
   }
 }

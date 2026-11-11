@@ -2,7 +2,7 @@ import type { ExecutionTerminalBinding, ExecutionTerminalView } from '@cloudhelm
 import type { TerminalManager } from './terminal-manager.js';
 
 interface Entry extends ExecutionTerminalBinding { terminalId: string; generation: number }
-type Authority = Pick<TerminalManager, 'hostOf' | 'taskOf' | 'currentGeneration' | 'isAgentOwner' | 'stateOf' | 'hasPending' | 'close' | 'releaseIdle'>;
+type Authority = Pick<TerminalManager, 'hostOf' | 'taskOf' | 'currentGeneration' | 'isAgentOwner' | 'stateOf' | 'hasPending' | 'close'>;
 const key = (binding: ExecutionTerminalBinding) => JSON.stringify([binding.hostId, binding.loginAs, binding.connectionId]);
 
 /** Bounded ordinary-Agent pool. Reuse never takes a human terminal or revives an
@@ -79,9 +79,6 @@ export class ConversationTerminalPool {
     return [...this.entries.values()].map((entry) => ({ ...entry, taskId: this.taskId,
       generation: this.terminal.currentGeneration(entry.terminalId), owner: this.terminal.stateOf(entry.terminalId) ?? 'closed',
       busy: this.terminal.hasPending(entry.terminalId) }));
-  }
-  releaseIdle(): void {
-    for (const id of this.entries.keys()) if (this.terminal.taskOf(id) === this.taskId) this.terminal.releaseIdle(id);
   }
   dispose(): void {
     this.disposed = true;
