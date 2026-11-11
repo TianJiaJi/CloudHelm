@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useUi } from './store.js';
 import { fitTerminal } from './terminal-fit.js';
+import { atViewportTail } from './terminal-follow.js';
 import { useShortcuts } from './shortcut-store.js';
 import { isMacPlatform, menuHint, type ShortcutActionId, type ShortcutContext } from './shortcuts.js';
 import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
@@ -16,6 +17,10 @@ export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
   const holder = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const shown = useRef(0);
+  // Following the tail is a user-visible state, never an assumption: continuous
+  // output that keeps force-scrolling prevents reading scrollback at all.
+  const followed = useRef(true);
+  const [pendingBelow, setPendingBelow] = useState(false);
   const tab = useUi((state) => state.terminals[terminalId]);
   const bindings = useShortcuts((state) => state.bindings);
   const shortcutsEnabled = useShortcuts((state) => state.enabled);
@@ -56,6 +61,11 @@ export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
     const stopFitting = fitTerminal(xterm, element, (cols, rows) => {
       void window.cloudhelm.resizeTerminal(terminalId, cols, rows).catch(showError);
     });
+    const stopScrollTracking = xterm.onScroll(() => {
+      const buffer = xterm.buffer.active;
+      followed.current = atViewportTail(buffer.viewportY, buffer.baseY);
+      if (followed.current) setPendingBelow(false);
+    });
     const unregister = registerTerminalActions(terminalId, {
       getSelection: () => xterm.getSelection(),
       paste: (text) => xterm.paste(text),
@@ -64,8 +74,8 @@ export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
       focus: () => xterm.focus()
     });
     return () => {
-      unregister(); stopFitting(); dispose.dispose(); media.removeEventListener('change', updateTheme); xterm.dispose();
-      terminal.current = null; shown.current = 0;
+      unregister(); stopFitting(); stopScrollTracking.dispose(); dispose.dispose(); media.removeEventListener('change', updateTheme); xterm.dispose();
+      terminal.current = null; shown.current = 0; followed.current = true;
     };
   }, [terminalId, report]);
 
@@ -78,8 +88,10 @@ export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
     const incoming = tab.buffer.slice(shown.current - tab.offset);
     if (incoming) xterm.write(incoming, () => {
       // xterm writes asynchronously. Following before the callback can leave
-      // the viewport above output that has not been parsed yet.
-      if (terminal.current === xterm) xterm.scrollToBottom();
+      // the viewport above output that has not been parsed yet. Reading history
+      // is never interrupted; the indicator below names the new output instead.
+      if (terminal.current !== xterm) return;
+      if (followed.current) xterm.scrollToBottom(); else setPendingBelow(true);
     });
     shown.current = tab.offset + tab.buffer.length;
   }, [terminalId, tab?.buffer, tab?.offset]);
@@ -106,6 +118,16 @@ export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
     ];
   }
 
+  function jumpToTail(): void {
+    followed.current = true;
+    setPendingBelow(false);
+    terminal.current?.scrollToBottom();
+  }
+
   return <div className={styles.terminal} aria-label="SSH terminal" data-shortcut-scope="terminal"
-    onContextMenu={(event) => openContextMenu(event, menuEntries(), '终端操作')}><div className={styles.terminalViewport} ref={holder} /></div>;
+    onContextMenu={(event) => openContextMenu(event, menuEntries(), '终端操作')}>
+    <div className={styles.terminalViewport} ref={holder} />
+    {pendingBelow && <button type="button" className={styles.terminalNewOutput}
+      onClick={jumpToTail}>有新输出 · 跳到末尾</button>}
+  </div>;
 }
