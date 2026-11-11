@@ -93,6 +93,16 @@ describe('E01: atomic conversation record deletion', () => {
     expect(f.store.get('operations', 'other-operation')).toBeDefined();
   });
 
+  it('retains shared bodies referenced by another conversation input and collects them with the last owner', () => {
+    const f = setup(); const body = f.store.readReference<ReferenceBody>('reference')!;
+    f.store.put('conversation-inputs', 'queued-elsewhere', { id: 'queued-elsewhere', taskId: f.other.id, status: 'queued',
+      document: { requestId: 'queued-request', parts: [{ type: 'reference', reference: body.reference }] } });
+    f.state.deleteTask(f.task.id);
+    expect(f.store.readReference('reference')).toEqual(body);
+    f.store.commitConversationDeletion(f.other.id, [], []);
+    expect(f.store.readReference('reference')).toBeUndefined();
+  });
+
   it('commits an explicit cleanup receipt with deletion and retains unrelated conversations', () => {
     const f = setup(); f.events.length = 0;
     f.state.deleteTask(f.task.id);

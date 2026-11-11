@@ -86,7 +86,7 @@ export function registerConversationIpc({ store, references, sessionRoot, cleanu
     await syncThinking(task.id);
   }
 
-  async function start(input: ConversationStart, document?: MessageDocument, initialMessage?: string, intent?: string, assertPrepared?: (scopes: LocalScope[]) => void): Promise<TaskView> {
+  async function start(input: ConversationStart, document?: MessageDocument, initialMessage?: string, intent?: string, assertPrepared?: (scopes: LocalScope[]) => void, onCreated?: (id: string) => void): Promise<TaskView> {
     if (!input || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 100_000
       || (input.hostId !== null && (typeof input.hostId !== 'string' || !input.hostId.trim()))) throw new Error('请输入有效内容并选择主机');
     const profile = state.runtimeProfile(input.model);
@@ -99,6 +99,7 @@ export function registerConversationIpc({ store, references, sessionRoot, cleanu
       const task = state.createTask(input.message, input.hostId ? [input.hostId] : [], profile.modelId, scopes);
       persisted = true;
       return await lifecycle.use(task.id, async () => {
+        onCreated?.(task.id);
         state.setTaskModel(task.id, profile);
         if (input.thinkingLevel !== undefined) state.thinkingPreferences.set(task.id, input.thinkingLevel);
         const current = state.getTask(task.id);

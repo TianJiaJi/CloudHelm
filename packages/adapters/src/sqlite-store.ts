@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import type { ReferenceBody } from '@cloudhelm/core';
+import { migrateReferencePreparations, ReferencePreparations, type ReferencePreparationReceipt } from './sqlite-reference-preparations.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { and, eq } from 'drizzle-orm';
 import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
@@ -63,12 +65,18 @@ export interface ConversationCleanup {
 export class SqliteStore {
   private readonly raw: Database.Database;
   private readonly db;
+  private readonly referencePreparations: ReferencePreparations;
 
   constructor(file: string) {
     this.raw = new Database(file);
     try {
       this.migrate();
       this.db = drizzle(this.raw);
+      this.referencePreparations = new ReferencePreparations(this.raw, {
+        body: (id, value) => this.putReference(id, value),
+        receipt: (id, value) => this.put('message-receipts', id, value),
+        remove: (id) => this.removeReference(id)
+      });
     } catch (error) { this.raw.close(); throw error; }
   }
 
@@ -204,7 +212,16 @@ export class SqliteStore {
         INSERT INTO schema_migrations(version, applied_at) VALUES (11, unixepoch());
       `);
     }).immediate();
+    migrateReferencePreparations(this.raw);
   }
+
+  /** Bodies, request ownership and the dispatch receipt commit before any runtime call. */
+  commitReferencePreparation(id: string, receipt: ReferencePreparationReceipt, bodies: ReferenceBody[]): void {
+    this.referencePreparations.commit(id, receipt, bodies);
+  }
+
+  bindReferencePreparation(id: string, taskId: string): void { this.referencePreparations.bind(id, taskId); }
+  discardUnboundReferencePreparation(id: string): void { this.referencePreparations.discardUnbound(id); }
 
   get<T>(bucket: string, id: string): T | undefined {
     const row = this.db.select({ value: records.value }).from(records)
@@ -294,7 +311,7 @@ export class SqliteStore {
         WHERE bucket = 'message-receipts' AND json_extract(value, '$.conversationId') = ?`)
         .all(taskId, taskId) as Array<{ owner: string }>;
       this.put('conversation-cleanups', taskId, { version: 1, taskId, ...(sessionId ? { sessionId } : {}), createdAt: Date.now() } satisfies ConversationCleanup);
-      for (const id of referenceIds) this.removeReference(id);
+      const candidates = [...referenceIds, ...this.referencePreparations.detachConversation(taskId)];
       for (const bucket of ['operations', 'messages', 'clarifications', 'verification-reports', 'conversation-inputs']) {
         this.removeWhere(bucket, 'taskId', taskId);
       }
@@ -307,6 +324,8 @@ export class SqliteStore {
       }
       for (const id of logIds) this.removeLogs(id);
       this.remove('tasks', taskId);
+      // Recheck durable message, queued-input and preparation owners after removing this task's records.
+      this.referencePreparations.collect(candidates);
     }).immediate();
   }
 

@@ -17,6 +17,7 @@ function setup() {
   const lifecycle = { deleting: false };
   const bodies = new Map<string, ReferenceBody>();
   const task = { id: 'task', hostIds: ['host'] } as TaskView;
+  store.put('tasks', task.id, task);
   let budgetActive: (id: string, taskId?: string) => boolean = () => false;
   const inputBudget = vi.fn(); const execution = { model: 'idle', remote: 'idle', stopping: false, canStop: false };
   const state = { requestBudgets: { input: inputBudget },

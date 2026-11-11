@@ -42,6 +42,12 @@ try {
       put.run('tasks', id, JSON.stringify({ id, goal: id, hostIds: [], localScopes: [], status: 'answered',
         provider: 'vercel-ai-gateway', modelId: 'anthropic/claude-sonnet-4.5', requestCount: 0, requestLimit: 100,
         createdAt: 1, updatedAt: 1, session: { version: 1, id } }));
+      const reference = { id: `prepared-${id}`, kind: 'paste', capturedAt: 1 };
+      database.prepare('INSERT INTO content_references(id,value) VALUES(?,?)')
+        .run(reference.id, JSON.stringify({ reference, original: 'synthetic held copy, never dispatched' }));
+      database.prepare('INSERT INTO reference_preparations(request_id,conversation_id,reference_ids) VALUES(?,?,?)')
+        .run(`request-${id}`, id, JSON.stringify([reference.id]));
+      put.run('message-receipts', `request-${id}`, JSON.stringify({ fingerprint: 'synthetic', state: 'dispatching', conversationId: id }));
       await mkdir(path.join(sessions, id), { recursive: true });
       await writeFile(path.join(sessions, id, 'native.jsonl'), 'synthetic session, never restored');
     }
@@ -61,11 +67,21 @@ try {
   assert.equal(warning.includes(userData), false);
   const ids = await second.page.evaluate(async () => (await window.cloudhelm.snapshot()).conversations.map((task) => task.id));
   assert.deepEqual(ids, ['keep-other']); assert.equal(await exists(foreignFile), true);
+  const referenceState = await second.page.evaluate(async () => {
+    const removed = [];
+    for (const id of ['prepared-delete-normal', 'prepared-delete-deferred']) {
+      try { await window.cloudhelm.readReference(id); removed.push(false); } catch { removed.push(true); }
+    }
+    return { removed, retained: (await window.cloudhelm.readReference('prepared-keep-other')).original };
+  });
+  assert.deepEqual(referenceState, { removed: [true, true], retained: 'synthetic held copy, never dispatched' });
   await second.close();
   const pending = new Database(databasePath, { readonly: true });
   try {
     assert.equal(pending.prepare("SELECT count(*) AS count FROM records WHERE bucket='conversation-cleanups'").get().count, 1);
     assert.equal(pending.prepare("SELECT count(*) AS count FROM records WHERE bucket='tasks'").get().count, 1);
+    assert.equal(pending.prepare('SELECT count(*) AS count FROM reference_preparations').get().count, 1);
+    assert.deepEqual(pending.prepare('SELECT id FROM content_references').all(), [{ id: 'prepared-keep-other' }]);
   } finally { pending.close(); }
   // Repair the synthetic root substitution. Production startup must consume the durable redo receipt.
   await rm(deferred, { recursive: true }); await rename(saved, deferred);
@@ -80,7 +96,8 @@ try {
   finally { recovered.close(); }
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ check: 'conversation-deletion-smoke', normalDeletion: true, deferredCleanup: true,
-    restartRecovery: true, unrelatedDataPreserved: true, paidModelRequests: 0, virtualMachineConnections: 0 }));
+    restartRecovery: true, unrelatedDataPreserved: true, preparedReferencesReclaimed: true, otherReferenceRetained: true,
+    paidModelRequests: 0, virtualMachineConnections: 0 }));
 } finally {
   await cleanupDesktopSmoke(instances, userData, (message) => console.warn(message));
 }

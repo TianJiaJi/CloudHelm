@@ -79,6 +79,8 @@ pnpm test:desktop:packaged
 
 ## 修复专项回归入口
 
+- `adapters/reference-preparations.test.ts`、`desktop/main/reference-preparation-lifecycle.test.ts`、`reference-start-binding.test.ts`：schema12迁移回滚、准备副本与凭据原子写入、显式归属与运行前绑定、持久归属重启及故障关闭；`conversation-deletion.test.ts`补共享排队引用，`pnpm test:deletion`补真实桌面准备副本回收/其他对话保留。原件与草稿回收不因此算完成。
+
 - `scripts/repair-coverage.test.ts`：42父项与12UI包的完整性和状态约束；清单通过不代表产品验收通过。
 - `desktop/main/credential-isolation.test.ts`：合成OS凭据与真实SQLite，验证快照不解密、损坏凭据可替换、配置/密钥/审核设置事务回滚及单次通知。
 - `pnpm test:credentials`：先 `pnpm build`，再使用全新临时数据库启动真实Electron；以故意损坏的合成密文验证启动和设置可用、以注入不可用状态验证纯投影、通过真实IPC和OS加密替换合成Key。不会读取用户凭据、请求外部模型或连接用户主机；不截图、不保存trace，结束清理临时目录。

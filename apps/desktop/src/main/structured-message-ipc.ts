@@ -10,7 +10,7 @@ import type { ReferenceStore } from './reference-store.js';
 
 interface Dependencies {
   state: AppState; store: SqliteStore; runtime: RuntimeBridge; references: ReferenceStore;
-  start(input: ConversationStart, document?: MessageDocument, initialMessage?: string, intent?: string, assertPrepared?: (scopes: import('@cloudhelm/contracts').LocalScope[]) => void): Promise<TaskView>;
+  start(input: ConversationStart, document?: MessageDocument, initialMessage?: string, intent?: string, assertPrepared?: (scopes: import('@cloudhelm/contracts').LocalScope[]) => void, onCreated?: (id: string) => void): Promise<TaskView>;
   send(id: string, text: string, tokens: string[], document?: MessageDocument, intent?: string, prepared?: PreparedContext, queueMode?: import('@cloudhelm/contracts').ConversationInputKind): Promise<void>;
   previewSelections?(tokens: string[]): import('@cloudhelm/contracts').LocalScope[];
   ensureRuntime?(task: TaskView): Promise<void>;
@@ -128,9 +128,9 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       if (job.canceled) throw new Error('已取消发送，草稿已保留');
       if (!job.current()) throw new Error('模型已变化，请重新发送以核对容量');
       if (task && (!prepared?.preparedContext?.revision || !prepared.preparedContext.beforeRevision)) throw new Error('准备版本确认不可用，消息未投递');
-      for (const body of prepared.bodies) references.save(body);
+      store.commitReferencePreparation(id, { ...receipt, state: 'dispatching' }, prepared.bodies);
+      receipt.state = 'dispatching';
       job.dispatching = true;
-      receipt.state = 'dispatching'; store.put('message-receipts', id, receipt);
       let conversationId = input.conversationId;
       if (conversationId) {
         const args: Parameters<typeof send> = [conversationId, prepared.text, input.localSelectionTokens, prepared.document, prepared.intent, prepared.preparedContext];
@@ -143,12 +143,20 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
         const created = await start({ hostId: input.hostId, message: title, model: input.model,
           thinkingLevel: input.thinkingLevel, localSelectionTokens: input.localSelectionTokens }, prepared.document, prepared.text, prepared.intent, (currentScopes) => {
           if (job.canceled || !job.current?.() || JSON.stringify(currentScopes) !== JSON.stringify(scopes)) throw new Error('发送准备绑定已变化，草稿已保留');
+        }, (createdId) => {
+          // Record the identity before any model/runtime dispatch, not only after its response.
+          receipt.conversationId = createdId;
+          store.bindReferencePreparation(id, createdId);
         });
         conversationId = created.id;
       }
+      store.bindReferencePreparation(id, conversationId);
       store.put('message-receipts', id, { fingerprint, state: 'sent', conversationId });
       return { conversationId };
     } catch (error) {
+      // No created-task callback means start failed before it could dispatch a runtime request.
+      // Once bound, keep evidence even on a failed/unknown response; deletion reclaims it.
+      if (!input.conversationId && !receipt.conversationId) store.discardUnboundReferencePreparation(id);
       let ownerExists = true;
       if (receipt.conversationId) { try { state.getTask(receipt.conversationId); } catch { ownerExists = false; } }
       if (ownerExists && (!job.dispatching || (error instanceof Error && !/timed out|运行进程|runtime stopped/iu.test(error.message)))) {
