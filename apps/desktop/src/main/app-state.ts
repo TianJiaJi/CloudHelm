@@ -1,5 +1,6 @@
 import { AgentActivityStore } from './agent-activity-store.js';
 import { ConversationInputStore } from './conversation-input-store.js';
+import { ConversationThinking, taskWithModel } from './conversation-thinking.js';
 import { recoverOperation } from './operation-recovery.js';
 import { createHostSettings, editHostSettings, readHostCredentials } from './host-settings.js';
 import type { HostCredentialsPatch } from '@cloudhelm/contracts';
@@ -40,6 +41,7 @@ function validBindings(input: unknown): Record<string, string> {
 
 export class AppState {
   readonly requestBudgets: RequestBudgetAuthority;
+  readonly thinkingPreferences: ConversationThinking;
   private budgetPreparationActive: (requestId: string, taskId?: string) => boolean = () => false;
   private readonly hosts = new Map<string, HostView>();
   private readonly terminals = new Map<string, TerminalViewState>();
@@ -75,6 +77,8 @@ export class AppState {
         : { ...task, localScopes: task.localScopes ?? [], reviewModesByHost: task.reviewModesByHost ?? {}, reviewRevision: task.reviewRevision ?? 1,
           ...(task.status === 'waiting-user' ? { status: 'paused' as const } : {}) });
     this.inputStore = new ConversationInputStore(store, (id) => !this.closed && this.tasks.has(id));
+    this.thinkingPreferences = new ConversationThinking(store, (id) => this.getTask(id),
+      (task) => this.tasks.set(task.id, task), () => this.publish());
     for (const request of store.list<ClarificationRequest>('clarifications')) {
       const restored = request.status === 'pending' ? { ...request, status: 'expired' as const } : request;
       this.clarifications.set(restored.id, restored);
@@ -245,6 +249,7 @@ export class AppState {
     // No projection or input-ledger mutation is allowed before the transaction commits.
     this.inputStore.forgetTask(id);
     this.agentActivity.remove(id);
+    this.thinkingPreferences.forget(id);
     this.tasks.delete(id);
     this.deletedTasks.add(id);
     for (const [key, operation] of [...this.operations]) if (operation.taskId === id) {
@@ -443,15 +448,11 @@ export class AppState {
 
   setTaskModel(id: string, profile: RuntimeProfile, live = false): void {
     const task = this.getTask(id);
+    const updated = taskWithModel(task, profile, live);
+    this.store.put('tasks', id, updated);
+    Object.assign(task, updated); // Preserve existing caller identity, but only after durable commit.
     delete this.contextUsage[id];
-    if (!live) {
-      const choice = modelThinking(profile, task.thinking?.selected);
-      task.thinking = { ...choice, effective: task.thinking?.effective ?? choice.selected, pending: true };
-    }
-    Object.assign(task, { provider: profile.provider, modelId: profile.modelId, baseUrl: profile.baseUrl,
-      contextWindow: profile.contextWindow, maxTokens: profile.maxTokens,
-      credentialRevision: profile.credentialRevision, updatedAt: Date.now() });
-    this.store.put('tasks', id, task);
+    this.thinkingPreferences.forget(id);
     this.publish();
   }
 
@@ -696,12 +697,7 @@ export class AppState {
         if (event.value) this.reasoningProgress[event.taskId] = event.value;
         else delete this.reasoningProgress[event.taskId];
         break;
-      case 'thinking': {
-        const task = this.getTask(event.taskId);
-        task.thinking = event.value;
-        this.store.put('tasks', task.id, task);
-        break;
-      }
+      case 'thinking': this.thinkingPreferences.observe(event.taskId, event.value); break;
       case 'execution':
         if (this.tasks.has(event.taskId)) this.execution[event.taskId] = event.value;
         break;
@@ -738,6 +734,7 @@ export class AppState {
   }
 
   runtimeStopped(): void {
+    this.thinkingPreferences.invalidate();
     this.agentActivity.runtimeStopped();
     if (!this.closed) this.inputStore.invalidate();
     for (const value of Object.values(this.reasoningProgress)) value.reasoning = { ...value.reasoning, status: 'interrupted' };

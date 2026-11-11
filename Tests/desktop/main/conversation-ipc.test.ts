@@ -43,6 +43,13 @@ function setup(task = makeConversation(), running = false) {
     requestBudgets: { input: vi.fn(), complete: vi.fn(),
       current: vi.fn(() => task.budget ?? legacyRequestBudget('fixture-round', task.requestCount, task.requestLimit)),
       reopen: vi.fn(() => task.budget ?? legacyRequestBudget('fixture-round', task.requestCount, task.requestLimit)) },
+    thinkingPreferences: {
+      set: vi.fn((id: string, level: import('@cloudhelm/contracts').ThinkingLevel) => {
+        const current = conversations.get(id)!;
+        current.thinking = { levels: ['off', 'low', 'high', 'max'], selected: level, effective: 'off', pending: true };
+      }),
+      pending: vi.fn((id: string) => conversations.get(id)?.thinking?.selected)
+    },
     runtimeProfile: vi.fn(() => ({ ...profile })),
     conversationProfile: vi.fn(() => ({ ...profile })),
     runtimeReviewerForLiveTask: vi.fn((current: TaskView) => ({ selection: { kind: 'current' as const },
@@ -84,6 +91,52 @@ function setup(task = makeConversation(), running = false) {
 beforeEach(() => ipc.handlers.clear());
 
 describe('conversation IPC authorization boundary', () => {
+  it('does not contact runtime if preference persistence fails', async () => {
+    const f = setup();
+    f.state.thinkingPreferences.set.mockImplementation(() => { throw new Error('synthetic persistence failure'); });
+    await expect(invoke('set-conversation-thinking', 'conversation-one', 'low')).rejects.toThrow('synthetic persistence failure');
+    expect(f.call).not.toHaveBeenCalled(); expect(f.connectHost).not.toHaveBeenCalled();
+  });
+  it('retains a saved preference when the existing runtime is unavailable', async () => {
+    const f = setup(); f.call.mockRejectedValueOnce(new Error('synthetic transport failure'));
+    await expect(invoke('set-conversation-thinking', 'conversation-one', 'low')).rejects.toThrow('偏好已保存');
+    expect(f.conversations.get('conversation-one')?.thinking?.selected).toBe('low');
+    expect(f.connectHost).not.toHaveBeenCalled();
+  });
+  it('applies an offline preference only when a later genuine input restores the conversation', async () => {
+    const task = { ...makeConversation(), provider: 'deepseek', modelId: 'deepseek-flash' };
+    const f = setup(task);
+    await invoke('set-conversation-thinking', task.id, 'low');
+    expect(f.connectHost).not.toHaveBeenCalled();
+    await invoke('send-message', task.id, 'continue', []);
+    expect(f.call).toHaveBeenCalledWith(expect.objectContaining({ method: 'start-task', restored: true, thinkingLevel: 'low' }));
+    expect(f.call).toHaveBeenCalledWith(expect.objectContaining({ method: 'task-message', taskId: task.id }));
+  });
+  it('uses the latest saved level after a delayed runtime existence response', async () => {
+    const f = setup(), waiting = deferred<boolean>(); let first = true;
+    f.call.mockImplementation(async (request) => {
+      if (request.method === 'has-task') { if (first) { first = false; return waiting.promise; } return true; }
+      return undefined;
+    });
+    const earlier = invoke('set-conversation-thinking', 'conversation-one', 'low');
+    await invoke('set-conversation-thinking', 'conversation-one', 'high');
+    waiting.resolve(true); await earlier;
+    expect(f.call).not.toHaveBeenCalledWith({ method: 'set-conversation-thinking', taskId: 'conversation-one', level: 'low' });
+    expect(f.call).toHaveBeenCalledWith({ method: 'set-conversation-thinking', taskId: 'conversation-one', level: 'high' });
+  });
+  it.each([false, true])('saves thinking preferences without SSH or restoration when runtime exists=%s', async (live) => {
+    const task = { ...makeConversation(), provider: 'deepseek', modelId: 'deepseek-flash' };
+    const f = setup(task); if (live) f.active.add(task.id);
+    await invoke('set-conversation-thinking', task.id, 'low');
+    expect(f.connectHost).not.toHaveBeenCalled();
+    expect(f.state.conversationProfile).not.toHaveBeenCalled();
+    expect(f.state.runtimeProfile).not.toHaveBeenCalled();
+    expect(f.state.thinkingPreferences.set).toHaveBeenCalledExactlyOnceWith(task.id, 'low');
+    expect(f.call).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'start-task' }));
+    expect(f.state.requestBudgets.complete).not.toHaveBeenCalled();
+    if (live) expect(f.call).toHaveBeenCalledWith({ method: 'set-conversation-thinking', taskId: task.id, level: 'low' });
+    else expect(f.call).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'set-conversation-thinking' }));
+  });
   it('rebuilds report records without SSH restoration, session binding, credentials or model budget', async () => {
     const task = makeConversation(); task.status = 'answered'; delete task.session;
     const fixture = setup(task);

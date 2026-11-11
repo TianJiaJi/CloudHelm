@@ -18,7 +18,7 @@ interface Dependencies {
 }
 interface Receipt { fingerprint: string; state: 'preparing' | 'dispatching' | 'sent' | 'failed'; conversationId?: string }
 interface PreparationJob { canceled: boolean; dispatching: boolean; taskId?: string; allowCompaction?: boolean; current?: () => boolean; promise: Promise<{ conversationId: string }> }
-export function registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime, previewSelections, assertConversationAvailable }: Dependencies): void {
+export function registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime, previewSelections, assertConversationAvailable }: Dependencies): (taskId: string) => void {
   const active = new Map<string, PreparationJob>();
   state.setBudgetPreparationAuthority((id, taskId) => {
     const job = active.get(id);
@@ -157,4 +157,12 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       throw error;
     }
   }
+  // Control attempts revoke preparation even if their new value is rejected.
+  // Reuse the existing job authority; no runtime restoration or new allowance.
+  return (taskId) => {
+    for (const [id, job] of active) if (job.taskId === taskId && !job.canceled && !job.dispatching) {
+      job.canceled = true;
+      void runtime.call({ method: 'cancel-message', requestId: id }).catch(() => {});
+    }
+  };
 }

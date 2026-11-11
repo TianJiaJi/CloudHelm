@@ -9,6 +9,7 @@ import type { MessageDocument } from '@cloudhelm/contracts';
 import { BashAnalyzer, modelThinking } from '@cloudhelm/adapters';
 import { finishConversationCleanup } from './conversation-cleanup.js';
 import { ConversationLifecycle } from './conversation-lifecycle.js';
+import { thinkingForRestore } from './conversation-thinking.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ipcMain } from 'electron';
@@ -56,23 +57,33 @@ export function registerConversationIpc({ store, references, sessionRoot, cleanu
     restoring.set(task.id, restore);
     return restore;
   }
+  async function syncThinking(id: string): Promise<void> {
+    const level = state.thinkingPreferences.pending(id);
+    if (level !== undefined) await runtime.call({ method: 'set-conversation-thinking', taskId: id, level });
+  }
+  const modelBinding = (task: TaskView) => JSON.stringify([task.provider, task.modelId, task.baseUrl, task.credentialRevision, task.contextWindow, task.maxTokens]);
   async function restoreRuntime(task: TaskView): Promise<void> {
+    const binding = modelBinding(task);
     const exists = await runtime.call<boolean>({ method: 'has-task', taskId: task.id });
     const profile = exists ? undefined : state.conversationProfile(task);
     for (const id of task.hostIds) if (state.getHost(id).status !== 'connected') await connectHost(id);
+    task = state.getTask(task.id);
+    if (modelBinding(task) !== binding) throw new Error('对话模型在恢复期间已变化，请重新发送');
     if (exists) {
       // Repair a reviewer update that was saved while its worker response failed.
       // This uses the live task identity without rebinding its model credentials.
       await runtime.call({ method: 'set-review-profile', taskId: task.id,
         reviewer: state.runtimeReviewerForLiveTask(task) });
+      await syncThinking(task.id);
       return;
     }
     const snapshot = state.snapshot();
-    await runtime.call({ method: 'start-task', task, restored: true,
+    await runtime.call({ method: 'start-task', task, restored: true, thinkingLevel: thinkingForRestore(task),
       hosts: task.hostIds.map((id) => state.runtimeHost(id)),
       profile: profile!,
       priorOperations: snapshot.operations.filter((operation) => operation.taskId === task.id), priorInputs: state.queuedInputs(task.id),
       sessionDirectory: sessionDirectory(task) });
+    await syncThinking(task.id);
   }
 
   async function start(input: ConversationStart, document?: MessageDocument, initialMessage?: string, intent?: string, assertPrepared?: (scopes: LocalScope[]) => void): Promise<TaskView> {
@@ -89,8 +100,10 @@ export function registerConversationIpc({ store, references, sessionRoot, cleanu
       persisted = true;
       return await lifecycle.use(task.id, async () => {
         state.setTaskModel(task.id, profile);
-        await runtime.call({ method: 'start-task', task, document, initialMessage, intent, thinkingLevel: input.thinkingLevel, sessionDirectory: sessionDirectory(task), hosts: task.hostIds.map((id) => state.runtimeHost(id)), profile });
-        return task;
+        if (input.thinkingLevel !== undefined) state.thinkingPreferences.set(task.id, input.thinkingLevel);
+        const current = state.getTask(task.id);
+        await runtime.call({ method: 'start-task', task: current, document, initialMessage, intent, thinkingLevel: input.thinkingLevel, sessionDirectory: sessionDirectory(current), hosts: current.hostIds.map((id) => state.runtimeHost(id)), profile });
+        return current;
       });
     } catch (error) {
       if (!persisted) restoreSelections(input.localSelectionTokens, scopes);
@@ -134,13 +147,17 @@ export function registerConversationIpc({ store, references, sessionRoot, cleanu
     const result = await runtime.call<{ cancelled: boolean }>({ method: 'cancel-queued-input', taskId, inputId });
     return { cancelled: result.cancelled }; // Prepared reference bodies never cross this renderer API.
   });
-  if (store && references) registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime,
+  const cancelPreparation = store && references ? registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime,
     assertConversationAvailable: (id) => lifecycle.assertAvailable(id),
-    previewSelections: (tokens) => { const scopes = takeSelections(tokens); restoreSelections(tokens, scopes); return structuredClone(scopes); } });
+    previewSelections: (tokens) => { const scopes = takeSelections(tokens); restoreSelections(tokens, scopes); return structuredClone(scopes); } }) : undefined;
 
   handleTask('set-conversation-thinking', async (id: string, level: import('@cloudhelm/contracts').ThinkingLevel) => {
-    await ensureRuntime(state.getTask(id));
-    await runtime.call({ method: 'set-conversation-thinking', taskId: id, level });
+    state.getTask(id);
+    cancelPreparation?.(id);
+    state.thinkingPreferences.set(id, level);
+    try {
+      if (await runtime.call<boolean>({ method: 'has-task', taskId: id })) await syncThinking(id);
+    } catch { throw new Error('思考偏好已保存，但运行实例暂未同步；下次发送时将重试。'); }
   });
 
   handleTask('set-conversation-model', async (id: string, choice: ModelChoice) => {

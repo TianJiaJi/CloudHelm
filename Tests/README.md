@@ -87,6 +87,9 @@ pnpm test:desktop:packaged
 - `desktop/main/conversation-deletion.test.ts`、`conversation-cleanup.test.ts`：真实SQLite故障注入、事务回滚、共享资源保留、目录清理重试和迟到事件隔离；`conversation-ipc.test.ts`、`structured-message-ipc.test.ts`覆盖恢复/发送/删除竞争与准备阶段撤权。
 - `pnpm test:deletion`：先 `pnpm build`；在独立临时目录启动真实Electron，验证正常删除、拒绝跟随替换的目录链接、清理失败回执、重启恢复与无关数据保留。没有模型/SSH调用，不读取用户数据。
 
+- `desktop/main/conversation-thinking.test.ts`：离线偏好持久化、故障回滚、用户选择与运行时观测隔离、恢复时应用及避免重复同步；`structured-preparation-integration.test.ts`保留控制变更在预算确认前撤权的真实Pi/本地模型断言。
+- `pnpm test:thinking`：先 `pnpm build`；在全新临时数据中使用真实思考菜单，验证凭据不可用时保存、零凭据访问、零loopback SSH连接、不创建Agent会话及重启保留。使用无效合成密文，不调用付费API。
+
 ## 证据边界
 
 - 默认测试使用假模型、假认证与临时本地服务，不连接用户主机。真实 OS SSH／PTY 集成必须显式 opt-in，且仅使用独立 loopback 测试服务；默认集合中的原生 SSH 协议 fixture 不证明 OS 登录、PAM 或权限切换。

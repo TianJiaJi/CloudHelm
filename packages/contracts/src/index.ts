@@ -140,6 +140,8 @@ export interface TaskView {
   budget?: import('./request-budget.js').RequestBudgetState;
   intent?: TaskIntentState;
   thinking?: ThinkingView;
+  /** Durable user preference; runtime observations must not replace it. */
+  preferredThinking?: ThinkingLevel;
   session?: { version: 1; id: string };
   id: string;
   goal: string;
