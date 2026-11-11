@@ -1,5 +1,6 @@
 /* global window */
 import assert from 'node:assert/strict';
+import { checkReferenceDraftLifecycle } from './check-reference-draft-lifecycle.mjs';
 import { spawn } from 'node:child_process';
 import console from 'node:console';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
@@ -9,7 +10,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { _electron as electron } from '@playwright/test';
+import { quietDesktopEnvironment, quietElectron as electron } from './quiet-electron.mjs';
 import { DesktopProcess, cleanupDesktopSmoke, withTimeout } from './desktop-process.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -32,7 +33,7 @@ async function launch(userData) {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.getByRole('textbox', { name: '给 AI 的消息' }).waitFor({ timeout: 30_000 });
   const appName = await application.evaluate(({ app }) => app.getName());
-  return { page, owner, appName, close: async () => { await owner.close(); instances.delete(owner); } };
+  return { application, page, owner, appName, close: async () => { await owner.close(); instances.delete(owner); } };
 }
 function inspect(action) {
   const database = new Database(path.join(primaryPath, 'cloudhelm.sqlite'));
@@ -57,7 +58,8 @@ async function duplicate(appName) {
   // Use the actual primary's application identity, not the bootstrap file's inferred name.
   const gate = path.join(temporary, 'secondary-start-gate');
   const child = spawn(executablePath, [path.join(root, 'Tests/smoke/profile-lock-bootstrap.mjs'), main, gate],
-    { env: { ...environment(primaryPath), CLOUDHELM_TEST_APP_NAME: appName }, stdio: ['ignore', 'pipe', 'ignore'] });
+    { env: { ...await quietDesktopEnvironment(environment(primaryPath), main), CLOUDHELM_TEST_APP_NAME: appName },
+      windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
   let diagnostic = '';
   child.stdout.on('data', (chunk) => { diagnostic = (diagnostic + chunk.toString()).slice(-4096); });
   const exit = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); });
@@ -92,7 +94,8 @@ try {
     for (const id of ['legacy', 'bound', 'published']) assert.equal(state(id), 'dispatching');
     assert.equal(database.prepare('SELECT count(*) AS n FROM reference_preparations').get().n, 3);
   });
+  const drafts = await checkReferenceDraftLifecycle(recovered, inspect, path.join(desktop, 'out/preload/index.cjs'));
   await recovered.close(); assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ check: 'reference-recovery-smoke', duplicateRejectedBeforeRecovery: true, differentProfileIndependent: true,
+  console.log(JSON.stringify({ check: 'reference-recovery-smoke', ...drafts, duplicateRejectedBeforeRecovery: true, differentProfileIndependent: true,
     crashRecovery: true, guardedUnboundReclaimed: true, legacyAndUnknownEvidencePreserved: true, paidModelRequests: 0, virtualMachineConnections: 0 }));
 } finally { await cleanupDesktopSmoke(instances, temporary, (message) => console.warn(message)); }

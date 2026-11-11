@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron } from '@playwright/test';
+import { quietElectron as electron } from './quiet-electron.mjs';
 import { checkPrivateKeyPicker } from './private-key-picker-probe.mjs';
 import { checkHostConnectionTest } from './host-connection-probe.mjs';
 import { DesktopProcess, cleanupDesktopSmoke, withTimeout } from './desktop-process.mjs';

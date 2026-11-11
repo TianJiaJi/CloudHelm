@@ -29,7 +29,8 @@ export class ReferenceStore {
     if (!text) return;
     this.store.appendLog(capture.key, text); capture.length += text.length;
   }
-  quote(input: TerminalQuoteRequest): ReferenceInfo {
+  quote(input: TerminalQuoteRequest, recipient: string): ReferenceInfo {
+    this.store.assertReferenceDraft(input.draftId, recipient, { conversationId: input.conversationId, hostId: input.hostId });
     const terminal = this.state.snapshot().terminals.find((item) => item.id === input.terminalId && item.hostId === input.hostId);
     if (!terminal) throw new Error('来源终端已关闭，请重新选择');
     if (input.conversationId && !this.state.getTask(input.conversationId).hostIds.includes(terminal.hostId)) throw new Error('引用主机与目标对话不一致');
@@ -41,7 +42,7 @@ export class ReferenceStore {
     const reference: ReferenceInfo = { id: randomUUID(), kind: 'terminal', terminalId: terminal.id, hostId: terminal.hostId,
       hostLabel: this.state.getHost(terminal.hostId).label, generation: capture?.generation,
       command: input.selection === undefined ? capture?.command : undefined, capturedAt: Date.now(), running: input.selection === undefined ? capture?.running : undefined, exitCode: input.selection === undefined ? capture?.exitCode : undefined };
-    this.store.putReference(reference.id, { reference, original });
+    this.store.saveDraftReference(input.draftId, recipient, { reference, original });
     return reference;
   }
   read(id: string): ReferenceBody {

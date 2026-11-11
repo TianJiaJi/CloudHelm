@@ -6,5 +6,6 @@ export interface ReferenceInfo {
 export type MessagePart = { type: 'text'; text: string } | { type: 'reference'; instanceId?: string; reference: ReferenceInfo; content?: string };
 export interface MessageDocument { requestId: string; parts: MessagePart[] }
 export interface ReferenceBody { reference: ReferenceInfo; original: string; summary?: string }
-export interface TerminalQuoteRequest { terminalId: string; hostId: string; selection?: string; conversationId?: string }
-export interface StructuredSend { queueMode?: 'steer' | 'followUp'; document: MessageDocument; conversationId?: string; hostId: string | null; model?: { provider: string; modelId: string }; thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; localSelectionTokens: string[] }
+export interface ReferenceDraftScope { conversationId?: string; hostId: string | null }
+export interface TerminalQuoteRequest { draftId: string; terminalId: string; hostId: string; selection?: string; conversationId?: string }
+export interface StructuredSend { draftId?: string; queueMode?: 'steer' | 'followUp'; document: MessageDocument; conversationId?: string; hostId: string | null; model?: { provider: string; modelId: string }; thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; localSelectionTokens: string[] }

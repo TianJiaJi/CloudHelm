@@ -1,9 +1,10 @@
 import { expandedMessageText } from './message-copy.js';
 import { MessageContent } from './message-content.js';
 import { MessageEditor } from './message-editor.js';
-import { useMessageDrafts, draftFor } from './message-drafts.js';
-import { useRef, useState } from 'react';
-import type { ConversationMessage } from '@cloudhelm/contracts';
+import { useMessageDrafts, draftFor, finishDraftRequest } from './message-drafts.js';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { discardReferenceDraft, holdDraftReferences } from './reference-drafts.js';
+import type { ConversationMessage, ReferenceDraftScope } from '@cloudhelm/contracts';
 import { Icon } from './ui-helpers.js';
 import { copyEntries } from './clipboard.js';
 import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
@@ -18,28 +19,55 @@ export function UserMessage({ message, canEdit, report }: {
   const editParts = editDraft?.parts;
   const locked = !!editDraft?.locked;
   const [editing, setEditing] = useState(false);
+  const [editScope, setEditScope] = useState<ReferenceDraftScope>({ conversationId: message.taskId, hostId: null });
   const [draft, setDraft] = useState(message.text);
   const [busy, setBusy] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const sending = useRef(false);
   const editButton = useRef<HTMLButtonElement>(null);
+  const focusAfterCancel = useRef<Element | null>(null);
+  useLayoutEffect(() => {
+    if (!focusAfterCancel.current || editing || busy) return;
+    const previous = focusAfterCancel.current; focusAfterCancel.current = null;
+    if (document.activeElement === previous || document.activeElement === document.body)
+      editButton.current?.focus({ preventScroll: true });
+  }, [editing, busy]);
   const sentAt = new Date(message.createdAt);
   const timestamp = sentAt.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
-  function beginEdit(): void {
-    setDraft(message.text);
-    if (!draftFor(editorKey).request) useMessageDrafts.getState().set(editorKey, { parts: message.document?.parts ?? [{ type: 'text', text: message.text }], caret: 0 });
-    setEditing(true);
+  async function beginEdit(): Promise<void> {
+    if (sending.current) return;
+    sending.current = true; setBusy(true);
+    const before = draftFor(editorKey);
+    try {
+      const parts = before.request ? before.parts : message.document?.parts ?? [{ type: 'text' as const, text: message.text }];
+      const snapshot = await window.cloudhelm.snapshot();
+      const task = snapshot.conversations.find((item) => item.id === message.taskId);
+      if (!task) throw new Error('对话已删除，无法编辑');
+      const scope = { conversationId: message.taskId, hostId: task.hostIds[0] ?? null };
+      if (message.document) await holdDraftReferences(editorKey, scope, parts);
+      if (draftFor(editorKey).epoch !== before.epoch) throw new Error('草稿已变化，请重新打开编辑');
+      setEditScope(scope); setDraft(message.text);
+      if (!before.request) useMessageDrafts.getState().set(editorKey, { parts, caret: 0 });
+      setEditing(true);
+    } catch (error) { report(error instanceof Error ? error.message : String(error)); }
+    finally { sending.current = false; setBusy(false); }
   }
   async function copy(): Promise<void> {
     try { await navigator.clipboard.writeText(message.document ? await expandedMessageText(message.document.parts, true) : message.text); setCopyState('copied'); }
     catch { setCopyState('failed'); }
   }
-  function cancel(): void {
+  async function cancel(): Promise<void> {
     if (sending.current || locked) return;
-    setEditing(false); setDraft(message.text);
-    editButton.current?.focus({ preventScroll: true });
+    sending.current = true; setBusy(true);
+    const previousFocus = document.activeElement;
+    try {
+      if (!await discardReferenceDraft(editorKey)) return;
+      focusAfterCancel.current = previousFocus;
+      setEditing(false); setDraft(message.text);
+    } catch (error) { report(error instanceof Error ? error.message : String(error)); }
+    finally { sending.current = false; setBusy(false); }
   }
   /** Editor actions stay available from the right-click menu, not just the icon row. */
   function messageMenu(): ContextMenuEntry[] {
@@ -51,9 +79,9 @@ export function UserMessage({ message, canEdit, report }: {
   }
   async function send(): Promise<void> {
     const text = draft.trim();
-    if ((!message.document && (!text || text === message.text.trim())) || !canEdit || sending.current || locked) return;
+    if ((!message.document && (!text || text === message.text.trim())) || !canEdit || sending.current || locked || draftFor(editorKey).locked) return;
     sending.current = true; setBusy(true);
-    const parts = draftFor(editorKey).parts;
+    const { parts, epoch } = draftFor(editorKey);
     const revision = JSON.stringify(parts);
     const previous = draftFor(editorKey).request;
     const request = previous?.revision === revision ? previous : { revision, id: crypto.randomUUID() };
@@ -62,12 +90,15 @@ export function UserMessage({ message, canEdit, report }: {
       if (message.document) {
         const snapshot = await window.cloudhelm.snapshot();
         const task = snapshot.conversations.find((item) => item.id === message.taskId);
-        await window.cloudhelm.sendStructured({ conversationId: message.taskId, hostId: task?.hostIds[0] ?? null,
+        if (!task) throw new Error('对话已删除，无法发送');
+        const scope = { conversationId: message.taskId, hostId: task.hostIds[0] ?? null };
+        const draftId = await holdDraftReferences(editorKey, scope, parts, true);
+        await window.cloudhelm.sendStructured({ draftId, ...scope,
           document: { requestId: request.id, parts }, localSelectionTokens: [] });
       } else await window.cloudhelm.sendMessage(message.taskId, text, []);
       useMessageDrafts.getState().clear(editorKey); setEditing(false); report('');
     } catch (error) { report(error instanceof Error ? error.message : String(error)); }
-    finally { sending.current = false; setBusy(false); useMessageDrafts.getState().set(editorKey, { locked: false, compressing: false, compressingReference: undefined }); }
+    finally { sending.current = false; setBusy(false); finishDraftRequest(editorKey, epoch, request.id); }
   }
 
   return <article className={`${ui.message} ${ui.userMessage} ${styles.message}`} aria-label="用户消息"
@@ -86,14 +117,14 @@ export function UserMessage({ message, canEdit, report }: {
       </div>
     </div>
     {editing ? <form className={styles.editor} onKeyDown={(event) => { if (event.key === 'Escape' && !busy && !locked) { event.preventDefault(); cancel(); } }} onSubmit={(event) => { event.preventDefault(); void send(); }}>
-      {message.document ? <MessageEditor draftKey={editorKey} disabled={busy || locked} placeholder="编辑消息…" label="编辑消息内容" send={() => void send()} /> : <textarea aria-label="编辑消息内容" autoFocus rows={4} value={draft} disabled={busy} maxLength={100_000}
+      {message.document ? <MessageEditor draftKey={editorKey} scope={editScope} disabled={busy || locked} placeholder="编辑消息…" label="编辑消息内容" send={() => void send()} /> : <textarea aria-label="编辑消息内容" autoFocus rows={4} value={draft} disabled={busy} maxLength={100_000}
         onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
           if (event.key === 'Escape') { event.preventDefault(); cancel(); }
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send(); }
         }} />}
       <small>修改后将作为新消息发送，原记录保留。</small>
-      {locked && message.document && <small role="status">{editDraft?.compressing ? '正在压缩…' : '正在准备发送…'} {editDraft?.summaryRequests && `摘要请求 ${editDraft.summaryRequests.used}/${editDraft.summaryRequests.limit} `}<button type="button" onClick={() => {
+      {locked && !editDraft?.discarding && message.document && <small role="status">{editDraft?.compressing ? '正在压缩…' : '正在准备发送…'} {editDraft?.summaryRequests && `摘要请求 ${editDraft.summaryRequests.used}/${editDraft.summaryRequests.limit} `}<button type="button" onClick={() => {
         const id = draftFor(editorKey).request?.id; if (id) void window.cloudhelm.cancelMessage(id).catch((error: unknown) => report(String(error)));
       }}>取消发送</button></small>}
       <div className={styles.editorActions}><button type="button" disabled={busy || locked} onClick={cancel}>取消</button>

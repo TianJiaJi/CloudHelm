@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3';
 import type { ReferenceBody } from '@cloudhelm/core';
+import { migrateReferenceDrafts, ReferenceDrafts, type ReferenceDraftScope } from './sqlite-reference-drafts.js';
+export type { ReferenceDraftScope } from './sqlite-reference-drafts.js';
 import { migrateReferencePreparations, ReferencePreparations, type ReferencePreparationReceipt } from './sqlite-reference-preparations.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { and, eq } from 'drizzle-orm';
@@ -66,6 +68,8 @@ export class SqliteStore {
   private readonly raw: Database.Database;
   private readonly db;
   private readonly referencePreparations: ReferencePreparations;
+  private readonly referenceDrafts: ReferenceDrafts;
+  private referenceProducer?: string;
 
   constructor(file: string) {
     this.raw = new Database(file);
@@ -77,6 +81,8 @@ export class SqliteStore {
         receipt: (id, value) => this.put('message-receipts', id, value),
         remove: (id) => this.removeReference(id)
       });
+      this.referenceDrafts = new ReferenceDrafts(this.raw, (id, value) => this.putReference(id, value),
+        (ids) => this.referencePreparations.collect(ids, true));
     } catch (error) { this.raw.close(); throw error; }
   }
 
@@ -213,10 +219,41 @@ export class SqliteStore {
       `);
     }).immediate();
     migrateReferencePreparations(this.raw);
+    migrateReferenceDrafts(this.raw);
   }
 
   /** Exclusive-profile startup only; never call while accepting IPC or running preparations. */
-  beginReferenceSession(producerId: string): number { return this.referencePreparations.beginSession(producerId); }
+  beginReferenceSession(producerId: string): number {
+    const count = this.referencePreparations.beginSession(producerId, () => this.referenceDrafts.recover(producerId));
+    this.referenceProducer = producerId;
+    return count;
+  }
+
+  private draftProducer(): string {
+    if (!this.referenceProducer) throw new Error('Reference session unavailable');
+    return this.referenceProducer;
+  }
+  createReferenceDraft(id: string, recipient: string, scope: ReferenceDraftScope): void {
+    this.referenceDrafts.create(id, this.draftProducer(), recipient, scope);
+  }
+  assertReferenceDraft(id: string, recipient: string, scope?: ReferenceDraftScope): ReferenceDraftScope {
+    return this.referenceDrafts.assert(id, this.draftProducer(), recipient, scope);
+  }
+  saveDraftReference(id: string, recipient: string, body: ReferenceBody): void {
+    this.referenceDrafts.save(id, this.draftProducer(), recipient, body);
+  }
+  claimDraftReferences(id: string, recipient: string, ids: string[]): void {
+    this.referenceDrafts.claim(id, this.draftProducer(), recipient, ids);
+  }
+  assertDraftReference(id: string, recipient: string, referenceId: string): void {
+    this.referenceDrafts.contains(id, this.draftProducer(), recipient, referenceId);
+  }
+  releaseReferenceDraft(id: string, recipient: string): void {
+    this.referenceDrafts.release(id, this.draftProducer(), recipient);
+  }
+  releaseReferenceRecipient(recipient: string): void {
+    this.referenceDrafts.releaseRecipient(this.draftProducer(), recipient);
+  }
 
   /** Bodies, request ownership and the dispatch receipt commit before any runtime call. */
   commitReferencePreparation(id: string, receipt: ReferencePreparationReceipt, bodies: ReferenceBody[]): void {
@@ -315,6 +352,7 @@ export class SqliteStore {
         .all(taskId, taskId) as Array<{ owner: string }>;
       this.put('conversation-cleanups', taskId, { version: 1, taskId, ...(sessionId ? { sessionId } : {}), createdAt: Date.now() } satisfies ConversationCleanup);
       const candidates = [...referenceIds, ...this.referencePreparations.detachConversation(taskId)];
+      const draftCandidates = this.referenceDrafts.detachConversation(taskId);
       for (const bucket of ['operations', 'messages', 'clarifications', 'verification-reports', 'conversation-inputs']) {
         this.removeWhere(bucket, 'taskId', taskId);
       }
@@ -329,6 +367,7 @@ export class SqliteStore {
       this.remove('tasks', taskId);
       // Recheck durable message, queued-input and preparation owners after removing this task's records.
       this.referencePreparations.collect(candidates);
+      this.referencePreparations.collect(draftCandidates, true);
     }).immediate();
   }
 

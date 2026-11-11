@@ -9,7 +9,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { _electron as electron, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { quietElectron as electron } from './quiet-electron.mjs';
 import { DesktopProcess, cleanupDesktopSmoke, withTimeout } from './desktop-process.mjs';
 
 // Synthetic loopback host and invalid ciphertext only; no user profile or paid endpoint access.

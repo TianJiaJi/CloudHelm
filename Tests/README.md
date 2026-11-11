@@ -42,10 +42,11 @@ pnpm test:ai-panel
 pnpm test:desktop
 pnpm test:credentials
 pnpm test:reference-recovery
+pnpm test:reference-clipboard
 pnpm test:desktop:packaged
 ```
 
-浏览器需要已安装的 Playwright Chromium，或通过 `CLOUDHELM_SMOKE_BROWSER_CHANNEL` 指定本机 Chrome／Edge。桌面测试先完成 `pnpm build`；打包后测试还需目录包。详见[开发指南](../docs/DEVELOPMENT.md)。
+浏览器需要已安装的 Playwright Chromium，或通过 `CLOUDHELM_SMOKE_BROWSER_CHANNEL` 指定本机 Chrome／Edge。浏览器 smoke 使用无界面模式。桌面测试先完成 `pnpm build`，再使用隐藏、不可聚焦的测试窗口；旧构建在启动前拒绝。目前 `test:desktop:packaged` 和未知可执行文件因尚无可靠的启动前保护而明确阻塞，不回退为前台启动；上述命令保留为后续验收入口，不表示已可执行。详见[不抢焦点的桌面测试](../docs/QUIET_DESKTOP_TESTS.md)与[开发指南](../docs/DEVELOPMENT.md)。
 
 ## 执行工作区与 Pi 1.5.0 回归入口
 
@@ -79,6 +80,10 @@ pnpm test:desktop:packaged
 - `desktop/worker/task-runner-verification-*.test.ts`：自然结束、旧提交工具不可用、历史缺报告不自动恢复；`desktop/renderer/result-summary.test.ts` 与 UI 冒烟覆盖折叠证据和始终可见的真实失败。
 
 ## 修复专项回归入口
+
+- `adapters/reference-drafts.test.ts`、`reference-session-recovery.test.ts`：schema14草稿持有、共享/最后持有者回收、旧正文不因claim获得可回收来源、迁移及准备/草稿恢复同事务回滚。`desktop/main/reference-draft-ipc.test.ts`、`reference-draft-dispatch.test.ts`验证接收方/框架隔离、导航与退出、准备撤权和持久化交接；`desktop/renderer/reference-drafts.test.ts`验证迟到响应与明确丢弃。
+- `pnpm test:reference-recovery`同时覆盖真实Electron不同窗口及同webContents重载、共享持有与延迟回收。原件使用绑定真实IPC lease的合成数据库记录，不冒充真实SSH终端捕获。`pnpm test:reference-clipboard`用真实浏览器键盘复制/粘贴验证来源不降级及丢弃后撤销清空；后端是隔离UI fixture，不代替原生IPC验收。两者均不发送模型请求或连接VM。
+- 默认Playwright浏览器未安装时，可选用已安装浏览器：Windows cmd下执行 `set "CLOUDHELM_SMOKE_BROWSER_CHANNEL=chrome" && pnpm test:reference-clipboard`（完整UI测试同样支持该变量）。不会因此自动下载/升级浏览器或放宽断言。
 
 - `desktop/main/profile-instance.test.ts`、`adapters/reference-session-recovery.test.ts`：同数据目录独占启动、schema13保留旧来源、受保护进程的未绑定准备回收与故障回滚；`pnpm test:reference-recovery`使用临时双目录和真实Electron，验证第二实例在恢复前退出、不同目录互不影响、进程崩溃后安全回收。旧来源、绑定及有持久投递证据的记录不据此自动删除或重放。
 

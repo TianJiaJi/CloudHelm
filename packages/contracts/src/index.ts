@@ -351,6 +351,9 @@ export type AppEvent =
 export interface ShortcutSettings { bindings: Record<string, string>; enabled: boolean }
 
 export interface DesktopAPI {
+  openReferenceDraft(scope: import('./message-content.js').ReferenceDraftScope): Promise<string>;
+  claimDraftReferences(draftId: string, referenceIds: string[]): Promise<void>;
+  releaseReferenceDraft(draftId: string): Promise<void>;
   quoteTerminal(input: import('./message-content.js').TerminalQuoteRequest): Promise<import('./message-content.js').ReferenceInfo>;
   readReference(id: string): Promise<import('./message-content.js').ReferenceBody>;
   sendStructured(input: import('./message-content.js').StructuredSend): Promise<{ conversationId: string }>;

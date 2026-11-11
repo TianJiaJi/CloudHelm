@@ -1,32 +1,35 @@
 import { expandedMessageText } from './message-copy.js';
-import { copyText } from './clipboard.js';
+import { referenceClipboardHtml, referenceClipboardPayload } from './reference-clipboard.js';
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { MessagePart } from '@cloudhelm/contracts';
+import type { MessagePart, ReferenceDraftScope } from '@cloudhelm/contracts';
+import { holdDraftReferences } from './reference-drafts.js';
 import { draftFor, longPaste, partLength, replaceParts, useMessageDrafts } from './message-drafts.js';
 import { editorSelection, readEditor, restoreCaret } from './message-editor-dom.js';
 import { ReferencePreview } from './reference-preview.js';
 import styles from './message-editor.module.css';
 
 const EMPTY: MessagePart[] = [];
-export function MessageEditor({ draftKey, disabled, placeholder, send, label = '给 AI 的消息' }: {
-  draftKey: string; disabled: boolean; placeholder: string; send(): void; label?: string;
+export function MessageEditor({ draftKey, scope, disabled, placeholder, send, label = '给 AI 的消息' }: {
+  draftKey: string; scope: ReferenceDraftScope; disabled: boolean; placeholder: string; send(): void; label?: string;
 }): React.JSX.Element {
   const draft = useMessageDrafts((state) => state.drafts[draftKey]);
   const parts = draft?.parts ?? EMPTY;
   const editor = useRef<HTMLDivElement>(null);
+  const activeKey = useRef(draftKey); activeKey.current = draftKey;
   const composing = useRef(false);
   const undo = useRef<Array<{ parts: MessagePart[]; caret: number }>>([]);
   const redo = useRef<Array<{ parts: MessagePart[]; caret: number }>>([]);
   const rendered = useRef('');
   const externalRevision = useRef(draft?.revision ?? 0);
+  const historyOwner = useRef({ key: draftKey, epoch: draft?.epoch ?? 0 });
   const previousParts = useRef(parts);
   const [copyFailure, setCopyFailure] = useState('');
   const [preview, setPreview] = useState<Extract<MessagePart, { type: 'reference' }>>();
   function remember(): void { const value = draftFor(draftKey); undo.current.push({ parts: value.parts, caret: value.caret }); if (undo.current.length > 100) undo.current.shift(); redo.current = []; }
-  function set(parts: MessagePart[], caret: number): void { useMessageDrafts.getState().set(draftKey, { parts, caret }); }
+  function set(parts: MessagePart[], caret: number): void { if (draftFor(draftKey).locked) return; useMessageDrafts.getState().set(draftKey, { parts, caret }); }
   function selection() { return editor.current && editorSelection(editor.current) || { start: draftFor(draftKey).caret, end: draftFor(draftKey).caret }; }
   function insert(inserted: MessagePart[]): void {
-    if (disabled) return;
+    if (disabled || draftFor(draftKey).locked) return;
     const range = selection(); remember();
     set(replaceParts(draftFor(draftKey).parts, range.start, range.end, inserted), range.start + inserted.reduce((sum, part) => sum + partLength(part), 0));
   }
@@ -35,7 +38,20 @@ export function MessageEditor({ draftKey, disabled, placeholder, send, label = '
     insert(longPaste(text) ? [{ type: 'reference', reference: { id: crypto.randomUUID(), kind: 'paste', capturedAt: Date.now() }, content: text }]
       : [{ type: 'text', text }]);
   }
+  async function pasteInternal(values: MessagePart[]): Promise<void> {
+    const before = draftFor(draftKey), range = selection();
+    try {
+      if (disabled || before.locked) return;
+      await holdDraftReferences(draftKey, scope, values);
+      const latest = draftFor(draftKey), nextRange = selection();
+      if (activeKey.current !== draftKey || latest.epoch !== before.epoch || latest.parts !== before.parts || latest.locked
+        || range.start !== nextRange.start || range.end !== nextRange.end) throw new Error('输入内容或位置已变化，请重新粘贴');
+      insert(values.map((part) => part.type === 'reference' ? { ...part, instanceId: crypto.randomUUID() } : part));
+      setCopyFailure('');
+    } catch (error) { setCopyFailure(error instanceof Error ? error.message : '引用无法使用，请重新添加'); }
+  }
   function history(back: boolean): void {
+    if (disabled || draftFor(draftKey).locked) return;
     const source = back ? undo : redo, target = back ? redo : undo;
     const value = source.current.pop(); if (!value || disabled) return;
     const current = draftFor(draftKey); target.current.push({ parts: current.parts, caret: current.caret }); set(value.parts, value.caret);
@@ -43,9 +59,16 @@ export function MessageEditor({ draftKey, disabled, placeholder, send, label = '
   function saveCaret(): void { if (preview) return; const range = editor.current && editorSelection(editor.current); if (range) useMessageDrafts.getState().set(draftKey, { caret: range.end }); }
   useLayoutEffect(() => {
     const root = editor.current;
-    if (!root || composing.current) return;
+    if (!root) return;
+    if (historyOwner.current.key !== draftKey || historyOwner.current.epoch !== (draft?.epoch ?? 0)) {
+      historyOwner.current = { key: draftKey, epoch: draft?.epoch ?? 0 };
+      undo.current = []; redo.current = []; setPreview(undefined); composing.current = false;
+      externalRevision.current = draft?.revision ?? 0; previousParts.current = parts;
+    }
+    if (composing.current) return;
     if (externalRevision.current !== (draft?.revision ?? 0)) {
-      undo.current.push({ parts: previousParts.current, caret: Math.max(0, (draft?.caret ?? 1) - 1) }); redo.current = [];
+      undo.current.push({ parts: previousParts.current, caret: Math.max(0, (draft?.caret ?? 1) - 1) });
+      if (undo.current.length > 100) undo.current.shift(); redo.current = [];
       externalRevision.current = draft?.revision ?? 0;
     }
     previousParts.current = parts;
@@ -69,7 +92,7 @@ export function MessageEditor({ draftKey, disabled, placeholder, send, label = '
     }
     rendered.current = signature;
     if (focused) restoreCaret(root, draftFor(draftKey).caret);
-  }, [parts, disabled, draftKey, draft?.revision, draft?.caret, draft?.compressingReference]);
+  }, [parts, disabled, draftKey, draft?.epoch, draft?.revision, draft?.caret, draft?.compressingReference]);
   useLayoutEffect(() => {
     const root = editor.current!;
     const beforeInput = (event: Event) => {
@@ -92,14 +115,16 @@ export function MessageEditor({ draftKey, disabled, placeholder, send, label = '
     if (allLoaded) event.clipboardData.setData('text/plain', selected.map((part) => part.type === 'text' ? part.text : part.content).join(''));
     else {
       try {
+        if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('Rich clipboard unavailable');
         const content = expandedMessageText(selected);
-        if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-          await navigator.clipboard.write([new ClipboardItem({ 'text/plain': content.then((text) => new Blob([text], { type: 'text/plain' })) })]);
-        } else ok = await copyText(await content);
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/plain': content.then((text) => new Blob([text], { type: 'text/plain' })),
+          'text/html': content.then((text) => new Blob([referenceClipboardHtml(selected, text)], { type: 'text/html' }))
+        })]);
       } catch { ok = false; }
     }
     setCopyFailure(ok ? '' : '复制失败，请打开引用预览重试');
-    if (cut && ok && !disabled && draftFor(draftKey).parts === parts) { remember(); set(replaceParts(parts, range.start, range.end, []), range.start); }
+    if (cut && ok && !disabled && activeKey.current === draftKey && !draftFor(draftKey).locked && draftFor(draftKey).parts === parts) { remember(); set(replaceParts(parts, range.start, range.end, []), range.start); }
 
   }
   return <><div ref={editor} className={styles.editor} role="textbox" aria-label={label} aria-multiline="true" aria-disabled={disabled}
@@ -107,10 +132,18 @@ export function MessageEditor({ draftKey, disabled, placeholder, send, label = '
     onFocus={(event) => { if (event.target === event.currentTarget) restoreCaret(event.currentTarget, draftFor(draftKey).caret); }}
     onMouseDown={(event) => { if ((event.target as HTMLElement).closest('[data-reference]')) event.preventDefault(); }}
     onBlur={saveCaret} onKeyUp={saveCaret} onMouseUp={(event) => { if (!(event.target as HTMLElement).closest('[data-reference]')) saveCaret(); }}
-    onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; const root = editor.current!; remember(); set(readEditor(root, parts), editorSelection(root)?.end ?? 0); }}
-    onInput={() => { if (composing.current) return; const root = editor.current!; remember(); set(readEditor(root, parts), editorSelection(root)?.end ?? 0); }}
-    onPaste={(event) => { event.preventDefault(); const internal = event.clipboardData.getData('application/x-cloudhelm-parts');
-      if (internal) { try { const values = JSON.parse(internal) as MessagePart[]; if (Array.isArray(values) && values.every((p) => p.type === 'text' && typeof p.text === 'string' || p.type === 'reference' && p.reference?.id)) { insert(values.map((part) => part.type === 'reference' ? { ...part, instanceId: crypto.randomUUID() } : part)); return; } } catch { /* Plain-text fallback. */ } }
+    onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; if (draftFor(draftKey).locked) return; const root = editor.current!; remember(); set(readEditor(root, parts), editorSelection(root)?.end ?? 0); }}
+    onInput={() => { if (composing.current || draftFor(draftKey).locked) return; const root = editor.current!; remember(); set(readEditor(root, parts), editorSelection(root)?.end ?? 0); }}
+    onPaste={(event) => { event.preventDefault();
+      try {
+        const internal = referenceClipboardPayload(event.clipboardData);
+        if (internal !== undefined) {
+          const values = JSON.parse(internal) as MessagePart[];
+          if (!Array.isArray(values) || !values.every((p) => p && (p.type === 'text' && typeof p.text === 'string'
+            || p.type === 'reference' && typeof p.reference?.id === 'string'))) throw new Error('Invalid internal clipboard');
+          void pasteInternal(values); return;
+        }
+      } catch { setCopyFailure('内部引用剪贴板已失效，请重新复制；未转换为普通文本'); return; }
       paste(event.clipboardData.getData('text/plain')); }}
     onCopy={(event) => { void copy(event, false); }} onCut={(event) => { void copy(event, true); }}
     onClick={(event) => {

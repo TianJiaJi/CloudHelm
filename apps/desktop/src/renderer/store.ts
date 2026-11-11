@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { forgetConversationDrafts } from './reference-drafts.js';
 import type { AppEvent, AppSnapshot, ModelChoice, TaskView, TerminalViewState } from '@cloudhelm/contracts';
 
 export interface TerminalTab extends TerminalViewState { buffer: string; offset: number }
@@ -58,6 +59,8 @@ function closeTab(state: UiState, id: string): Partial<UiState> {
 }
 
 function projectSnapshot(state: UiState, snapshot: AppSnapshot): Partial<UiState> {
+  const live = new Set(snapshot.conversations.map((task) => task.id));
+  forgetConversationDrafts((state.snapshot?.conversations ?? []).filter((task) => !live.has(task.id)).map((task) => task.id));
   const terminals: Record<string, TerminalTab> = {};
   for (const terminal of snapshot.terminals ?? Object.values(state.terminals)) {
     if (terminal.state !== 'closed') terminals[terminal.id] = { ...terminal, buffer: state.terminals[terminal.id]?.buffer ?? '', offset: state.terminals[terminal.id]?.offset ?? 0 };

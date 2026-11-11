@@ -7,13 +7,15 @@ afterEach(() => { for (const store of stores.splice(0)) store.close(); });
 function setup() {
   const store = new SqliteStore(':memory:'); stores.push(store);
   const state = { snapshot: () => ({ terminals: [{ id: 'term', hostId: 'host' }] }), getHost: () => ({ label: 'Production' }), getTask: () => ({ hostIds: ['host'] }) } as unknown as AppState;
+  store.beginReferenceSession('boot'); store.put('hosts', 'host', { id: 'host' });
+  store.createReferenceDraft('draft', 'renderer', { hostId: 'host' });
   const refs = new ReferenceStore(store, state);
-  return { refs, store, quote: () => refs.quote({ terminalId: 'term', hostId: 'host' }) };
+  return { refs, store, quote: () => refs.quote({ draftId: 'draft', terminalId: 'term', hostId: 'host' }, 'renderer') };
 }
 describe('terminal reference snapshots', () => {
   it('requires a selection when boundaries are unknown', () => {
     const f = setup(); expect(f.quote).toThrow('请先');
-    const ref = f.refs.quote({ terminalId: 'term', hostId: 'host', selection: 'selected\noutput' });
+    const ref = f.refs.quote({ draftId: 'draft', terminalId: 'term', hostId: 'host', selection: 'selected\noutput' }, 'renderer');
     expect(f.refs.read(ref.id).original).toBe('selected\noutput');
   });
   it('captures more than 1 MB without old tail limits and keeps immutable running snapshots', () => {

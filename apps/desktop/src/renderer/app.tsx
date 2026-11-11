@@ -1,5 +1,6 @@
 import { terminalPresentation } from './execution-workspace-view.js';
 import { draftFor, insertTerminalReference, useMessageDrafts } from './message-drafts.js';
+import { holdDraftReferences } from './reference-drafts.js';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { HostView, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus } from '@cloudhelm/contracts';
@@ -185,8 +186,10 @@ export function App(): React.JSX.Element {
     const selection = terminalActions(source.id)?.getSelection() || undefined;
     void capture(async () => {
       if (draftFor(key).locked) throw new Error('这条消息正在发送，请等待完成后再添加引用');
-      const reference = await window.cloudhelm.quoteTerminal({ terminalId: source.id, hostId: source.hostId, conversationId, selection });
-      insertTerminalReference(key, reference);
+      const epoch = draftFor(key).epoch;
+      const draftId = await holdDraftReferences(key, { conversationId, hostId: source.hostId }, draftFor(key).parts);
+      const reference = await window.cloudhelm.quoteTerminal({ draftId, terminalId: source.id, hostId: source.hostId, conversationId, selection });
+      insertTerminalReference(key, reference, epoch);
       setQuoteNotice('已添加到 AI 对话草稿');
       if (useUi.getState().activeTabId === source.id) terminalActions(source.id)?.focus();
     }, setError);

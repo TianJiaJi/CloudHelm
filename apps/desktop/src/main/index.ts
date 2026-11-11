@@ -17,13 +17,20 @@ import { HostConnectionAttempts } from './host-connection-attempts.js';
 import { RuntimeBridge } from './runtime-bridge.js';
 import { HostConnectionTester } from './host-connection-test.js';
 import { AppShutdown } from './app-shutdown.js';
+import { applicationTestWindowPolicy, silenceTestDialogs } from './test-window-policy.js';
+
+const testWindow = (() => {
+  try { return applicationTestWindowPolicy(process.env, app); }
+  catch { console.error('CloudHelm test window configuration rejected'); process.exit(1); }
+})();
+if (testWindow.hidden) silenceTestDialogs(dialog);
 
 if (process.env.CLOUDHELM_USER_DATA) app.setPath('userData', process.env.CLOUDHELM_USER_DATA);
 
 let window: BrowserWindow | null = null;
 let windowsReady = false;
 const ownsProfile = acquireProfileLock(app, () => {
-  if (!windowsReady || shutdown.isClosed) return;
+  if (testWindow.hidden || !windowsReady || shutdown.isClosed) return;
   if (!window || window.isDestroyed()) createWindow();
   if (window?.isMinimized()) window.restore();
   window?.focus();
@@ -201,14 +208,16 @@ function createWindow(): void {
   window = new BrowserWindow({
     width: 1440, height: 920, minWidth: 980, minHeight: 640,
     backgroundColor: '#111715', title: 'CloudHelm',
-    webPreferences: { preload: join(import.meta.dirname, '../preload/index.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false }
+    ...testWindow.options,
+    webPreferences: { preload: join(import.meta.dirname, '../preload/index.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false,
+      ...(testWindow.hidden ? { backgroundThrottling: false } : {}) }
   });
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.webContents.on('will-attach-webview', (event) => event.preventDefault());
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const target = new URL(url);
-      if (['https:', 'http:'].includes(target.protocol) && !target.username && !target.password) {
+      if (!testWindow.hidden && ['https:', 'http:'].includes(target.protocol) && !target.username && !target.password) {
         void shell.openExternal(target.href).catch(() => undefined);
       }
     } catch { /* Malformed and non-web model links remain inert. */ }
@@ -236,7 +245,7 @@ void app.whenReady().then(async () => {
     if (!state.acceptsEvent(event)) return;
     if (event.type === 'terminal-command' || event.type === 'terminal-data' || event.type === 'terminal-state') references.record(event);
     state.record(event);
-    if (!window?.isFocused() && Notification.isSupported()
+    if (!testWindow.hidden && !window?.isFocused() && Notification.isSupported()
       && (event.type === 'approval-open' || event.type === 'input-open')) {
       new Notification({ title: 'CloudHelm', body: 'AI 需要你处理一项请求。' }).show();
     }
@@ -258,7 +267,8 @@ void app.whenReady().then(async () => {
   if (shutdown.isClosed) return;
   const message = error instanceof Error ? error.stack ?? error.message : String(error);
   console.error('CloudHelm startup failed:', message);
-  dialog.showErrorBox('CloudHelm 无法启动', message);
+  if (testWindow.hidden) app.exit(1);
+  else dialog.showErrorBox('CloudHelm 无法启动', message);
 });
 
 const shutdown = new AppShutdown({

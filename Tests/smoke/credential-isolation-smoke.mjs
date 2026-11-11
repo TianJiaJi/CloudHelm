@@ -8,7 +8,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { _electron as electron } from '@playwright/test';
+import { quietElectron as electron } from './quiet-electron.mjs';
 import { DesktopProcess, cleanupDesktopSmoke, withTimeout } from './desktop-process.mjs';
 
 // A fresh, synthetic database only. No user credentials, hosts, model calls or SSH.

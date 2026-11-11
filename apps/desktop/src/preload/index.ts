@@ -4,6 +4,9 @@ import type { AppEvent, DesktopAPI } from '@cloudhelm/contracts';
 const invoke = <T>(method: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(`cloudhelm:${method}`, ...args) as Promise<T>;
 
 const api: DesktopAPI = {
+  openReferenceDraft: (scope) => invoke('open-reference-draft', scope),
+  claimDraftReferences: (draftId, ids) => invoke('claim-draft-references', draftId, ids),
+  releaseReferenceDraft: (draftId) => invoke('release-reference-draft', draftId),
   quoteTerminal: (input) => invoke('quote-terminal', input),
   readReference: (id) => invoke('read-reference', id),
   sendStructured: (input) => invoke('send-structured', input),

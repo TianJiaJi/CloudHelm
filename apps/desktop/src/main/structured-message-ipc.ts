@@ -1,8 +1,9 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { registerReferenceDraftIpc } from './reference-draft-ipc.js';
+import { materializeMessage } from './materialize-message.js';
 import { ipcMain } from 'electron';
-import { redactOutput } from '@cloudhelm/core';
 import type { SqliteStore } from '@cloudhelm/adapters';
-import type { ConversationStart, MessageDocument, MessagePart, ReferenceBody, StructuredSend, TaskView } from '@cloudhelm/contracts';
+import type { ConversationStart, MessageDocument, ReferenceBody, StructuredSend, TaskView } from '@cloudhelm/contracts';
 import type { AppState } from './app-state.js';
 import type { RuntimeBridge } from './runtime-bridge.js';
 import type { PreparedContext } from '@cloudhelm/contracts/runtime';
@@ -17,7 +18,7 @@ interface Dependencies {
   assertConversationAvailable?(id: string): void;
 }
 interface Receipt { fingerprint: string; state: 'preparing' | 'dispatching' | 'sent' | 'failed'; conversationId?: string }
-interface PreparationJob { canceled: boolean; dispatching: boolean; taskId?: string; allowCompaction?: boolean; current?: () => boolean; promise: Promise<{ conversationId: string }> }
+interface PreparationJob { recipient?: string; draftId?: string; canceled: boolean; dispatching: boolean; taskId?: string; allowCompaction?: boolean; current?: () => boolean; promise: Promise<{ conversationId: string }> }
 export function registerStructuredMessageIpc({ state, store, runtime, references, start, send, ensureRuntime, previewSelections, assertConversationAvailable }: Dependencies): (taskId: string) => void {
   const active = new Map<string, PreparationJob>();
   state.setBudgetPreparationAuthority((id, taskId) => {
@@ -36,7 +37,14 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       void runtime.call({ method: 'cancel-message', requestId: id }).catch(() => {});
     }
   });
-  ipcMain.handle('cloudhelm:quote-terminal', (_event, input) => references.quote(input));
+  const draftIpc = registerReferenceDraftIpc(store, references, (recipient, draftId) => {
+    for (const [id, job] of active) if (job.recipient === recipient && (draftId === undefined || job.draftId === draftId)
+      && !job.canceled && !job.dispatching) {
+      job.canceled = true;
+      try { void runtime.call({ method: 'cancel-message', requestId: id }).catch(() => {}); }
+      catch { /* A closed Worker cannot restore the revoked Main capability. */ }
+    }
+  }, assertConversationAvailable);
   ipcMain.handle('cloudhelm:read-reference', (_event, id: string) => references.read(id));
   ipcMain.handle('cloudhelm:cancel-message', async (_event, id: string) => {
     const job = active.get(id);
@@ -45,7 +53,7 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
     job.canceled = true;
     await runtime.call({ method: 'cancel-message', requestId: id });
   });
-  ipcMain.handle('cloudhelm:send-structured', (_event, input: StructuredSend) => {
+  ipcMain.handle('cloudhelm:send-structured', (event, input: StructuredSend) => {
     if (input?.queueMode !== undefined && !['steer', 'followUp'].includes(input.queueMode)) throw new Error('无效消息投递方式');
     const id = input?.document?.requestId;
     if (typeof id !== 'string' || !/^[\w-]{1,100}$/u.test(id) || !Array.isArray(input.document.parts) || !input.document.parts.length || input.document.parts.length > 1000) throw new Error('无效消息');
@@ -61,7 +69,8 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       throw new Error('上次发送结果尚未确定，请检查对话记录；不会自动重放');
     }
     if (input.conversationId && [...active.values()].some((job) => job.taskId === input.conversationId)) throw new Error('该对话已有消息正在准备或投递');
-    const job: PreparationJob = { canceled: false, dispatching: false, taskId: input.conversationId, promise: Promise.resolve({ conversationId: '' }) };
+    const job: PreparationJob = { canceled: false, dispatching: false, taskId: input.conversationId, draftId: input.draftId,
+      recipient: input.draftId !== undefined ? draftIpc.recipient(event) : undefined, promise: Promise.resolve({ conversationId: '' }) };
     job.promise = run(input, fingerprint, job).finally(() => active.delete(id));
     active.set(id, job); return job.promise;
   });
@@ -75,6 +84,13 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       const task = input.conversationId ? state.getTask(input.conversationId) : undefined;
       const hostId = task?.hostIds[0] ?? input.hostId;
       if (task && (task.hostIds.length > 1 || (task.hostIds[0] ?? null) !== input.hostId)) throw new Error('目标主机与对话不一致');
+      const draftScope = { conversationId: input.conversationId, hostId: input.hostId };
+      const assertDraft = () => { if (input.draftId !== undefined) store.assertReferenceDraft(input.draftId, job.recipient!, draftScope); };
+      assertDraft();
+      const { parts, bodies } = materializeMessage(input.document.parts, hostId, references, (referenceId) => {
+        if (!input.draftId || !job.recipient) throw new Error('引用缺少有效的草稿持有关系，请重新添加');
+        store.assertDraftReference(input.draftId, job.recipient, referenceId);
+      });
       if (task && ensureRuntime) await ensureRuntime(task);
       if (job.canceled) throw new Error('已取消发送，草稿已保留');
       const profile = structuredClone(task ? state.conversationProfile(task) : state.runtimeProfile(input.model));
@@ -91,27 +107,15 @@ export function registerStructuredMessageIpc({ state, store, runtime, references
       // Bind every auxiliary attempt to this existing preparation, not a new
       // allowance or silently substituted provider/credential configuration.
       job.current = () => {
+        // After atomic preparation commit, durable copies own the source evidence.
+        // Closing the composer cannot revoke an already handed-off message.
+        if (!job.dispatching) assertDraft();
         if (task) assertConversationAvailable?.(task.id);
         const current = task ? state.conversationProfile(state.getTask(task.id)) : state.runtimeProfile(input.model);
         return controlBinding() === boundControl && hostBinding(hostId ? [state.getHost(hostId)] : []) === boundHosts && current.provider === profile.provider && current.modelId === profile.modelId
           && current.credentialRevision === profile.credentialRevision && current.baseUrl === profile.baseUrl
           && current.apiKey === profile.apiKey && current.contextWindow === profile.contextWindow && current.maxTokens === profile.maxTokens;
       };
-      const bodies: ReferenceBody[] = [];
-      const parts: MessagePart[] = input.document.parts.map((part) => {
-        if (part.type === 'text' && typeof part.text === 'string') return { type: 'text', text: redactOutput(part.text) };
-        if (part.type !== 'reference' || !part.reference) throw new Error('无效消息片段');
-        let body: ReferenceBody;
-        if (part.reference.kind === 'paste' && typeof part.content === 'string') {
-          body = { reference: { id: randomUUID(), kind: 'paste', capturedAt: Date.now() }, original: redactOutput(part.content) };
-        } else body = references.read(part.reference.id);
-        if (body.reference.kind === 'terminal' && body.reference.hostId !== hostId) throw new Error('终端引用与目标主机不一致');
-        // A new immutable instance keeps summaries scoped to this message and model.
-        body = { reference: { ...body.reference, id: randomUUID(), summarized: false }, original: body.original };
-        bodies.push(body);
-        return { type: 'reference', instanceId: part.instanceId ?? part.reference.id, reference: body.reference };
-      });
-      if (!parts.some((part) => part.type === 'reference' || part.text.trim())) throw new Error('请输入消息');
       const document: MessageDocument = { requestId: id, parts };
       if (task) {
         // Genuine input owns its candidate round before any history compaction.

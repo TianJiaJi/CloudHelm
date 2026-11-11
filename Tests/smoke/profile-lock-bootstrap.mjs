@@ -1,8 +1,11 @@
-import { app } from 'electron';
+import { app, dialog } from 'electron';
 import { existsSync, watch } from 'node:fs';
 import { dirname } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { installQuietStartupGuards } from './quiet-desktop-runtime.mjs';
+
+installQuietStartupGuards({ app, dialog });
 
 // Isolated data before readiness; an event-driven file gate permits birth-identity capture.
 if (!process.env.CLOUDHELM_USER_DATA || !process.argv[2] || !process.argv[3]) throw new Error('Missing synthetic profile fixture arguments');

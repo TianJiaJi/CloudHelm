@@ -2,7 +2,8 @@ import { AgentActivity } from './agent-activity.js';
 import { ConversationQueue } from './conversation-queue.js';
 import workspaceStyles from './execution-workspace.module.css';
 import { MessageEditor } from './message-editor.js';
-import { draftFor, useMessageDrafts } from './message-drafts.js';
+import { draftFor, finishDraftRequest, useMessageDrafts } from './message-drafts.js';
+import { discardReferenceDraft, holdDraftReferences } from './reference-drafts.js';
 import { ReasoningContent } from './reasoning-content.js';
 import { ThinkingPicker } from './thinking-picker.js';
 import { useEffect, useRef, useState } from 'react';
@@ -27,6 +28,11 @@ import composerStyles from './agent-composer.module.css';
 type ModelOption = ModelChoice & { name: string; thinkingLevels?: import('@cloudhelm/contracts').ThinkingLevel[] };
 type LocalAttachment = { token: string; scope: LocalScope };
 const composerDrafts = new Map<string, { attachments: LocalAttachment[]; queueMode?: 'steer' | 'followUp' }>();
+useUi.subscribe((state, previous) => {
+  if (!state.snapshot || state.snapshot === previous.snapshot) return;
+  const live = new Set(state.snapshot.conversations.map((task) => task.id));
+  for (const task of previous.snapshot?.conversations ?? []) if (!live.has(task.id)) composerDrafts.delete(task.id);
+});
 
 export function AgentPanel({ snapshot, host, conversation, report, openInput, hiddenInputs }: {
   snapshot: AppSnapshot; host?: HostView; conversation?: TaskView;
@@ -142,7 +148,6 @@ function Composer({ execution, operations, hostId, host, usage, compaction, conv
   const parts = draftState?.parts;
   const locked = !!draftState?.locked;
   const hasContent = !!parts?.some((part) => part.type === 'reference' || part.text.trim());
-  const request = useRef<{ id: string; revision: string } | undefined>(draftFor(draftKey).request);
   const [preparing, setPreparing] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const sendLock = useRef(false);
@@ -188,25 +193,26 @@ function Composer({ execution, operations, hostId, host, usage, compaction, conv
     setSwitching(false);
   }
   async function send(): Promise<void> {
-    if (!hasContent || locked || sendLock.current || busy || switching || legacy || waiting || stopping) return;
+    if (!hasContent || locked || draftFor(draftKey).locked || sendLock.current || busy || switching || legacy || waiting || stopping) return;
     sendLock.current = true; setBusy(true); setPreparing(true); setCompressing(false);
-    const parts = draftFor(draftKey).parts;
+    const { parts, epoch, request: previousRequest } = draftFor(draftKey);
     const deliveryMode = queuing ? queueMode : undefined;
     const revision = JSON.stringify([parts, model, draftLevel, attachments, deliveryMode]);
-    if (request.current?.revision !== revision) request.current = { id: crypto.randomUUID(), revision };
-    useMessageDrafts.getState().set(draftKey, { locked: true, request: request.current, compressing: false, compressingReference: undefined, preparationContext: undefined });
+    const request = previousRequest?.revision === revision ? previousRequest : { id: crypto.randomUUID(), revision };
+    useMessageDrafts.getState().set(draftKey, { locked: true, request, compressing: false, compressingReference: undefined, preparationContext: undefined });
     try {
-      const result = await window.cloudhelm.sendStructured({ document: { requestId: request.current!.id, parts },
+      const draftId = await holdDraftReferences(draftKey, { conversationId: conversation?.id, hostId }, parts, true);
+      const result = await window.cloudhelm.sendStructured({ draftId, document: { requestId: request.id, parts },
         conversationId: conversation?.id, hostId, model, thinkingLevel: levels.length ? draftLevel : undefined,
         localSelectionTokens: attachments.map((item) => item.token), queueMode: deliveryMode });
-      useMessageDrafts.getState().clear(draftKey); composerDrafts.delete(draftKey); setAttachments([]); request.current = undefined;
+      useMessageDrafts.getState().clear(draftKey); composerDrafts.delete(draftKey); setAttachments([]);
       const current = useUi.getState();
       if ((current.selectedConversationId ?? `draft:${current.activeHostId ?? 'chat'}`) === draftKey) {
         current.setSnapshot(await window.cloudhelm.snapshot());
         if (!conversation) useUi.getState().selectConversation(result.conversationId);
       }
     } catch (cause) { report(cause instanceof Error ? cause.message : String(cause)); }
-    finally { sendLock.current = false; setBusy(false); setPreparing(false); setCompressing(false); useMessageDrafts.getState().set(draftKey, { locked: false, compressing: false, compressingReference: undefined, preparationContext: undefined }); }
+    finally { sendLock.current = false; setBusy(false); setPreparing(false); setCompressing(false); finishDraftRequest(draftKey, epoch, request.id); }
   }
   function attachmentMenuEntries(item: LocalAttachment): ContextMenuEntry[] {
     return [
@@ -226,9 +232,12 @@ function Composer({ execution, operations, hostId, host, usage, compaction, conv
       {queuing && <label className={workspaceStyles.mode}>消息投递方式<select aria-label="消息投递方式" value={queueMode} disabled={busy || locked || legacy || waiting || !!stopping}
         onChange={(event) => setQueueMode(event.target.value === 'followUp' ? 'followUp' : 'steer')}>
         <option value="steer">当前调整（安全边界投递）</option><option value="followUp">后续排队（当前轮结束后）</option></select></label>}
-      <MessageEditor draftKey={draftKey} disabled={legacy || waiting || busy || locked} placeholder={waiting ? '请先回答上方问题，或停止本轮对话' : hostId ? '描述你的目标，或补充下一步…' : '问点什么…'} send={() => void send()} />
-      {(preparing || locked) && <p className={styles.note} role="status">{(compressing || draftState?.compressing) ? '正在压缩超出上下文容量的内容…' : '正在准备发送…'} {draftState?.summaryRequests && `摘要请求 ${draftState.summaryRequests.used}/${draftState.summaryRequests.limit} `}<button type="button" onClick={() => { const id = draftFor(draftKey).request?.id; if (id) void capture(() => window.cloudhelm.cancelMessage(id), report); }}>取消发送</button></p>}
+      <MessageEditor draftKey={draftKey} scope={{ conversationId: conversation?.id, hostId }} disabled={legacy || waiting || busy || locked} placeholder={waiting ? '请先回答上方问题，或停止本轮对话' : hostId ? '描述你的目标，或补充下一步…' : '问点什么…'} send={() => void send()} />
+      {(preparing || locked) && !draftState?.discarding && <p className={styles.note} role="status">{(compressing || draftState?.compressing) ? '正在压缩超出上下文容量的内容…' : '正在准备发送…'} {draftState?.summaryRequests && `摘要请求 ${draftState.summaryRequests.used}/${draftState.summaryRequests.limit} `}<button type="button" onClick={() => { const id = draftFor(draftKey).request?.id; if (id) void capture(() => window.cloudhelm.cancelMessage(id), report); }}>取消发送</button></p>}
       <div className={composerStyles.composerTools}>
+        <button type="button" disabled={busy || locked || legacy} onClick={() => void capture(async () => {
+          if (await discardReferenceDraft(draftKey)) { composerDrafts.delete(draftKey); setAttachments([]); }
+        }, report)}>{draftState?.discarding ? '正在丢弃…' : '丢弃草稿'}</button>
         <div className={composerStyles.attachControl}>
           <button type="button" aria-label="添加本地资料" title="添加本地资料" disabled={legacy || waiting || busy || locked}
             aria-haspopup="menu" aria-expanded={!!attachmentMenu.anchor} {...attachmentMenu.trigger}><Icon name="plus" size={18} /></button>

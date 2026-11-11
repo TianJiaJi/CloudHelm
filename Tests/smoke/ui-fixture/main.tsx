@@ -24,6 +24,9 @@ const shortcutSettings = { bindings: {} as Record<string, string>, enabled: true
 
 const referenceBodies = new Map<string, ReferenceBody>();
 const api: DesktopAPI = {
+  openReferenceDraft: async () => crypto.randomUUID(),
+  claimDraftReferences: async (_draftId, ids) => { if (ids.some((id) => !referenceBodies.has(id))) throw new Error('引用已失效'); },
+  releaseReferenceDraft: async () => {},
   quoteTerminal: async (input) => {
     const reference = { id: crypto.randomUUID(), kind: 'terminal' as const, terminalId: input.terminalId, hostId: input.hostId, hostLabel: '生产服务器', command: input.selection ? undefined : 'docker ps', capturedAt: Date.now() };
     referenceBodies.set(reference.id, { reference, original: input.selection ?? '$ docker ps\nCONTAINER ID   IMAGE\nabc123        service:latest' });

@@ -81,6 +81,49 @@ describe('guarded reference session recovery', () => {
     expect(second.readReference('copy')).toBeDefined(); expect(second.get('message-receipts', 'request')).toMatchObject({ state });
   });
 
+  it('recovers abandoned draft originals without claiming legacy bodies or deleting published evidence', () => {
+    const f = fixture(), first = f.open(); first.beginReferenceSession('boot-one');
+    first.createReferenceDraft('draft', 'renderer', { hostId: null });
+    first.saveDraftReference('draft', 'renderer', body('original'));
+    first.saveDraftReference('draft', 'renderer', body('published'));
+    first.putReference('legacy-original', body('legacy-original'));
+    first.claimDraftReferences('draft', 'renderer', ['legacy-original']);
+    first.put('messages', 'message', { taskId: 'live', document: { parts: [{ type: 'reference', reference: body('published').reference }] } });
+    const second = f.open(); second.beginReferenceSession('boot-two');
+    expect(second.readReference('original')).toBeUndefined(); expect(second.readReference('published')).toBeDefined();
+    expect(second.readReference('legacy-original')).toBeDefined();
+    expect(() => second.assertReferenceDraft('draft', 'renderer')).toThrow('expired');
+  });
+
+  it('rolls back preparation and draft recovery together, then permits an explicit startup retry', () => {
+    const f = fixture(), first = f.open(); first.beginReferenceSession('boot-one');
+    first.createReferenceDraft('draft', 'renderer', { hostId: null }); first.saveDraftReference('draft', 'renderer', body('original'));
+    first.commitReferencePreparation('request', receipt, [body('copy')]);
+    const second = f.open(), remove = second.removeReference.bind(second);
+    vi.spyOn(second, 'removeReference').mockImplementation((id) => { remove(id); if (id === 'original') throw new Error('synthetic draft cleanup failure'); });
+    expect(() => second.beginReferenceSession('boot-two')).toThrow('synthetic draft cleanup failure');
+    expect(second.readReference('original')).toBeDefined(); expect(second.readReference('copy')).toBeDefined();
+    expect(second.get('message-receipts', 'request')).toMatchObject(receipt);
+    first.assertDraftReference('draft', 'renderer', 'original');
+    vi.restoreAllMocks(); expect(second.beginReferenceSession('boot-two')).toBe(1);
+    expect(second.readReference('original')).toBeUndefined(); expect(second.readReference('copy')).toBeUndefined();
+  });
+
+  it('rolls back schema14 atomically without attributing preexisting reference bodies', () => {
+    const f = fixture(), initial = f.open(); initial.putReference('legacy-original', body('legacy-original'));
+    const raw = f.raw();
+    raw.exec(`DROP TABLE reference_draft_holds; DROP TABLE reference_drafts; DROP TABLE reference_collection_candidates;
+      DELETE FROM schema_migrations WHERE version=14;
+      CREATE TRIGGER fail_v14 BEFORE INSERT ON schema_migrations WHEN NEW.version=14
+      BEGIN SELECT RAISE(ABORT, 'synthetic migration failure'); END;`);
+    expect(f.open).toThrow('synthetic migration failure');
+    expect(raw.prepare("SELECT name FROM sqlite_master WHERE name IN ('reference_drafts','reference_draft_holds','reference_collection_candidates')").all()).toEqual([]);
+    expect(raw.prepare('SELECT version FROM schema_migrations WHERE version=14').get()).toBeUndefined();
+    raw.exec('DROP TRIGGER fail_v14'); const upgraded = f.open(); upgraded.beginReferenceSession('boot-new');
+    expect(upgraded.readReference('legacy-original')).toBeDefined();
+    expect(raw.prepare('SELECT * FROM reference_collection_candidates').all()).toEqual([]);
+  });
+
   it('rolls back schema13 and never assigns guarded provenance to legacy records', () => {
     const f = fixture(), initial = f.open(); initial.commitReferencePreparation('legacy', receipt, [body('copy')]);
     const raw = f.raw();

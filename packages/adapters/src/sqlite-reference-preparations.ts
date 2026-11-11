@@ -52,7 +52,7 @@ export class ReferencePreparations {
   }
   /** Startup only, before IPC/Worker admission and under exclusive profile ownership.
    * Guarded producers cannot dispatch a new conversation before binding this row. */
-  beginSession(producerId: string): number {
+  beginSession(producerId: string, recoverDrafts: () => void = () => {}): number {
     if (this.producerId) throw new Error('Reference session already initialized');
     if (!validId(producerId)) throw new Error('Invalid reference session');
     const reclaimed = this.raw.transaction(() => {
@@ -71,6 +71,7 @@ export class ReferencePreparations {
         if (receipt) this.writes.receipt(row.request_id, { ...receipt, state: 'failed' });
         count++;
       }
+      recoverDrafts();
       return count;
     }).immediate();
     this.producerId = producerId; // Only after the recovery transaction commits.
@@ -128,11 +129,19 @@ export class ReferencePreparations {
     }
     return [...ids];
   }
-  collect(ids: Iterable<string>): void {
+  /** Caller owns a transaction. A draft claim alone must never make a legacy original collectible. */
+  collect(ids: Iterable<string>, requireProvenance = false): void {
     for (const id of new Set(ids)) {
+      if (requireProvenance) {
+        if (!this.raw.prepare('SELECT 1 FROM reference_collection_candidates WHERE reference_id=?').get(id)) continue;
+      } else this.raw.prepare('INSERT OR IGNORE INTO reference_collection_candidates(reference_id) SELECT id FROM content_references WHERE id=?').run(id);
       const document = this.raw.prepare(`${documentReferences} AND json_extract(part.value, '$.reference.id') = ? LIMIT 1`).get(id);
       const held = this.raw.prepare(`SELECT 1 FROM reference_preparations, json_each(reference_ids) AS item WHERE item.value = ? LIMIT 1`).get(id);
-      if (!document && !held) this.writes.remove(id);
+      const draft = this.raw.prepare('SELECT 1 FROM reference_draft_holds WHERE reference_id=? LIMIT 1').get(id);
+      if (!document && !held && !draft) {
+        this.writes.remove(id);
+        this.raw.prepare('DELETE FROM reference_collection_candidates WHERE reference_id=?').run(id);
+      }
     }
   }
 }
