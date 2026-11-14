@@ -21,6 +21,8 @@ export interface RiskAssessment {
 }
 
 export interface ApprovalRequester {
+  /** Boolean means an explicit human decision only. Timeout/cancel/stale
+   * adapters reject with ApprovalInterruptedError instead of resolving false. */
   requestApproval(request: ApprovalRequest): Promise<boolean>;
   cancelApproval?(requestId: string): void;
 }

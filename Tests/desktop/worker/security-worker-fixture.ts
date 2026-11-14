@@ -11,7 +11,7 @@ import type { TaskRunner } from '../../../apps/desktop/src/worker/task-runner.js
 /** In-process production WorkerServer + Main authority + file SQLite.
  * Only the transport/model endpoints are supplied by each test. Not a real
  * utilityProcess crash test, and not a fake implementation of the safety lock. */
-export async function securityWorker(host: RuntimeHost) {
+export async function securityWorker(host: RuntimeHost, options: { autoRejectApproval?: boolean } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'cloudhelm-worker-security-'));
   const file = path.join(root, 'audit.sqlite');
   const store = new SqliteStore(file);
@@ -37,7 +37,7 @@ export async function securityWorker(host: RuntimeHost) {
       if ('commitInput' in message) server.resolveInputCommit({ id: message.commitInput.id,
         taskId: message.commitInput.value.taskId, inputId: message.commitInput.value.id, committed: false });
       if ('readLog' in message) server.resolveLog({ id: message.readLog.id, value: { text: '', nextCursor: 0, more: false } });
-      if ('event' in message && message.event.type === 'approval-open') {
+      if ('event' in message && message.event.type === 'approval-open' && options.autoRejectApproval !== false) {
         const approvalId = message.event.value.id;
         // Real IPC replies are asynchronous, not reentrant within post(). Do not
         // hide dispatch errors: an invalid recipient must still fail the test.

@@ -21,8 +21,12 @@ describe('remote authorization and working directories', () => {
       expect(instructions).toContain('"reviewMode":"permissive"');
       expect(instructions).not.toContain('synthetic-ssh-secret');
       expect(instructions.length, `serialized system on model request ${requests}`).toBeLessThan(9000);
-      expect(request.tools).toHaveLength(15);
-      expect(request.tools?.map((tool) => tool.function.name)).toEqual(expect.arrayContaining(['query_operation_history', 'inspect_host_environment']));
+      // Availability changes during the round; assert authority, not a fixed catalog size.
+      const names = request.tools?.map((tool) => tool.function.name) ?? [];
+      expect(new Set(names).size).toBe(names.length);
+      expect(names).toEqual(expect.arrayContaining(['query_operation_history', 'inspect_host_environment', 'run_remote']));
+      expect(names).not.toContain('read_selected_text_file');
+      expect(names).not.toContain('list_selected_directory');
       const applicability = instructions.split('\n').find((line) => line.startsWith('{"version":1,"tools":'));
       expect(applicability).toBeTruthy();
       expect(JSON.parse(applicability!)).toMatchObject({ tools: { read_selected_text_file: false,

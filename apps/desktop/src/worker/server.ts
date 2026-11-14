@@ -2,7 +2,7 @@ import { MessagePreparations } from './message-preparations.js';
 import { ShellMarkerParser } from '@cloudhelm/adapters';
 import { createTerminalCodec } from '@cloudhelm/adapters';
 import { PrivilegedRuntime } from './privileged-runtime.js';
-import { resolveHostRiskDomain, safeDiagnostic } from '@cloudhelm/core';
+import { ApprovalInterruptedError, type ApprovalInterruption, resolveHostRiskDomain, safeDiagnostic } from '@cloudhelm/core';
 import { eventDiagnostic, reservationDiagnostic } from './diagnostic-events.js';
 import { HostEnvironmentRegistry, HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
@@ -57,7 +57,8 @@ export class WorkerServer {
   private readonly connectionAttempts = new Map<string, AbortController>();
   private readonly interactions: InteractionCoordinator;
   private readonly tasks = new Map<string, TaskRunner>();
-  private readonly pendingApprovals = new Map<string, { taskId: string; hostId: string; resolve(allowed: boolean): void }>();
+  private readonly pendingApprovals = new Map<string, { taskId: string; hostId: string; expiresAt: number;
+    resolve(allowed: boolean): void; reject(error: Error): void }>();
   private readonly pendingInputs = new Map<string, { connectionId: string; expiresAt: number; resolve(answer: string | null): void; timeout: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly send: (message: RuntimeMessage) => void) {
@@ -156,7 +157,7 @@ export class WorkerServer {
         if (!runner) throw new Error('对话运行已失效');
         if (runner.needsReviewProfile(call.reviewer)) {
           this.preparations.cancelTask(call.taskId);
-          for (const [id, pending] of this.pendingApprovals) if (pending.taskId === call.taskId) this.cancelApproval(id);
+          for (const [id, pending] of this.pendingApprovals) if (pending.taskId === call.taskId) this.cancelApproval(id, 'stale');
           runner.setReviewProfile(call.reviewer);
         }
         return;
@@ -185,14 +186,14 @@ export class WorkerServer {
       case 'test-host': return testHostConnection(call.host, call.jump);
       case 'update-host-safety':
         for (const [id, pending] of this.pendingApprovals) {
-          if (pending.hostId === call.hostId) this.cancelApproval(id);
+          if (pending.hostId === call.hostId) this.cancelApproval(id, 'stale');
         }
         for (const runner of this.tasks.values()) runner.updateHostSafety(call.hostId, call.mode,
           call.protectedReadPaths, call.protectedWritePaths, call.revision);
         return;
       case 'update-conversation-review-mode': {
         for (const [id, pending] of this.pendingApprovals) {
-          if (pending.taskId === call.taskId && pending.hostId === call.hostId) this.cancelApproval(id);
+          if (pending.taskId === call.taskId && pending.hostId === call.hostId) this.cancelApproval(id, 'stale');
         }
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('对话运行已失效');
@@ -311,9 +312,12 @@ export class WorkerServer {
       case 'decide-approval': {
         const pending = this.pendingApprovals.get(call.approvalId);
         if (!pending) throw new Error('Approval expired');
-        this.pendingApprovals.delete(call.approvalId);
-        pending.resolve(call.approved);
-        this.post({ event: { type: 'approval-close', id: call.approvalId } });
+        if (Date.now() >= pending.expiresAt) {
+          this.cancelApproval(call.approvalId, 'expired');
+          throw new Error('Approval expired');
+        }
+        if (typeof call.approved !== 'boolean') throw new Error('Invalid approval decision');
+        if (!this.settleApproval(call.approvalId, call.approved)) throw new Error('Approval channel unavailable');
         return;
       }
       case 'answer-input': {
@@ -482,23 +486,37 @@ export class WorkerServer {
   }
 
   private requestApproval(view: ApprovalView): Promise<boolean> {
-    this.post({ event: { type: 'approval-open', value: view } });
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
+    if (!Number.isSafeInteger(view.expiresAt)) return Promise.reject(new Error('Invalid approval deadline'));
+    if (view.expiresAt <= Date.now()) return Promise.reject(new ApprovalInterruptedError('expired'));
+    if (this.pendingApprovals.has(view.id)) return Promise.reject(new Error('Approval already pending'));
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => this.cancelApproval(view.id, 'expired'), view.expiresAt - Date.now());
+      const pending = { taskId: view.taskId, hostId: view.hostId, expiresAt: view.expiresAt,
+        resolve: (allowed: boolean) => { clearTimeout(timeout); queueMicrotask(() => resolve(allowed)); },
+        reject: (error: Error) => { clearTimeout(timeout); reject(error); } };
+      // Register before publishing: even an immediate reply must bind this recipient.
+      this.pendingApprovals.set(view.id, pending);
+      try { this.post({ event: { type: 'approval-open', value: view } }); }
+      catch {
         this.pendingApprovals.delete(view.id);
-        this.post({ event: { type: 'approval-close', id: view.id } });
-        resolve(false);
-      }, Math.max(0, view.expiresAt - Date.now()));
-      this.pendingApprovals.set(view.id, { taskId: view.taskId, hostId: view.hostId,
-        resolve: (allowed) => { clearTimeout(timeout); resolve(allowed); } });
+        pending.reject(new Error('Approval channel unavailable'));
+      }
     });
   }
 
-  private cancelApproval(id: string): void {
+  private settleApproval(id: string, value: boolean | ApprovalInterruptedError): boolean {
     const pending = this.pendingApprovals.get(id);
-    if (!pending) return;
+    if (!pending) return false;
     this.pendingApprovals.delete(id);
-    pending.resolve(false);
-    this.post({ event: { type: 'approval-close', id } });
+    try { this.post({ event: { type: 'approval-close', id } }); }
+    catch { pending.reject(new Error('Approval channel unavailable')); return false; }
+    if (value instanceof ApprovalInterruptedError) pending.reject(value);
+    else pending.resolve(value);
+    return true;
   }
+
+  private cancelApproval(id: string, outcome: ApprovalInterruption = 'canceled'): void {
+    this.settleApproval(id, new ApprovalInterruptedError(outcome));
+  }
+
 }

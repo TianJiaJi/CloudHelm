@@ -557,13 +557,12 @@ export class TaskRunner {
           const proposed = this.proposedOperations.get(id);
           if (proposed) this.aiDeniedOperations.set(id, proposed);
           this.consecutiveAiDenials++;
-          if (this.consecutiveAiDenials >= 3) this.blockRemote('独立审核连续拒绝三次，已暂停以避免反复试探。请检查目标或人工处理。');
         } else if (decision.verdict === 'allow') {
           this.consecutiveAiDenials = 0;
           this.aiDeniedOperations.delete(id);
-        } else if (decision.verdict !== 'ask' && decision.verdict !== 'evaluate') {
-          this.blockRemote(`操作未执行，审核未放行（${decision.ruleId}）：${decision.reason}。已暂停，请处理后手动继续。`);
         }
+        // Round control belongs to coordinateDecision after the durable decision,
+        // not this audit callback (which must not pause correctable stale reviews).
       },
       completed: async (result) => {
         this.proposedOperations.delete(result.operationId);
@@ -602,9 +601,8 @@ export class TaskRunner {
           recovery: presentation.recovery,
           expiresAt: request.expiresAt
         };
-        const allowed = await this.signals.requestApproval(view);
-        if (this.status === 'waiting-review') this.setStatus('running');
-        return allowed;
+        try { return await this.signals.requestApproval(view); }
+        finally { if (this.status === 'waiting-review') this.setStatus('running'); }
       }, cancelApproval: (id) => this.signals.cancelApproval(id) },
       executor, audit, lease: {
         currentGeneration: (id) => this.terminal.currentGeneration(id),
