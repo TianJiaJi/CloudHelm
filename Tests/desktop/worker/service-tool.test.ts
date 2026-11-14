@@ -19,7 +19,7 @@ function setup(reply: (command: string) => Partial<OperationResult> = () => ({ s
   const host: RuntimeHost = { id: 'host', label: 'test', address: 'localhost', port: 22, username: 'user', auth: 'agent', status: 'connected', defaultMode: 'permissive', protectedPaths: [], policyRevision: 1 };
   const serial = new HostSerialExecutor({ execute: async (op) => {
     const command = op.kind === 'command' ? op.command : ''; commands.push(command); scopes.push(structuredClone(op.scope));
-    const observed = reply(command);
+    const observed = command === 'id -u' ? { status: 'succeeded' as const, stdoutTail: '1000\n' } : reply(command);
     const exitCode = !observed.status || observed.status === 'succeeded' ? 0 : observed.status === 'failed' ? 1 : undefined;
     const result = { operationId: op.id, status: 'succeeded' as const, stdoutTail: '', exitCode, ...observed };
     if (commands.some((item) => item.includes('restart'))) result.stdoutTail = result.stdoutTail.replace('fixture-invocation', 'fixture-invocation-new');
@@ -55,11 +55,14 @@ it('stops if the confirmed session expires after preflight, without switching to
   expect(f.commands).toHaveLength(1);
   expect(f.ensureTerminal.mock.calls.every(([, sessionId]) => sessionId === 'confirmed-root')).toBe(true);
 });
-it('refuses an unknown session without dispatching and does not add sudo to inspect/log queries', async () => {
+it('refuses an unknown session or mixed root route and keeps explicit session queries on that identity', async () => {
   const f = setup();
   expect((await f.tool.execute('unknown', { hostId: 'host', unit: 'nginx.service', action: 'restart', sessionId: 'missing' })).isError).toBe(true);
   expect(f.commands).toEqual([]);
-  await f.tool.execute('logs', { hostId: 'host', unit: 'nginx.service', action: 'logs', sessionId: 'confirmed-root', sudo: true });
+  expect(await f.tool.execute('conflict', { hostId: 'host', unit: 'nginx.service', action: 'logs',
+    sessionId: 'confirmed-root', sudo: true })).toMatchObject({ isError: true, details: { code: 'conflicting-identity' } });
+  expect(f.commands).toEqual([]);
+  await f.tool.execute('logs', { hostId: 'host', unit: 'nginx.service', action: 'logs', sessionId: 'confirmed-root' });
   expect(f.commands).toEqual([serviceLogQuery('nginx.service')]);
   expect(f.scopes[0]?.sessionId).toBe('confirmed-root');
 });
@@ -77,11 +80,23 @@ it('does not restart if preflight claims success without a definite exit', async
   expect((await f.tool.execute('unknown-exit', { hostId: 'host', unit: 'nginx.service', action: 'restart' })).isError).toBe(true);
   expect(f.commands).toHaveLength(1);
 });
-it('does not let the actual sudo restart mutate the identity of subsequent ordinary inspection', async () => {
+it('routes all sudo-requested steps through one root intent without contaminating a later current-identity query', async () => {
   const f = setup();
   await f.tool.execute('sudo', { hostId: 'host', unit: 'nginx.service', action: 'restart', sudo: true });
-  expect(f.scopes.map((scope) => scope.runAs)).toEqual(['user', 'root', 'user']);
+  expect(f.scopes.map((scope) => scope.runAs)).toEqual(['user', 'root', 'root', 'root']);
+  await f.tool.execute('current', { hostId: 'host', unit: 'nginx.service', action: 'inspect', privilege: 'current' });
+  expect(f.scopes.at(-1)?.runAs).toBe('user');
 });
+it('honours root intent for service logs and rejects conflicting current/sudo before allocation', async () => {
+  const f = setup();
+  expect(await f.tool.execute('conflict', { hostId: 'host', unit: 'nginx.service', action: 'logs',
+    privilege: 'current', sudo: true })).toMatchObject({ isError: true, details: { code: 'conflicting-identity' } });
+  expect(f.ensureTerminal).not.toHaveBeenCalled();
+  expect((await f.tool.execute('logs', { hostId: 'host', unit: 'nginx.service', action: 'logs', privilege: 'root' })).isError).toBe(false);
+  expect(f.commands).toEqual(['id -u', `sudo -- ${serviceLogQuery('nginx.service')}`]);
+  expect(f.scopes.at(-1)?.runAs).toBe('root');
+});
+
 it('front-loads every operation reference and bounds the combined service result', async () => {
   const f = setup(() => ({ stdoutTail: `${loaded}\n${'x'.repeat(70000)}` }));
   const result = await f.tool.execute('large', { hostId: 'host', unit: 'nginx.service', action: 'restart' });
@@ -94,8 +109,9 @@ it('preflights, reviews the actual restart, then verifies using the stable unit 
   const f = setup();
   const result = await f.tool.execute('call', { hostId: 'host', unit: 'nginx.service', action: 'restart', sudo: true });
   expect(result.isError).toBe(false);
-  expect(f.commands).toEqual([serviceQuery('nginx.service'), 'sudo systemctl restart -- nginx.service', serviceQuery('nginx.service')]);
-  expect(f.audit.proposed).toHaveBeenCalledTimes(3);
+  expect(f.commands).toEqual(['id -u', `sudo -- ${serviceQuery('nginx.service')}`,
+    'sudo -- systemctl restart -- nginx.service', `sudo -- ${serviceQuery('nginx.service')}`]);
+  expect(f.audit.proposed).toHaveBeenCalledTimes(4);
   expect(result.content[0]?.text).toContain('fixture-invocation');
 });
 it.each(['LoadState=not-found', loaded.replace('Job=', 'Job=42')])('never restarts a missing unit or one with an outstanding job', async (output) => {

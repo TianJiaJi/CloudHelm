@@ -4,9 +4,11 @@ import { serviceQuery, serviceLogQuery, serviceObservation, type BusinessTool } 
 import type { SafetyGate } from '@cloudhelm/application';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
 import { feedbackTail } from './operation-feedback.js';
+import { OperationPrivilege } from './operation-privilege.js';
 
 const parameters = Type.Object({ hostId: Type.String(), unit: Type.String({ minLength: 1, maxLength: 200 }),
   action: Type.Union([Type.Literal('inspect'), Type.Literal('restart'), Type.Literal('logs')]),
+  privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])),
   sudo: Type.Optional(Type.Boolean()), sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })) }, { additionalProperties: false });
 type Phase = 'preflight' | 'restart' | 'check' | 'logs' | 'inspect';
 interface Observation {
@@ -16,8 +18,9 @@ interface Observation {
 
 /** A bounded existing-service workflow, not permission to install or retry jobs. */
 export function createServiceTool(deps: RemoteToolDependencies, gate: SafetyGate): BusinessTool<Static<typeof parameters>> {
+  const privilege = new OperationPrivilege(deps);
   return { name: 'manage_service', label: '检查与重启现有 systemd 服务', parameters, replay: 'never',
-    description: 'Existing Linux systemd services only. inspect retrieves job/invocation/exit state; logs retrieves 80 journal lines. restart preflights a loaded unit, performs one reviewed restart, then checks active state (not application health). No installation. sessionId binds a prepared sudo context or confirmed root session for every step; expiry never switches identity. A sudo context elevates each step before review; without it, the sudo flag applies only to restart. After disconnect inspect the original host/unit; never restart to recover output. Operation references and truncated output have read_operation_log retrieval; retention is not guaranteed.',
+    description: 'Existing Linux systemd services: inspect state, logs (80 journal lines), or preflight/restart/check once; active is not application health. privilege=root routes EVERY step through the same reviewed operation-level root path as run_remote; deprecated sudo=true has that same meaning, including inspect/logs. Alternatively sessionId binds one explicit legacy identity; do not combine it with root/sudo. Cancellation, denial or unknown outcomes never switch identity or restart automatically. Inspect the original unit and read_operation_log for truncated output. No installation; restart has no rollback.',
     execute: async (_id, params, signal) => {
       const host = deps.hosts.find((item) => item.id === params.hostId);
       if (!host) throw new Error('Host is outside the conversation authorization scope');
@@ -26,13 +29,16 @@ export function createServiceTool(deps: RemoteToolDependencies, gate: SafetyGate
       const fragments: string[] = [];
       let outputTruncated: boolean | 'unknown' = false;
       const validSessionId = params.sessionId === undefined || (typeof params.sessionId === 'string' && params.sessionId.length > 0 && params.sessionId.length <= 200);
-      const recovery = { hostId: host.id, unit: params.unit, ...(validSessionId && params.sessionId ? { sessionId: feedbackTail(params.sessionId, 800).text } : {}) };
+      const root = params.privilege === 'root' || params.sudo === true;
+      const recovery = { hostId: host.id, unit: params.unit, ...(root ? { privilege: 'root' as const } : {}), ...(validSessionId && params.sessionId ? { sessionId: feedbackTail(params.sessionId, 800).text } : {}) };
       const finish = (code: string, isError: boolean, guidance: string, invocationId?: string) => {
         const details = { code, recovery, operations, outputTruncated, invocationId: invocationId ? feedbackTail(invocationId, 128).text : undefined,
           retrieval: 'read_operation_log by operationId in this conversation; retention/completeness unknown' };
         return { content: [{ type: 'text' as const, text: `[Service result ${JSON.stringify(details)}]\n${guidance}\n${fragments.join('\n')}` }], details, isError };
       };
       try {
+        if ((params.privilege === 'current' && params.sudo === true) || (root && params.sessionId !== undefined))
+          return finish('conflicting-identity', true, '权限意图冲突；选择 privilege=root 或 sessionId，不要混用。未分配终端、未发送命令。');
         if (!validSessionId) return finish('service-session-invalid', true, '会话标识无效；未选择普通终端或发送命令。');
         if (signal?.aborted) return finish('service-cancelled', true, '服务请求已取消；未发送命令。');
         const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
@@ -47,8 +53,9 @@ export function createServiceTool(deps: RemoteToolDependencies, gate: SafetyGate
           operations.push(observation);
           // TaskRunner derives sudo's effective runAs before fingerprinting. A
           // per-step copy prevents that derivation from contaminating later reads.
-          const value = await deps.runOperation(gate, { id, kind: 'command', command, serviceUnit: params.unit,
-            scope: structuredClone(scope) }, signal, host.label);
+          const operation = { id, kind: 'command' as const, command, serviceUnit: params.unit, scope: structuredClone(scope) };
+          const value = root ? await privilege.run(gate, host, operation, signal)
+            : await deps.runOperation(gate, operation, signal, host.label);
           if (value.result && value.result.operationId !== id) throw new Error('Mismatched service operation observation');
           const bounded = feedbackTail(value.content.map((part) => part.text).join('\n'), 8 * 1024);
           const priorTruncation = value.result?.outputCapture?.truncated;
@@ -69,7 +76,7 @@ export function createServiceTool(deps: RemoteToolDependencies, gate: SafetyGate
         if (observed.LoadState !== 'loaded' || observed.CanStart !== 'yes' || observed.NeedDaemonReload !== 'no'
           || (observed.Job !== '' && observed.Job !== '0')) return finish('service-not-ready', true,
           '未重启：单元未就绪、配置待加载或存在运行中的任务；请先检查。');
-        const changed = await run('restart', `${params.sudo ? 'sudo ' : ''}systemctl restart -- ${params.unit}`);
+        const changed = await run('restart', `systemctl restart -- ${params.unit}`);
         if (changed.isError || changed.result?.status !== 'succeeded' || changed.result.exitCode !== 0) return finish('service-restart-unresolved', true, '保留已返回的原结果。重连后先inspect同一服务，不要再次restart。');
         const checked = await run('check', query);
         const after = serviceObservation(checked.result?.stdoutTail ?? '');
