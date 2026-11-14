@@ -31,17 +31,19 @@ function stdinFilter(call: CommandCall): boolean {
 
 /** This proves absence of business mutation only under the existing command
  * grammar. It neither grants path access nor authenticates remote executables. */
-export function isQueryPipeline(analysis: CommandAnalysis, sourceQuery: (call: CommandCall) => boolean): boolean {
+export type QueryPipelineStatus = 'proven' | 'topology-unproven' | 'source-unproven' | 'filter-unproven';
+export function queryPipelineStatus(analysis: CommandAnalysis, sourceQuery: (call: CommandCall) => boolean): QueryPipelineStatus {
   const stages = analysis.literalPipeline?.stages;
   if (analysis.hasError || analysis.hasExpansion || analysis.hasRedirection || !analysis.hasPipeline
     || analysis.scopedContexts !== true || hasIncompleteCommandSemantics(analysis)
-    || !stages || stages.length < 2 || stages.length > 6 || stages.length !== analysis.calls.length) return false;
+    || !stages || stages.length < 2 || stages.length > 6 || stages.length !== analysis.calls.length) return 'topology-unproven';
   if (!stages.every((span, index) => {
     const call = analysis.calls[index]!;
     return Number.isSafeInteger(span.start) && Number.isSafeInteger(span.end) && span.start >= 0
       && span.end > span.start && span.end <= analysis.raw.length
       && (index === 0 || stages[index - 1]!.end < span.start)
       && call.source?.depth === 0 && call.source.start === span.start && call.source.end === span.end;
-  })) return false;
-  return sourceQuery(analysis.calls[0]!) && analysis.calls.slice(1).every(stdinFilter);
+  })) return 'topology-unproven';
+  if (!sourceQuery(analysis.calls[0]!)) return 'source-unproven';
+  return analysis.calls.slice(1).every(stdinFilter) ? 'proven' : 'filter-unproven';
 }

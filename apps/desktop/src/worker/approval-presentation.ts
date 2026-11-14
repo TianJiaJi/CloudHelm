@@ -3,6 +3,8 @@ import { redactOutput, type ApprovalRequest } from '@cloudhelm/core';
 const reasons: Record<string, string> = {
   'high-impact-command': '可能改变主机访问、服务可用性，或大范围删除数据',
   'high-impact-file': '目标文件涉及主机访问或安全配置',
+  'high-impact-script': '脚本涉及主机访问、可用性或大范围变更',
+  'project-code-entry': '包管理或构建工具可能执行项目代码及生命周期脚本',
   'uncertain-command': '无法可靠判断这条命令的实际影响',
   'script-uninspectable': '执行前无法安全读取脚本内容',
   'script-uncertain': '脚本包含无法可靠判断的操作',
@@ -15,7 +17,9 @@ export function approvalPresentation(request: ApprovalRequest): { title: string;
   const operation = request.operation;
   const label = operation.kind === 'command' ? '远程命令' : operation.kind === 'write-file' ? '写入文件'
     : operation.kind === 'delete-path' ? '删除路径' : '上传文件';
-  const reason = reasons[request.ruleId] ?? redactOutput(request.reason).slice(0, 240);
+  const detail = redactOutput(request.reason).replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 900);
+  const summary = reasons[request.ruleId];
+  const reason = summary ? `${summary}${detail && detail !== summary ? `；具体依据：${detail}` : ''}` : detail;
   return {
     title: `批准这次${label}`,
     explanation: `AI 请求执行下方的${label}。触发规则 ${request.ruleId}：${reason}。请根据显示的具体操作决定，批准仅适用于这一次。`,

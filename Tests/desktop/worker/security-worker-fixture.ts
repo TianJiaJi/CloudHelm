@@ -37,8 +37,12 @@ export async function securityWorker(host: RuntimeHost) {
       if ('commitInput' in message) server.resolveInputCommit({ id: message.commitInput.id,
         taskId: message.commitInput.value.taskId, inputId: message.commitInput.value.id, committed: false });
       if ('readLog' in message) server.resolveLog({ id: message.readLog.id, value: { text: '', nextCursor: 0, more: false } });
-      if ('event' in message && message.event.type === 'approval-open')
-        void server.dispatch({ method: 'decide-approval', approvalId: message.event.value.id, approved: false });
+      if ('event' in message && message.event.type === 'approval-open') {
+        const approvalId = message.event.value.id;
+        // Real IPC replies are asynchronous, not reentrant within post(). Do not
+        // hide dispatch errors: an invalid recipient must still fail the test.
+        void Promise.resolve().then(() => server.dispatch({ method: 'decide-approval', approvalId, approved: false }));
+      }
     });
     workers.push(server); return server;
   }

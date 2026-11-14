@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  decideSafety, validProcessControl, inspectScriptSafety, isEffectFreeQuery, operationFingerprint, scriptFilePath,
+  decideSafety, validProcessControl, inspectScriptSafety, isEffectFreeQuery, operationFingerprint, scriptFilePath, redactOutput,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
   type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
   type SafetyDecision, type SafetySettings, type ScriptInspector, type TerminalLease
@@ -24,6 +24,10 @@ export interface SafetyGateDependencies {
   /** Task activity may continue only for an exact already-started background operation. */
   isOperationActive?(operation: ProposedOperation): boolean;
   settings(hostId: string): SafetySettings;
+}
+
+function safeReviewBasis(reason: string): string {
+  return redactOutput(reason).replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 900);
 }
 
 export class SafetyGate {
@@ -101,22 +105,23 @@ export class SafetyGate {
         }
       }
       if (manualReview && safety.verdict !== 'deny' && safety.verdict !== 'error') safety = {
-        verdict: 'ask', ruleId: 'ai-denial-manual-review', reason: 'User requested a one-time review of this exact denied operation'
+        verdict: 'ask', ruleId: 'ai-denial-manual-review', reason: `User requested a one-time review of this exact denied operation；静态依据：${safeReviewBasis(safety.reason)}`
       };
       if (safety.verdict === 'evaluate') {
+        const basis = safeReviewBasis(`[${safety.ruleId}] ${safety.reason}`);
         let assessment: Awaited<ReturnType<RiskEvaluator['evaluate']>>;
         try { assessment = await this.deps.evaluator.evaluate(operation, analysis, {
             classification: safety, inspectedScriptSha256: inspectedScript?.sha256
           }); }
         catch { assessment = { verdict: 'error', reason: '审核模型调用失败' }; }
         const result = typeof assessment === 'string' ? { verdict: assessment } : assessment;
-        const detail = result.reason ? `：${result.reason}` : result.verdict === 'deny' ? '（审核模型未提供具体理由）' : '';
+        const detail = result.reason ? `：${safeReviewBasis(result.reason).slice(0, 400)}` : result.verdict === 'deny' ? '（审核模型未提供具体理由）' : '';
         safety = result.verdict === 'allow'
-          ? { verdict: 'allow', ruleId: 'ai-review-allow', reason: `独立审核已放行${detail}` }
+          ? { verdict: 'allow', ruleId: 'ai-review-allow', reason: `独立审核已放行${detail}；静态依据：${basis}` }
           : result.verdict === 'deny'
-            ? { verdict: 'deny', ruleId: 'ai-review-deny', reason: `独立审核拒绝该操作${detail}` }
+            ? { verdict: 'deny', ruleId: 'ai-review-deny', reason: `独立审核拒绝该操作${detail}；静态依据：${basis}` }
             : { verdict: 'ask', ruleId: result.verdict === 'error' ? 'ai-review-unavailable' : 'ai-review-uncertain',
-              reason: `独立审核需要人工判断${detail}` };
+              reason: `独立审核需要人工判断${detail}；静态依据：${basis}` };
       }
 
       const stillCurrent = () => {
@@ -132,6 +137,7 @@ export class SafetyGate {
         } catch { return false; }
       };
       if (safety.verdict === 'ask') {
+        const basis = safeReviewBasis(`[${safety.ruleId}] ${safety.reason}`);
         if (signal?.aborted) {
           const canceled = { verdict: 'error', ruleId: 'review-canceled', reason: 'Operation was canceled before review' } as const;
           await this.deps.audit.decided(operation.id, canceled, fingerprint);
@@ -151,6 +157,7 @@ export class SafetyGate {
             : approval === 'denied' ? { verdict: 'deny', ruleId: 'human-denied', reason: 'User declined this operation; it was not executed' }
               : { verdict: 'error', ruleId: approval === 'expired' ? 'approval-expired' : approval === 'canceled' ? 'review-canceled' : 'approval-unavailable',
                 reason: 'Approval did not complete; operation was not executed' };
+        safety = { ...safety, reason: `${safety.reason}；审核依据：${basis}` };
       }
 
       if (safety.verdict !== 'allow') {

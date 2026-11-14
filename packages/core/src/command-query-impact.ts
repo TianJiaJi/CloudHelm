@@ -3,8 +3,9 @@ import type { CommandAnalysis, CommandCall } from './model.js';
 import { hasIncompleteCommandSemantics } from './command-semantics.js';
 import { isServiceQuery } from './service-observation.js';
 import { isDockerMetadataQuery } from './docker-query-policy.js';
-import { isBoundedDiagnosticCall } from './diagnostic-query-policy.js';
-import { isQueryPipeline } from './query-pipeline-policy.js';
+import { DIAGNOSTIC_QUERY_PROGRAMS, isBoundedDiagnosticCall } from './diagnostic-query-policy.js';
+import { queryPipelineStatus, type QueryPipelineStatus } from './query-pipeline-policy.js';
+import { commandReviewReasons, type CommandReviewReasonCode } from './command-review-reasons.js';
 
 const QUERY_COMMANDS = new Set(['pwd', 'whoami', 'id', 'uname', 'uptime', 'date', 'df', 'free', 'hostname', 'ls', 'stat', 'cat']);
 export const BAD_DISK_TOOLS: ReadonlySet<string> = new Set(['mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkswap', 'wipefs', 'sfdisk', 'fdisk', 'parted', 'blkdiscard']);
@@ -100,6 +101,8 @@ function singleSudoEffectFree(analysis: CommandAnalysis): boolean {
  * access authorization: callers must still apply sensitive/protected paths,
  * scope, identity, current leases and durable audit before executing anything. */
 export interface QueryImpact {
+  /** Fixed explanations only, not permissions or model-supplied instructions. */
+  reviewReasons?: CommandReviewReasonCode[];
   effects: 'none' | 'unknown';
   autoApproval: 'eligible' | 'review-required';
   evidence: 'known-query' | 'bounded-diagnostic' | 'literal-query-list' | 'query-pipeline' | 'privileged-query' | 'unproven';
@@ -108,16 +111,24 @@ export interface QueryImpact {
 export function analyzeQueryImpact(analysis: CommandAnalysis): QueryImpact {
   const known = (evidence: QueryImpact['evidence'], eligible = true): QueryImpact => ({
     effects: 'none', autoApproval: eligible ? 'eligible' : 'review-required', evidence });
+  let pipeline: QueryPipelineStatus | undefined;
   if (!hasIncompleteCommandSemantics(analysis)) {
     if (isReadOnlyQuery(analysis)) return known('known-query');
     const diagnostic = !analysis.hasError && !analysis.hasExpansion && !analysis.hasPipeline && !analysis.hasRedirection
       && !analysis.hasCompound && analysis.calls.length === 1 && isBoundedDiagnosticCall(analysis.calls[0]!);
     if (diagnostic) return known('bounded-diagnostic');
     if (literalReadList(analysis)) return known('literal-query-list');
-    if (isQueryPipeline(analysis, (call) => isQuery(call) || isBoundedDiagnosticCall(call))) return known('query-pipeline');
-    if (plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true) || singleSudoEffectFree(analysis)) return known('privileged-query', false);
+    if (analysis.hasPipeline) pipeline = queryPipelineStatus(analysis, (call) => isQuery(call) || isBoundedDiagnosticCall(call));
+    if (pipeline === 'proven') return known('query-pipeline');
+    if (plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true) || singleSudoEffectFree(analysis))
+      return { ...known('privileged-query', false), reviewReasons: ['privilege-review'] };
   }
-  return { effects: 'unknown', autoApproval: 'review-required', evidence: 'unproven' };
+  const reviewReasons = commandReviewReasons(analysis, (call) => {
+    const name = path.posix.basename(call.name);
+    return QUERY_COMMANDS.has(name) || DIAGNOSTIC_QUERY_PROGRAMS.has(name) || BAD_DISK_TOOLS.has(name)
+      || PROJECT_CODE_COMMANDS.has(name) || ['docker', 'systemctl', 'journalctl', 'ifconfig'].includes(name);
+  }, pipeline);
+  return { effects: 'unknown', autoApproval: 'review-required', evidence: 'unproven', reviewReasons };
 }
 
 /** Effect-free does not imply permission, process exit, or automatic approval. */

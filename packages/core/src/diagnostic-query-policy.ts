@@ -1,5 +1,7 @@
 import type { CommandCall } from './model.js';
 
+export const DIAGNOSTIC_QUERY_PROGRAMS: ReadonlySet<string> = new Set(['ping', 'ping6', 'ps', 'lscpu', 'nproc', 'lsblk', 'ss', 'ip']);
+
 /** Effect classification only, never low-risk approval. Accept literal system
  * executables and a deliberately small diagnostic grammar, not arbitrary network
  * traffic, wrappers, output files, flood modes or indefinite probes. */

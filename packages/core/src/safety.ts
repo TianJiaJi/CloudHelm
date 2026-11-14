@@ -2,6 +2,7 @@ import { analyzeQueryImpact, isQuery, isBlockDevice, BAD_DISK_TOOLS, PROJECT_COD
 export { isReadOnlyQuery, isEffectFreeQuery } from './command-query-impact.js';
 import { isSensitiveReadPath } from './sensitive-read.js';
 import path from 'node:path';
+import { describeCommandReview } from './command-review-reasons.js';
 import { callDirectory, hasIncompleteCommandSemantics, resolveCommandDirectory, resolveCommandPath } from './command-semantics.js';
 import type { CommandAnalysis, CommandCall, ProposedOperation, SafetyDecision, SafetySettings } from './model.js';
 
@@ -379,7 +380,8 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     return highImpactDecision('high-impact-file', 'Changes host access or security configuration', settings);
   }
   if (operation.kind !== 'command') return decision('allow', 'structured-file', 'Bounded file operation with a literal target');
-  if (settings.mode === 'ask') return { ...decision('ask', 'uncertain-command', 'Command effects cannot be determined with enough confidence'), impact: 'unknown' };
-  if (settings.mode === 'ai-review') return { ...decision('evaluate', 'uncertain-command', 'Independent AI review required for uncertain effects'), impact: 'unknown' };
-  return decision('allow', 'permissive-mode', 'Allowed by the selected review mode');
+  const reason = describeCommandReview(analysis ? analyzeQueryImpact(analysis).reviewReasons ?? ['unrecognized-operation'] : ['parse-incomplete']);
+  if (settings.mode === 'ask') return { ...decision('ask', 'uncertain-command', reason), impact: 'unknown' };
+  if (settings.mode === 'ai-review') return { ...decision('evaluate', 'uncertain-command', reason), impact: 'unknown' };
+  return decision('allow', 'permissive-mode', `按所选宽松模式允许，影响未经确认；${reason}`);
 }
