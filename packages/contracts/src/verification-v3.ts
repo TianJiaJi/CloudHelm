@@ -44,7 +44,7 @@ export interface VerificationFacts {
   recoveredAttemptIds?: string[];
   goals: 'not-checked' | 'execution-observed' | 'passed' | 'failed' | 'inconclusive' | 'model-assessed';
   impact: 'effect-free' | 'not-assessed' | 'risk-accepted' | 'unresolved';
-  operations: Array<{ operationId: string; hostId: string; kind?: 'command' | 'write-file' | 'upload' | 'delete-path'; status: string; exitCode?: number; readOnly?: boolean }>;
+  operations: Array<{ operationId: string; hostId: string; kind?: 'command' | 'write-file' | 'upload' | 'delete-path' | 'read-file'; status: string; exitCode?: number; readOnly?: boolean }>;
   /** Still-uncertain explicit risk acceptances, including earlier rounds. Real observed success may supersede uncertainty. */
   riskOperationIds: string[];
   unresolvedOperationIds: string[];

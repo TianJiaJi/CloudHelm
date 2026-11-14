@@ -1,6 +1,7 @@
 import { TaskInputQueue, inputAuthorizationKey } from './task-input-queue.js';
 import type { ConversationInput, ConversationInputKind, ExecutionTerminalBinding, HostEnvironmentAccess } from '@cloudhelm/core';
 import { commitOperationSnapshot } from './operation-commit-client.js';
+import { createAuditedRemoteReader } from './audited-remote-read.js';
 import { createBackgroundJobTool } from './background-job-tool.js';
 import { createBackgroundOperations, type BackgroundOperations } from './background-operations.js';
 import { createWorkspaceContextTools } from './workspace-context.js';
@@ -160,9 +161,8 @@ export class TaskRunner {
         try { return await this.privileged.request(host, command, cwd, reason, this.intent.goal(), gate, signal, this.intent.snapshot(), method); }
         catch (error) { this.blockRemote(error instanceof PrivilegeError ? privilegeGuidance(error.feedback) : '提权上下文未建立；直接su通常需要root密码而非sudo密码。请处理后点击继续AI或明确发送下一步指令。', false, 'interrupted'); throw error; }
       }, scope: (host, id, cwd) => this.scope(host, id, cwd),
-      readRemoteFile: this.readRemoteFile
-        ? (hostId, filePath, cwd, signal, maxBytes) => { this.assertRemoteActive(); return this.readRemoteFile!(hostId, filePath, cwd, signal, maxBytes); }
-        : undefined,
+      readRemoteFile: createAuditedRemoteReader(this.task.id, this.hosts, this.readRemoteFile,
+        this.signals, () => this.assertRemoteActive(), this.operations),
       runOperation: (gate, operation, signal, label) => this.runOperation(gate, operation, signal, label) }, gate);
     const currentSystemPrompt = createTaskPrompt(this.task, this.hosts, () => this.operationViews(), () => this.verificationOperations(), this.privileged, () => this.journal.hasReport(), () => this.intent.snapshot(), () => this.journal.submissionClosed(), this.environment);
     this.agent = await createConversationSession({

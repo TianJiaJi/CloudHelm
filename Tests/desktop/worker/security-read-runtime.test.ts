@@ -10,7 +10,7 @@ afterEach(() => vi.restoreAllMocks());
 const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', port: 22, username: 'user', auth: 'agent',
   status: 'connected', protectedPaths: [], defaultMode: 'ask', policyRevision: 1 };
 
-it.each(['/srv/app/.env', '/srv/app/config.yaml'])('characterizes durable read audit gap through the actual WorkerServer (%s)', async (target) => {
+it.each(['/srv/app/.env', '/srv/app/config.yaml'])('persists read refusal/redaction through the actual WorkerServer (%s)', async (target) => {
   const f = await securityWorker(host);
   const read = vi.spyOn(SshTransport.prototype, 'readFileForEdit').mockResolvedValue({ content: 'password="synthetic-hidden"\n',
     sha256: 'a'.repeat(64), bytes: 28, truncated: false, mode: 0o600, uid: 1000, gid: 1000 });
@@ -36,11 +36,18 @@ it.each(['/srv/app/.env', '/srv/app/config.yaml'])('characterizes durable read a
       expect(read).toHaveBeenCalledOnce();
     }
     expect(JSON.stringify(model.requests)).not.toContain('synthetic-hidden');
-    // Characterization of a FAILURE, not an acceptance assertion: neither a denied
-    // credential read nor an allowed/redacted read reaches the operation audit store.
     const reopened = new SqliteStore(f.file);
-    try { expect(reopened.list<OperationView>('operations')).toEqual([]); }
-    finally { reopened.close(); }
-    expect(f.messages.some((message) => 'commitOperation' in message)).toBe(false);
+    try {
+      const records = reopened.list<OperationView>('operations');
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ kind: 'read-file', taskId: task.id, readOnly: true, effects: 'none',
+        status: target.endsWith('.env') ? 'denied' : 'succeeded' });
+      expect(records[0]!.readAudit!.events.at(-1)).toMatchObject(target.endsWith('.env')
+        ? { phase: 'denied', code: 'credential-resource' }
+        : { phase: 'completed', redacted: true, truncated: false });
+      expect(JSON.stringify(records)).not.toContain('synthetic-hidden');
+      expect(records[0]?.outputTail).toBeUndefined();
+    } finally { reopened.close(); }
+    expect(f.messages.some((message) => 'commitOperation' in message)).toBe(true);
   } finally { await model.close(); await f.close(); }
 });

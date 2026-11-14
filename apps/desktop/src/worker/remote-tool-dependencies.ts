@@ -3,7 +3,7 @@ import type { OperationScope, ProposedOperation } from '@cloudhelm/core';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { LocalFileAccess } from './local-file-access.js';
 
-export interface RemoteFileSnapshot { content: string; bytes: number; truncated: boolean; sha256?: string;
+export interface RemoteFileSnapshot { content: string; bytes: number; truncated: boolean; redacted?: boolean; sha256?: string;
   mode: number; uid: number; gid: number }
 
 export interface RemoteToolDependencies {

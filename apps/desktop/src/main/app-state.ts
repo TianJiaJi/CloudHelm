@@ -1,4 +1,5 @@
 import { AgentActivityStore } from './agent-activity-store.js';
+import { validateReadAudit } from './read-audit-validation.js';
 import { ConversationInputStore } from './conversation-input-store.js';
 import { ConversationThinking, taskWithModel } from './conversation-thinking.js';
 import { recoverOperation } from './operation-recovery.js';
@@ -570,7 +571,10 @@ export class AppState {
 
   commitOperation(operation: OperationView): void {
     const task = this.tasks.get(operation.taskId), prior = this.operations.get(operation.id);
-    if (this.closed || !task || !task.hostIds.includes(operation.hostId)
+    if (operation.kind === 'read-file' || operation.readAudit) validateReadAudit(operation, prior);
+    const deniedForeignRead = operation.kind === 'read-file' && operation.status === 'denied'
+      && operation.ruleId === 'read-host-out-of-scope';
+    if (this.closed || !task || (!task.hostIds.includes(operation.hostId) && !deniedForeignRead)
       || prior && (prior.taskId !== operation.taskId || prior.hostId !== operation.hostId)) throw new Error('Operation persistence scope unavailable');
     const job = operation.executionJob;
     if (job && (job.taskId !== operation.taskId || job.hostId !== operation.hostId || job.operationId !== operation.id))

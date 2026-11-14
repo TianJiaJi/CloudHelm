@@ -56,14 +56,13 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       description: 'Read one regular remote file over SFTP, at most 1 MiB (default 128 KiB). Returns redacted content plus sha256 only for a complete, unmodified text observation; truncated, oversized or redacted content has no edit hash. Symlinks/directories are refused. Reading never elevates privileges.',
       parameters: readParameters, replay: 'never',
       execute: async (_id, params, signal) => {
-        const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
-        if (!host) return outOfScope();
+        // Authorization denials must reach the audited reader too, not vanish here.
         if (!deps.readRemoteFile) return { content: [{ type: 'text' as const, text: 'Remote file reading is unavailable' }], details: undefined, isError: true };
         try {
-          const snapshot = await deps.readRemoteFile(host.id, params.path, params.cwd, signal, params.maxBytes);
+          const snapshot = await deps.readRemoteFile(params.hostId, params.path, params.cwd, signal, params.maxBytes);
           const redactor = new OutputRedactor(1_048_576);
           const content = redactor.push(snapshot.content) + redactor.finish();
-          const redacted = content !== snapshot.content;
+          const redacted = snapshot.redacted === true || content !== snapshot.content;
           // Masked text is an observation, not an editable complete source. Do not
           // supply its raw-file version token for a destructive whole-file overwrite.
           const details = { path: redactOutput(params.path), bytes: snapshot.bytes, truncated: snapshot.truncated, redacted,

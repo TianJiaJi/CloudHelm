@@ -170,7 +170,11 @@ export interface TaskView {
   summary?: string;
 }
 
+export * from './read-audit.js';
+
 export interface OperationView {
+  /** Durable read decisions share the operation journal; metadata only. */
+  readAudit?: import('./read-audit.js').RemoteReadAudit;
   /** Versioned backend process observation, independent of model settlement. */
   executionJob?: ExecutionJobView;
   processControl?: { kind: 'interrupt'; jobId: string; targetOperationId: string; pid?: number; processSequence?: number;
@@ -203,7 +207,7 @@ export interface OperationView {
   id: string;
   taskId: string;
   hostId: string;
-  kind: 'command' | 'write-file' | 'upload' | 'delete-path';
+  kind: 'command' | 'write-file' | 'upload' | 'delete-path' | 'read-file';
   preview: string;
   status: 'proposed' | 'approved' | 'running' | 'succeeded' | 'failed' | 'denied' | 'unknown';
   reason?: string;
