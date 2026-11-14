@@ -1,11 +1,9 @@
 import path from 'node:path';
+import { isSensitiveReadPath } from '@cloudhelm/core';
 
 /** Reads for the model's edit loop are a separate capability from command review,
  * so the same boundaries must be enforced here: resolved literals only, never a
  * user-protected tree, never a credential file. Reading also never elevates. */
-const CREDENTIAL = /(?:^|\/)(?:\.ssh\/(?:id_[^/]+|authorized_keys)|\.env(?:\.[^/]+)?|\.Xauthority(?:-[^/]*)?)$/u;
-const SYSTEM_CREDENTIAL = /^\/(?:etc\/(?:shadow|gshadow)|root\/\.ssh\/)/u;
-
 export class RemoteReadPolicyError extends Error {
   constructor(readonly code: 'invalid-path' | 'protected-resource' | 'credential-resource', message: string) { super(message); }
 }
@@ -26,6 +24,6 @@ export function assertRemoteReadAllowed(target: string, protectedReadPaths: read
   };
   if (protectedReadPaths.some((root) => typeof root === 'string' && root.startsWith('/') && inside(root)))
     throw new RemoteReadPolicyError('protected-resource', 'Protected path; read it yourself or change the rule first');
-  if (CREDENTIAL.test(target) || SYSTEM_CREDENTIAL.test(target))
+  if (isSensitiveReadPath(target))
     throw new RemoteReadPolicyError('credential-resource', 'Credential file; AI cannot read its contents');
 }

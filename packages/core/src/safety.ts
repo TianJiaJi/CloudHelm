@@ -1,4 +1,5 @@
 import { isServiceQuery } from './service-observation.js';
+import { isSensitiveReadPath } from './sensitive-read.js';
 import { isDockerMetadataQuery } from './docker-query-policy.js';
 import { isBoundedDiagnosticCall } from './diagnostic-query-policy.js';
 import path from 'node:path';
@@ -9,7 +10,6 @@ const CRITICAL_TREES = new Set(['/', '/etc', '/usr', '/usr/bin', '/usr/sbin', '/
 const QUERY_COMMANDS = new Set(['pwd', 'whoami', 'id', 'uname', 'uptime', 'date', 'df', 'free', 'hostname', 'ls', 'stat', 'cat']);
 const BAD_DISK_TOOLS = new Set(['mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkswap', 'wipefs', 'sfdisk', 'fdisk', 'parted', 'blkdiscard']);
 const CRITICAL_FILES = new Set(['/etc/passwd', '/etc/shadow', '/etc/sudoers', '/etc/fstab']);
-const SENSITIVE_FILE = /(?:^\/etc\/(?:shadow|gshadow)$|\/\.ssh\/(?:id_[^/]+|authorized_keys)$|(?:^|\/)\.?Xauthority(?:-[^/]*)?$|(?:^|\/)\.env(?:\.[^/]+)?$)/u;
 const ORDINARY_COMMANDS = new Set(['mkdir', 'touch', 'cp', 'mv', 'install', 'tee', 'truncate', 'chmod', 'chown', 'ln',
   'sed', 'patch', 'tar', 'unzip', 'git', 'python', 'python3', 'node',
   'systemctl', 'service', 'docker', 'apt', 'apt-get', 'dnf', 'yum', 'apk', 'brew', 'rsync', 'rm', 'rmdir']);
@@ -129,13 +129,13 @@ function sensitiveRead(analysis: CommandAnalysis, cwd: string): boolean {
     if (name === 'xauth') return true;
     if (name === 'tar' && call.semantics?.tar) {
       return call.semantics.tar.paths.some((effect) => effect.kind === 'read'
-        && SENSITIVE_FILE.test(literalPath(effect.path, resolveCommandDirectory(effect.directory, cwd)) ?? ''))
-        || call.semantics.coverage === 'partial' && call.args.some((arg) => SENSITIVE_FILE.test(literalPath(arg, callDirectory(call, cwd)) ?? ''));
+        && isSensitiveReadPath(literalPath(effect.path, resolveCommandDirectory(effect.directory, cwd)) ?? ''))
+        || call.semantics.coverage === 'partial' && call.args.some((arg) => isSensitiveReadPath(literalPath(arg, callDirectory(call, cwd)) ?? ''));
     }
     if (!['cat', 'grep', 'head', 'tail', 'less', 'more', 'sed', 'awk', 'bash', 'sh', 'zsh', 'source', '.',
       'cp', 'mv', 'rsync', 'scp', 'tar', 'find', 'tee', 'base64', 'xxd', 'od', 'hexdump', 'strings'].includes(name)) return false;
     return call.args.some((arg) => /\$\{?XAUTHORITY\}?/u.test(arg)
-      || SENSITIVE_FILE.test(literalPath(arg, callDirectory(call, cwd)) ?? arg.replace(/^(['"])(.*)\1$/u, '$2')));
+      || isSensitiveReadPath(literalPath(arg, callDirectory(call, cwd)) ?? arg.replace(/^(['"])(.*)\1$/u, '$2')));
   });
 }
 

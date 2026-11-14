@@ -7,6 +7,11 @@ import type { TaskSignals } from './task-signals.js';
 import { assertRemoteReadAllowed, RemoteReadPolicyError, resolveRemoteReadTarget } from './remote-read-guard.js';
 
 type Reader = NonNullable<RemoteToolDependencies['readRemoteFile']>;
+class ReadStateChanged extends Error {
+  constructor(readonly code: 'policy-changed' | 'task-inactive') {
+    super('读取期间授权或策略已变化；未交付文件内容，请重新发起读取。');
+  }
+}
 class ReadAuditUnavailable extends Error {
   constructor() { super('读取审计未获得持久化确认；未读取或未交付文件内容。'); }
 }
@@ -18,7 +23,12 @@ export function createAuditedRemoteReader(taskId: string, hosts: RuntimeHost[], 
   if (!rawRead) return undefined;
   return async (hostId, filePath, cwd, signal, maxBytes = 128 * 1024) => {
     const host = hosts.find((item) => item.id === hostId);
-    const safePath = redactOutput(filePath).replace(/[\u0000-\u001f\u007f]/gu, '?').slice(0, 4096);
+    const policyBinding = (value: RuntimeHost | undefined) => value && JSON.stringify([
+      value.username, value.policyRevision, value.defaultMode, value.archived, value.protectedReadPaths ?? value.protectedPaths]);
+    const binding = policyBinding(host);
+    let target: string | undefined, invalidPath: unknown;
+    try { target = resolveRemoteReadTarget(filePath, cwd); } catch (error) { invalidPath = error; }
+    const safePath = redactOutput(target ?? filePath).replace(/[\u0000-\u001f\u007f]/gu, '?').slice(0, 4096);
     const record: OperationView = { id: randomUUID(), taskId, hostId, kind: 'read-file', preview: `Read ${safePath}`,
       status: 'proposed', readOnly: true, effects: 'none', createdAt: Date.now(),
       ...(host ? { loginAs: host.username, runAs: host.username } : {}),
@@ -42,23 +52,30 @@ export function createAuditedRemoteReader(taskId: string, hosts: RuntimeHost[], 
       await persist('denied', 'host-out-of-scope');
       throw new Error('Host is outside this conversation authorization');
     }
+    const current = () => {
+      signal?.throwIfAborted();
+      try { assertActive(); } catch { throw new ReadStateChanged('task-inactive'); }
+      const live = hosts.find((item) => item.id === hostId);
+      if (!live || live !== host || live.archived || policyBinding(live) !== binding) throw new ReadStateChanged('policy-changed');
+      if (invalidPath) throw invalidPath;
+      assertRemoteReadAllowed(target!, live.protectedReadPaths ?? live.protectedPaths);
+    };
     await persist('requested', 'requested');
     try {
-      signal?.throwIfAborted(); assertActive();
-      const target = resolveRemoteReadTarget(filePath, cwd);
-      assertRemoteReadAllowed(target, host.protectedReadPaths ?? host.protectedPaths);
+      current();
       await persist('authorized', 'allowed');
-      signal?.throwIfAborted(); assertActive();
-      const snapshot = await rawRead(hostId, target, '/', signal, maxBytes);
+      current();
+      const snapshot = await rawRead(hostId, target!, '/', signal, maxBytes);
+      current();
       const redactor = new OutputRedactor(1_048_576);
       const content = redactor.push(snapshot.content) + redactor.finish();
       const redacted = content !== snapshot.content;
       await persist('completed', 'completed', { bytes: snapshot.bytes, redacted, truncated: snapshot.truncated });
-      signal?.throwIfAborted(); assertActive();
+      current();
       return { ...snapshot, content, redacted, sha256: redacted || snapshot.truncated ? undefined : snapshot.sha256 };
     } catch (error) {
       if (error instanceof ReadAuditUnavailable) throw error;
-      const policy = error instanceof RemoteReadPolicyError;
+      const policy = error instanceof RemoteReadPolicyError || error instanceof ReadStateChanged;
       await persist(policy ? 'denied' : 'failed', policy ? error.code : signal?.aborted ? 'cancelled' : 'read-failed');
       // No raw server error or file content belongs in the audit or tool error.
       throw new Error(policy ? error.message : 'Remote file read was cancelled or unavailable; no content delivered.');

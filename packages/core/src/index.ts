@@ -10,6 +10,7 @@ export * from './command-semantics.js';
 export * from './ports.js';
 export * from './fingerprint.js';
 export * from './safety.js';
+export * from './sensitive-read.js';
 export * from './docker-query-policy.js';
 export * from './diagnostic-query-policy.js';
 export * from './redaction.js';
