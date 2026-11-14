@@ -13,6 +13,7 @@ export * from './safety.js';
 export * from './sensitive-read.js';
 export * from './docker-query-policy.js';
 export * from './diagnostic-query-policy.js';
+export { analyzeQueryImpact, type QueryImpact } from './command-query-impact.js';
 export * from './redaction.js';
 export * from './sudo-plan.js';
 export * from './clarification.js';

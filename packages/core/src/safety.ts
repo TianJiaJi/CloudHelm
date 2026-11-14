@@ -1,20 +1,17 @@
-import { isServiceQuery } from './service-observation.js';
+import { analyzeQueryImpact, isQuery, isBlockDevice, BAD_DISK_TOOLS, PROJECT_CODE_COMMANDS } from './command-query-impact.js';
+export { isReadOnlyQuery, isEffectFreeQuery } from './command-query-impact.js';
 import { isSensitiveReadPath } from './sensitive-read.js';
-import { isDockerMetadataQuery } from './docker-query-policy.js';
-import { isBoundedDiagnosticCall } from './diagnostic-query-policy.js';
 import path from 'node:path';
 import { callDirectory, hasIncompleteCommandSemantics, resolveCommandDirectory, resolveCommandPath } from './command-semantics.js';
 import type { CommandAnalysis, CommandCall, ProposedOperation, SafetyDecision, SafetySettings } from './model.js';
 
 const CRITICAL_TREES = new Set(['/', '/etc', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib', '/boot', '/home', '/root', '/var', '/var/lib', '/var/lib/docker', '/bin', '/sbin', '/lib', '/lib64', '/dev', '/proc', '/sys']);
-const QUERY_COMMANDS = new Set(['pwd', 'whoami', 'id', 'uname', 'uptime', 'date', 'df', 'free', 'hostname', 'ls', 'stat', 'cat']);
-const BAD_DISK_TOOLS = new Set(['mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkswap', 'wipefs', 'sfdisk', 'fdisk', 'parted', 'blkdiscard']);
+
+
 const CRITICAL_FILES = new Set(['/etc/passwd', '/etc/shadow', '/etc/sudoers', '/etc/fstab']);
 const ORDINARY_COMMANDS = new Set(['mkdir', 'touch', 'cp', 'mv', 'install', 'tee', 'truncate', 'chmod', 'chown', 'ln',
   'sed', 'patch', 'tar', 'unzip', 'git', 'python', 'python3', 'node',
   'systemctl', 'service', 'docker', 'apt', 'apt-get', 'dnf', 'yum', 'apk', 'brew', 'rsync', 'rm', 'rmdir']);
-/** These tools may execute project manifests, lifecycle hooks or build rules. */
-const PROJECT_CODE_COMMANDS = new Set(['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'pip', 'pip3', 'make', 'gmake', 'cmake', 'ninja', 'meson']);
 const OPAQUE_COMMANDS = new Set(['bash', 'sh', 'zsh', 'fish', 'python', 'python3', 'node', 'perl', 'ruby', 'php', 'eval', 'source', '.']);
 const HIGH_IMPACT_COMMANDS = new Set(['useradd', 'userdel', 'usermod', 'groupadd', 'groupdel', 'passwd', 'chpasswd',
   'iptables', 'ip6tables', 'nft', 'ufw', 'firewall-cmd', 'shutdown', 'reboot', 'poweroff']);
@@ -47,10 +44,6 @@ function criticalMassTarget(value: string, cwd: string | null): boolean {
   if (!cwd && !prefix.startsWith('/')) return false;
   const base = path.posix.resolve(cwd ?? '/', prefix);
   return CRITICAL_TREES.has(base) || [...CRITICAL_TREES].some((target) => target.startsWith(base));
-}
-
-function isBlockDevice(value: string): boolean {
-  return /^\/dev\/(?:[hsv]d[a-z]+\d*|xvd[a-z]+\d*|nvme\d+n\d+(?:p\d+)?|mmcblk\d+(?:p\d+)?|disk\d+(?:s\d+)?|(?:mapper|disk)\/.+|dm-\d+|loop\d+|md\d+|zram\d+)$/u.test(value);
 }
 
 function writableRootMount(args: string[]): boolean {
@@ -206,99 +199,9 @@ function protectedCommandTarget(operation: ProposedOperation, analysis: CommandA
   return false;
 }
 
-function isQuery(call: CommandCall): boolean {
-  if (call.dynamic || call.redirects) return false;
-  const name = path.posix.basename(call.name);
-  if (![name, `/bin/${name}`, `/usr/bin/${name}`].includes(call.name)) return false;
-  if (name === 'date') return call.args.every((arg) => arg.startsWith('+') || ['-u', '--utc', '--universal', '-R', '--rfc-email', '-I', '--iso-8601', '--help', '--version'].includes(arg));
-  if (name === 'hostname') return call.args.every((arg) => ['-f', '--fqdn', '-s', '--short', '-I', '--all-ip-addresses', '-i', '--ip-address', '-d', '--domain', '-A', '--all-fqdns', '--help', '--version'].includes(arg));
-  if (isServiceQuery(name, call.args)) return true;
-  if (name === 'docker') return isDockerMetadataQuery(call.args);
-  if (PROJECT_CODE_COMMANDS.has(name)) return call.args.length === 1 && call.args[0] === '--version';
-  if ((BAD_DISK_TOOLS.has(name) || name.startsWith('mkfs.')) && call.args.length === 1
-    && ['--help', '--version', '-h', '-V'].includes(call.args[0]!)) return true;
-  if (name === 'fdisk') return ['-l', '--list'].includes(call.args[0] ?? '')
-    && call.args.slice(1).every((arg) => isBlockDevice(arg));
-  if (name === 'sfdisk') return ['-l', '--list'].includes(call.args[0] ?? '')
-    && call.args.slice(1).every((arg) => isBlockDevice(arg));
-  if (name === 'wipefs') return ['-n', '--no-act'].includes(call.args[0] ?? '')
-    && call.args.slice(1).length > 0 && call.args.slice(1).every((arg) => isBlockDevice(arg));
-  if (name === 'parted') return call.args.some((arg) => ['print', '-l', '--list'].includes(arg))
-    && call.args.every((arg) => ['-s', '--script', 'print', 'free', '-l', '--list'].includes(arg) || isBlockDevice(arg));
-  if (name === 'hostname') return call.args.every((arg) => ['-a', '-A', '-d', '-f', '-i', '-I', '-s', '--fqdn', '--short', '--domain', '--ip-address', '--all-ip-addresses'].includes(arg));
-  if (name === 'date') return call.args.every((arg) => ['-u', '-R', '-I', '--utc', '--rfc-email', '--iso-8601'].includes(arg) || (arg.startsWith('+') && !/[\r\n]/u.test(arg)));
-  if (name === 'ifconfig') {
-    return call.args.length === 0 || (call.args.length === 1 && (call.args[0] === '-a' || /^[a-zA-Z][\w.:-]*$/u.test(call.args[0] ?? '')));
-  }
-  if (!QUERY_COMMANDS.has(name)) return false;
-  if (call.args.some((arg) => /[$`*?{}\[\]<>\n\r]/u.test(arg))) return false;
-  if (name === 'cat') {
-    const paths = call.args[0] === '--' ? call.args.slice(1) : call.args;
-    return paths.length > 0 && paths.every((value) => value.length > 0 && !/^[-~]/u.test(value)
-      && !/[\u0000-\u001f\u007f]/u.test(value) && !/^\/(?:dev\/(?:stdin|fd\/0)|proc\/(?:self|\d+)\/fd\/0)$/u.test(value));
-  }
-  if (name === 'ls' || name === 'stat') return !call.args.some((arg) => arg.startsWith('--output='));
-  return call.args.every((arg) => !arg.startsWith('-') || /^-[a-zA-Z]+$/u.test(arg));
-}
-
-/** This capability is minted by the safety gate, never supplied by model/tool arguments. */
-function plainSudoQuery(analysis: CommandAnalysis, names: readonly string[], allowList = false): boolean {
-  const steps = analysis.steps;
-  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection
-    || !analysis.hasCompound || !steps?.length || (!allowList && steps.length !== 1)
-    || analysis.calls.length !== steps.length * 2) return false;
-  return steps.every(({ call }, step) => {
-    const wrapper = analysis.calls[step * 2];
-    const inner = analysis.calls[step * 2 + 1];
-    return wrapper?.name === 'sudo' && wrapper.name === call.name && !wrapper.dynamic && !wrapper.redirects
-      && wrapper.args.length === call.args.length && wrapper.args.every((arg, index) => arg === call.args[index])
-      && !!inner && names.includes(path.posix.basename(inner.name)) && isQuery(inner)
-      && wrapper.args.length === inner.args.length + 1 && wrapper.args[0] === inner.name
-      && wrapper.args.slice(1).every((arg, index) => arg === inner.args[index]);
-  });
-}
-
-/** Low-risk auto-approval is deliberately narrower than effect classification. */
-export function isReadOnlyQuery(analysis: CommandAnalysis): boolean {
-  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || hasIncompleteCommandSemantics(analysis)) return false;
-  if (!analysis.hasCompound && analysis.calls.length === 1) return isQuery(analysis.calls[0]!);
-  return plainSudoQuery(analysis, ['docker']);
-}
-
-/** Multiple literal reads are effect-free, but not automatically approved. */
-function literalReadList(analysis: CommandAnalysis): boolean {
-  return !analysis.hasError && !analysis.hasExpansion && !analysis.hasPipeline && !analysis.hasRedirection
-    && !!analysis.steps && analysis.steps.length > 1 && analysis.calls.length === analysis.steps.length
-    && analysis.steps.every(({ call }, index) => !call.dynamic && !call.redirects && (isQuery(call) || isBoundedDiagnosticCall(call))
-      && analysis.calls[index]?.name === call.name && analysis.calls[index]?.args.length === call.args.length
-      && call.args.every((arg, argIndex) => analysis.calls[index]?.args[argIndex] === arg));
-}
-
-/** A literal sudo wrapper (optional -- only) preserves a proven query's effects,
- * not its auto-approval. Never accept identity/options, scripts or extra calls. */
-function singleSudoEffectFree(analysis: CommandAnalysis): boolean {
-  const wrapper = analysis.steps?.[0]?.call;
-  const inner = analysis.calls[1];
-  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || analysis.steps?.length !== 1
-    || analysis.calls.length !== 2 || !wrapper || !['sudo', '/usr/bin/sudo'].includes(wrapper.name)
-    || wrapper.dynamic || wrapper.redirects || !inner || analysis.steps[0]?.condition !== 'always' || analysis.calls[0]?.name !== wrapper.name
-    || analysis.calls[0].args.length !== wrapper.args.length || !wrapper.args.every((arg, i) => arg === analysis.calls[0]?.args[i])) return false;
-  const args = wrapper.args[0] === '--' ? wrapper.args.slice(1) : wrapper.args;
-  return args.length === inner.args.length + 1 && args[0] === inner.name
-    && args.slice(1).every((arg, index) => arg === inner.args[index]) && isQuery(inner);
-}
-
-/** Effect-free capability: privileged file inspection still takes its normal review path. */
-export function isEffectFreeQuery(analysis: CommandAnalysis): boolean {
-  if (hasIncompleteCommandSemantics(analysis)) return false;
-  const diagnostic = !analysis.hasError && !analysis.hasExpansion && !analysis.hasPipeline && !analysis.hasRedirection
-    && !analysis.hasCompound && analysis.calls.length === 1 && isBoundedDiagnosticCall(analysis.calls[0]!);
-  return isReadOnlyQuery(analysis) || diagnostic || literalReadList(analysis) || plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true) || singleSudoEffectFree(analysis);
-}
-
 function isLowRiskCommand(analysis: CommandAnalysis, operation: ProposedOperation): boolean {
   if (hasIncompleteCommandSemantics(analysis)) return false;
-  if (isReadOnlyQuery(analysis)) return true;
+  if (analyzeQueryImpact(analysis).autoApproval === 'eligible') return true;
   if (analysis.hasCompound || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection || analysis.calls.length !== 1) return false;
   const call = analysis.calls[0];
   if (!call) return false;
