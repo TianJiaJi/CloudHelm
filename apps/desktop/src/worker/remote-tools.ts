@@ -82,7 +82,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       createOnly: Type.Optional(Type.Boolean()) }, { additionalProperties: false });
     const writeTool: BusinessTool<Static<typeof writeParameters>> = {
       name: 'write_remote_file', label: 'Write an audited remote file',
-      description: 'Write a UTF-8 file over SFTP on an authorized host. Maximum 1 MiB. Parent directory must exist. Replacing an existing regular file requires expectedSha256 from read_remote_file (compare-and-swap): a truncated read has no hash, so re-read the whole file first; a mismatch aborts without writing. Use createOnly=true to require that the target does not exist. The result reports a read-back hash; the recovery copy restores only this file, not the service state. sessionId may select a root SSH session; sudo/su contexts do not elevate SFTP.',
+      description: 'Write a UTF-8 file over SFTP on an authorized host. Maximum 1 MiB. Parent directory must exist. Replacing an existing regular file requires expectedSha256 from read_remote_file (rechecked before staging/commit; not atomic against external writers): a truncated read has no hash, so re-read the whole file first; a mismatch aborts without writing. New files use non-overwriting creation; createOnly=true explicitly forbids replacement. The result reports a read-back hash; the recovery copy restores only this file, not the service state. sessionId may select a root SSH session; sudo/su contexts do not elevate SFTP.',
       parameters: writeParameters, replay: 'never',
       execute: async (_id, params, signal) => {
         const host = deps.hosts.find((candidate) => candidate.id === params.hostId);

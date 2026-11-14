@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { SshTransport, type SshHost } from '../../packages/adapters/src/ssh-transport.js';
 
 const state = vi.hoisted(() => ({ clients: [] as Array<{ emit(event: string, ...args: unknown[]): boolean; end: ReturnType<typeof vi.fn> }>, sftp: {} as Record<string, unknown> }));
@@ -95,6 +96,40 @@ describe('SFTP commit authorization', () => {
     const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
     await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'), () => { throw new Error('expired'); })).rejects.toThrow('expired');
     expect(calls.write).not.toHaveBeenCalled(); expect(calls.rename).not.toHaveBeenCalled(); expect(calls.unlink).not.toHaveBeenCalled();
+  });
+});
+
+describe('SFTP version conditions', () => {
+  const oldHash = createHash('sha256').update('old').digest('hex');
+  it('rejects an outdated version before backup or staging writes', async () => {
+    const calls = sftpFixture(true, () => {});
+    const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+    await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('next'), () => {}, undefined,
+      { expectedSha256: 'a'.repeat(64) })).rejects.toMatchObject({ effects: 'none' });
+    expect(calls.write).not.toHaveBeenCalled();
+    expect(calls.rename).not.toHaveBeenCalled();
+  });
+  it('rechecks the version after staging and refuses a changed target', async () => {
+    let changed = false;
+    const calls = sftpFixture(true, () => { changed = true; });
+    state.sftp.read = (_handle: Buffer, buffer: Buffer, offset: number, length: number, position: number,
+      cb: (error: null, count: number) => void) => cb(null,
+        Buffer.from(changed ? 'new' : 'old').copy(buffer, offset, position, position + length));
+    const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+    await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('next'), () => {}, undefined,
+      { expectedSha256: oldHash })).rejects.toMatchObject({ effects: 'possible' });
+    expect(calls.write).toHaveBeenCalledTimes(2);
+    expect(calls.rename).not.toHaveBeenCalled();
+  });
+  it('uses non-overwriting rename for create-only and never falls back to POSIX overwrite', async () => {
+    const calls = sftpFixture(false, () => {});
+    const rename = vi.fn((_from: string, _to: string, cb: (error: Error) => void) => cb(new Error('Target exists')));
+    state.sftp.rename = rename;
+    const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+    await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('next'), () => {}, undefined,
+      { createOnly: true })).rejects.toThrow('Target exists');
+    expect(rename).toHaveBeenCalledOnce();
+    expect(calls.rename).not.toHaveBeenCalled();
   });
 });
 

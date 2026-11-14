@@ -66,6 +66,7 @@ describe('structured operation authorization continuity', () => {
     const write: ProposedOperation = { id: 'write', kind: 'write-file', path: '/srv/app/file', content: 'new', scope: f.scope };
     await f.executor.execute(write, operationFingerprint(write), controller.signal);
     expect(f.writeFile.mock.calls[0]?.[4]).toBe(controller.signal);
+    expect(f.writeFile.mock.calls[0]?.[5]).toMatchObject({ createOnly: true });
     const remove: ProposedOperation = { id: 'delete', kind: 'delete-path', path: '/srv/app/file', scope: f.scope };
     await f.executor.execute(remove, operationFingerprint(remove), controller.signal);
     expect(f.deleteFile.mock.calls[0]?.[3]).toBe(controller.signal);
@@ -119,6 +120,7 @@ describe('conditional write and read-back verification', () => {
     expect(result.status).toBe('succeeded');
     expect(f.writeFile).toHaveBeenCalledOnce();
     expect(result.stdoutTail).toContain('Verified read-back hash');
+    expect(f.writeFile.mock.calls[0]?.[5]).toEqual({ expectedSha256: hash, createOnly: false });
     // A recovery copy restores this file only; it is never described as a rollback.
     expect(result.stdoutTail).toContain('restores this file only');
   });

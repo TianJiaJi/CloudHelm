@@ -336,20 +336,27 @@ export class SshTransport {
   }
 
   /** Writes through a private temporary file and retains a private backup of an overwritten file. */
-async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAuthorized: () => void = () => {}, signal?: AbortSignal,
-    options: { preserveSpecialMode?: boolean } = {}): Promise<{ backup?: string; modeDropped?: string } | undefined> {
+  async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAuthorized: () => void = () => {}, signal?: AbortSignal,
+    options: { preserveSpecialMode?: boolean; createOnly?: boolean; expectedSha256?: string } = {}): Promise<{ backup?: string; modeDropped?: string } | undefined> {
     if (content.length > 1_048_576) throw new Error('Structured writes are limited to 1 MiB');
     let effects: 'none' | 'possible' = 'none';
     try { return await this.withSftp(hostId, async (sftp, assertActive) => {
       const check = () => { assertActive(); assertAuthorized(); };
       check();
       await this.checkSafeParent(sftp, absolutePath);
+      if (options.expectedSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(options.expectedSha256))
+        throw new Error('Invalid expected file hash');
+      if (options.createOnly && options.expectedSha256) throw new Error('Conflicting file conditions');
       const existing = await this.lstatOptional(sftp, absolutePath);
+      if (options.createOnly && existing) throw new Error('Create-only target already exists');
+      if (options.expectedSha256 && !existing) throw new Error('Expected remote file disappeared');
       if (existing && (!existing.isFile() || existing.isSymbolicLink())) throw new Error('Target must be a regular file, not a symlink or directory');
       if (existing && existing.size > 1_048_576) throw new Error('Existing file is too large for a managed backup');
       const backup = existing ? `${absolutePath}.cloudhelm-backup-${randomUUID()}` : undefined;
       if (backup) {
         const original = await readBoundedSftpFile(sftp, absolutePath, 1_048_576, check);
+        if (options.expectedSha256 && createHash('sha256').update(original).digest('hex') !== options.expectedSha256)
+          throw new Error('Remote file changed before staging; nothing was written');
         check(); effects = 'possible';
         await this.writeSftpFile(sftp, backup, original, 0o600, check);
       }
@@ -370,9 +377,25 @@ async writeFile(hostId: string, absolutePath: string, content: Buffer, assertAut
               (error) => error ? reject(error) : resolve());
           });
         }
+        await this.checkSafeParent(sftp, absolutePath);
+        if (options.expectedSha256) {
+          const latest = await this.lstatOptional(sftp, absolutePath);
+          if (!latest?.isFile() || latest.isSymbolicLink() || latest.mode !== existing!.mode
+            || latest.uid !== existing!.uid || latest.gid !== existing!.gid)
+            throw new Error('Remote file identity or metadata changed before commit');
+          const current = await readBoundedSftpFile(sftp, absolutePath, 1_048_576, check);
+          if (createHash('sha256').update(current).digest('hex') !== options.expectedSha256)
+            throw new Error('Remote file changed while staging; target was not replaced');
+        }
+        // SFTP v3 rename refuses an existing destination. Never use the overwriting
+        // POSIX extension for create-only, including a late competing creator.
+        // Replacement still has a read-to-rename race with external writers: these
+        // checks are not a server-side atomic compare-and-swap primitive.
         await new Promise<void>((resolve, reject) => {
           check();
-          sftp.ext_openssh_rename(temporary, absolutePath, (error) => error ? reject(error) : resolve());
+          const done = (error: Error | undefined | null) => error ? reject(error) : resolve();
+          if (options.createOnly) sftp.rename(temporary, absolutePath, done);
+          else sftp.ext_openssh_rename(temporary, absolutePath, done);
         });
       } catch (error) {
         await this.unlinkOptional(sftp, temporary, check).catch(() => undefined);

@@ -43,6 +43,8 @@ export class FileOperationExecutor implements OperationExecutor {
       // replaced with the exact content the review was based on; a truncated read
       // has no hash, so it can never authorize a whole-file overwrite.
       const intended = operation.kind === 'write-file' ? Buffer.from(operation.content) : content!;
+      if (operation.kind !== 'delete-path' && intended.length > 1_048_576)
+        return notDispatched('Structured writes are limited to 1 MiB; nothing was written.');
       // Always confirm the current state first: an existing file may only be replaced
       // with the exact reviewed content, and createOnly must actually be enforced.
       if (operation.kind === 'write-file') {
@@ -66,7 +68,10 @@ export class FileOperationExecutor implements OperationExecutor {
       remoteStarted = true;
       const written = operation.kind === 'delete-path'
         ? { backup: await this.ssh.deleteFile(operation.scope.hostId, remotePath, assertAuthorized, signal) }
-        : await this.ssh.writeFile(operation.scope.hostId, remotePath, intended, assertAuthorized, signal);
+        : await this.ssh.writeFile(operation.scope.hostId, remotePath, intended, assertAuthorized, signal,
+          operation.kind === 'write-file'
+            ? { expectedSha256: operation.expectedSha256, createOnly: !operation.expectedSha256 }
+            : {});
       const backup = written?.backup;
       const handover = !this.terminal.isAgentOwner(operation.scope.terminalId)
         || this.terminal.currentGeneration(operation.scope.terminalId) !== operation.scope.terminalGeneration;
