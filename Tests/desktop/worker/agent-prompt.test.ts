@@ -28,11 +28,21 @@ describe('layered agent guidance', () => {
     for (const rule of ['SafetyGate', 'never automatically replay', 'submit_verification',
       'run_remote.cwd', 'read_operation_log', 'host recovery card', 'Ask the user only when',
       'Dedicated tools may include documented preflight', 'No submit_verification tool or report submission is required',
-      'Prefer one logical action per tool call', 'a bounded single-purpose command may use &&, ||, semicolons or a pipeline',
+      'execute one focused query per tool call', 'await its result before choosing the next query',
       'Never probe sudo with sudo -n true', 'Sudo pipelines, redirections, sudo -S, su and nested shells']) expect(prompt).toContain(rule);
     for (const unrelated of ['apt-get --simulate', 'docker compose config --quiet', 'pgrep -a nginx', 'Examples (each numbered step)']) {
       expect(prompt).not.toContain(unrelated);
     }
+  });
+
+  it('keeps ordinary diagnosis focused without suggesting review bypass by splitting', () => {
+    const prompt = agentPrompt([host], [], '');
+    for (const rule of ['For ordinary diagnostics', 'execute one focused query per tool call',
+      'Do not bundle independent queries with semicolons, &&, ||, newlines or multiple pipelines',
+      'Do not add decorative echo/printf separators', 'Use a pipeline only when necessary for one bounded query',
+      'Never split, rewrite or rewrap a pending, denied, canceled or expired operation to evade review',
+      'submit any revised operation through normal backend checks', 'Dedicated tools may include documented preflight/verification'])
+      expect(prompt).toContain(rule);
   });
 
   it('answers without a host and only plans complex work; does not require probes before a simple write', () => {

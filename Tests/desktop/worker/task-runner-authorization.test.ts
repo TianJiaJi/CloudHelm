@@ -20,7 +20,8 @@ describe('remote authorization and working directories', () => {
       expect(instructions).toContain('"account":"ubuntu"');
       expect(instructions).toContain('"reviewMode":"permissive"');
       expect(instructions).not.toContain('synthetic-ssh-secret');
-      expect(instructions.length, `serialized system on model request ${requests}`).toBeLessThan(9000);
+      // 防膨胀回归门（2026-11 调整）：9000→12000，给安全规范留空间；它是发现意外膨胀的护栏，不是平台要求。
+      expect(instructions.length, `serialized system on model request ${requests}`).toBeLessThan(12000);
       // Availability changes during the round; assert authority, not a fixed catalog size.
       const names = request.tools?.map((tool) => tool.function.name) ?? [];
       expect(new Set(names).size).toBe(names.length);
