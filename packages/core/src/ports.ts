@@ -1,5 +1,7 @@
 import type { ApprovalRequest, CommandAnalysis, InputRequest, OperationResult, ProposedOperation, SafetyDecision } from './model.js';
 
+import type { OperationImpact } from './operation-impact.js';
+
 export interface CommandAnalyzer {
   analyze(command: string): Promise<CommandAnalysis>;
 }
@@ -11,7 +13,7 @@ export interface ScriptInspector {
 
 export interface RiskEvaluator {
   evaluate(operation: ProposedOperation, analysis: CommandAnalysis | undefined,
-    context?: { classification: SafetyDecision; inspectedScriptSha256?: string }): Promise<RiskAssessment | RiskAssessment['verdict']>;
+    context?: { classification: SafetyDecision; inspectedScriptSha256?: string; impactAnalysis?: OperationImpact }): Promise<RiskAssessment | RiskAssessment['verdict']>;
 }
 
 export interface RiskAssessment {
@@ -30,6 +32,8 @@ export interface ApprovalRequester {
 export interface ExecutionOptions {
   /** Minted only by SafetyGate's deterministic read-only classification. */
   readOnly?: boolean;
+  /** Backend facts only, not a grant to bypass isAuthorized or host locks. */
+  impactAnalysis?: OperationImpact;
   /** Synchronous final authorization check; adapters call it before each new side effect. */
   isAuthorized?: () => boolean;
   /** Trusted supervised-process observation. Not proof of target authentication or readiness. */
@@ -45,7 +49,7 @@ export interface OperationExecutor {
 
 export interface OperationAudit {
   proposed(operation: ProposedOperation, fingerprint: string): Promise<void>;
-  classified?(operationId: string, readOnly: boolean): Promise<void>;
+  classified?(operationId: string, readOnly: boolean, impact?: OperationImpact): Promise<void>;
   decided(operationId: string, decision: SafetyDecision, fingerprint: string): Promise<void>;
   completed(result: OperationResult): Promise<void>;
 }

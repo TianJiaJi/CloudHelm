@@ -1,4 +1,5 @@
 import { AgentActivityStore } from './agent-activity-store.js';
+import { OperationImpactSchema } from '@cloudhelm/contracts';
 import { validateReadAudit } from './read-audit-validation.js';
 import { ConversationInputStore } from './conversation-input-store.js';
 import { ConversationThinking, taskWithModel } from './conversation-thinking.js';
@@ -572,6 +573,7 @@ export class AppState {
   commitOperation(operation: OperationView): void {
     const task = this.tasks.get(operation.taskId), prior = this.operations.get(operation.id);
     if (operation.kind === 'read-file' || operation.readAudit) validateReadAudit(operation, prior);
+    if (operation.impactAnalysis && !Value.Check(OperationImpactSchema, operation.impactAnalysis)) throw new Error('Invalid operation impact');
     const deniedForeignRead = operation.kind === 'read-file' && operation.status === 'denied'
       && operation.ruleId === 'read-host-out-of-scope';
     if (this.closed || !task || (!task.hostIds.includes(operation.hostId) && !deniedForeignRead)

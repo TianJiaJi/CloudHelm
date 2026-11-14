@@ -1,7 +1,7 @@
-import type { CommandAnalysis, ModelRequestAttempt, ProposedOperation, RiskAssessment, RiskEvaluator, SafetyDecision } from '@cloudhelm/core';
+import type { CommandAnalysis, ModelRequestAttempt, OperationImpact, ProposedOperation, RiskAssessment, RiskEvaluator, SafetyDecision } from '@cloudhelm/core';
 import { meterModelRequest } from './model-request-meter.js';
 
-type ReviewContext = { classification: SafetyDecision; inspectedScriptSha256?: string };
+type ReviewContext = { classification: SafetyDecision; inspectedScriptSha256?: string; impactAnalysis?: OperationImpact };
 import { redactOutput } from '@cloudhelm/core';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import type { Model } from '@earendil-works/pi-ai';
@@ -63,7 +63,8 @@ function reviewState(operation: ProposedOperation, analysis: CommandAnalysis | u
     hasPipeline: analysis.hasPipeline, hasCompound: analysis.hasCompound, hasRedirection: analysis.hasRedirection } : null,
     recentActions: history.map((item) => redactOutput(item).slice(0, 800)),
     classification: context ? { ruleId: context.classification.ruleId, impact: context.classification.impact ?? 'unknown',
-      reason: redactOutput(context.classification.reason).slice(0, 300), inspectedScriptSha256: context.inspectedScriptSha256 ?? null } : null
+      reason: redactOutput(context.classification.reason).slice(0, 300), inspectedScriptSha256: context.inspectedScriptSha256 ?? null,
+      impactAnalysis: context.impactAnalysis ? { ...context.impactAnalysis } : null } : null
   };
 }
 

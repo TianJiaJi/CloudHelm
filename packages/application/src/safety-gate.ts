@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  ApprovalInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, isEffectFreeQuery, operationFingerprint, scriptFilePath, redactOutput,
+  ApprovalInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, operationFingerprint, scriptFilePath, redactOutput,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
   type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
   type SafetyDecision, type SafetySettings, type ScriptInspector, type TerminalLease
@@ -61,8 +61,9 @@ export class SafetyGate {
           return { decision: safety };
         }
       }
-      const readOnly = !!analysis && isEffectFreeQuery(analysis);
-      await this.deps.audit.classified?.(operation.id, readOnly);
+      const impact = analyzeOperationImpact(operation, analysis);
+      const readOnly = impact.mutation === 'none';
+      await this.deps.audit.classified?.(operation.id, readOnly, structuredClone(impact));
 
       let settings: SafetySettings;
       try { settings = this.deps.settings(operation.scope.hostId); }
@@ -111,7 +112,7 @@ export class SafetyGate {
         const basis = safeReviewBasis(`[${safety.ruleId}] ${safety.reason}`);
         let assessment: Awaited<ReturnType<RiskEvaluator['evaluate']>>;
         try { assessment = await this.deps.evaluator.evaluate(operation, analysis, {
-            classification: safety, inspectedScriptSha256: inspectedScript?.sha256
+            classification: safety, inspectedScriptSha256: inspectedScript?.sha256, impactAnalysis: structuredClone(impact)
           }); }
         catch { assessment = { verdict: 'error', reason: '审核模型调用失败' }; }
         const result = typeof assessment === 'string' ? { verdict: assessment } : assessment;
@@ -188,7 +189,7 @@ export class SafetyGate {
         return { decision: safety };
       }
       let result: OperationResult;
-      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, isAuthorized: stillCurrent, onProcessStarted: observer?.onProcessStarted }); }
+      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), isAuthorized: stillCurrent, onProcessStarted: observer?.onProcessStarted }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       }

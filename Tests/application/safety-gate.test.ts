@@ -273,7 +273,8 @@ it('records a sudo file inspection as effect-free while retaining its ordinary r
   });
   const outcome = await gate.execute({ ...operation, command: 'sudo cat /root/test/test.py' });
   expect(outcome.decision.ruleId).not.toBe('low-risk-command');
-  expect(classified).toHaveBeenCalledWith('op', true);
+  expect(classified).toHaveBeenCalledWith('op', true, expect.objectContaining({ version: 1, mutation: 'none',
+    evidence: 'query-proof', uncertaintyCodes: ['privilege-review'] }));
   expect(execute.mock.calls[0]?.[3]).toMatchObject({ readOnly: true });
 });
 

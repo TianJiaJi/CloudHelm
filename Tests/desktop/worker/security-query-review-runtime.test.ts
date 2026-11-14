@@ -43,7 +43,9 @@ it.each([['ss -ltnp', 0], ['df -h && free -m', 0], ['ss -ltnp | grep -F nginx', 
     const disk = new SqliteStore(f.file);
     try {
       expect(disk.list<OperationView>('operations')).toEqual([expect.objectContaining({ taskId: task.id,
-        status: exitCode === 0 ? 'succeeded' : 'failed', exitCode, readOnly: true, effects: 'none', ruleId: 'low-risk-command' })]);
+        status: exitCode === 0 ? 'succeeded' : 'failed', exitCode, readOnly: true, effects: 'none', ruleId: 'low-risk-command',
+        impactAnalysis: { version: 1, mutation: 'none', evidence: 'query-proof',
+          sensitiveRead: 'not-detected', externalTransfer: 'not-detected', codeExecution: 'not-detected', uncertaintyCodes: [] } })]);
     } finally { disk.close(); }
   } finally { exit?.(); await model.close(); await f.close(); }
 });

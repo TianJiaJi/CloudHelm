@@ -1,6 +1,7 @@
 import { analyzeQueryImpact, isQuery, isBlockDevice, BAD_DISK_TOOLS, PROJECT_CODE_COMMANDS } from './command-query-impact.js';
 export { isReadOnlyQuery, isEffectFreeQuery } from './command-query-impact.js';
-import { isSensitiveReadPath } from './sensitive-read.js';
+import { analyzeOperationImpact } from './operation-impact.js';
+import { commandTransfer } from './command-transfer.js';
 import path from 'node:path';
 import { describeCommandReview } from './command-review-reasons.js';
 import { callDirectory, hasIncompleteCommandSemantics, resolveCommandDirectory, resolveCommandPath } from './command-semantics.js';
@@ -117,22 +118,6 @@ function hardCommandReason(analysis: CommandAnalysis, cwd: string): string | nul
   return null;
 }
 
-function sensitiveRead(analysis: CommandAnalysis, cwd: string): boolean {
-  return analysis.calls.some((call) => {
-    const name = path.posix.basename(call.name);
-    if (name === 'xauth') return true;
-    if (name === 'tar' && call.semantics?.tar) {
-      return call.semantics.tar.paths.some((effect) => effect.kind === 'read'
-        && isSensitiveReadPath(literalPath(effect.path, resolveCommandDirectory(effect.directory, cwd)) ?? ''))
-        || call.semantics.coverage === 'partial' && call.args.some((arg) => isSensitiveReadPath(literalPath(arg, callDirectory(call, cwd)) ?? ''));
-    }
-    if (!['cat', 'grep', 'head', 'tail', 'less', 'more', 'sed', 'awk', 'bash', 'sh', 'zsh', 'source', '.',
-      'cp', 'mv', 'rsync', 'scp', 'tar', 'find', 'tee', 'base64', 'xxd', 'od', 'hexdump', 'strings'].includes(name)) return false;
-    return call.args.some((arg) => /\$\{?XAUTHORITY\}?/u.test(arg)
-      || isSensitiveReadPath(literalPath(arg, callDirectory(call, cwd)) ?? arg.replace(/^(['"])(.*)\1$/u, '$2')));
-  });
-}
-
 function readPaths(operation: ProposedOperation): string[] {
   return operation.scope.protectedReadPaths ?? operation.scope.protectedPaths;
 }
@@ -165,12 +150,15 @@ function protectedCommandTarget(operation: ProposedOperation, analysis: CommandA
       || (destructive && isInside(path.posix.resolve(root), target))
       || (prefix !== value && path.posix.resolve(root).startsWith(target)));
   };
+  if (analysis.readRedirectEffects?.some((effect) => overlaps(effect.target, readPaths(operation), false,
+    resolveCommandDirectory(effect.context.cwd, cwd)))) return true;
   if (analysis.redirectEffects?.some((effect) => overlaps(effect.target, writePaths(operation), false,
     resolveCommandDirectory(effect.context.cwd, cwd)))) return true;
   if (!analysis.redirectEffects && analysis.redirectTargets.some((target) => overlaps(target, writePaths(operation), false))) return true;
   for (const [index, call] of analysis.calls.entries()) {
     if (analysis.scopedContexts) effectiveCwd = callDirectory(call, cwd);
     const name = path.posix.basename(call.name);
+    if (commandTransfer(call).reads.some((target) => overlaps(literalPath(target, effectiveCwd) ?? target, readPaths(operation), false))) return true;
     for (const effect of call.semantics?.tar?.paths ?? call.semantics?.git?.paths ?? []) {
       if (overlaps(effect.path, effect.kind === 'read' ? readPaths(operation) : writePaths(operation),
         effect.recursive ?? false, resolveCommandDirectory(effect.directory, cwd))) return true;
@@ -326,6 +314,7 @@ function highImpactDecision(ruleId: string, reason: string, settings: SafetySett
 }
 
 export function decideSafety(operation: ProposedOperation, settings: SafetySettings, analysis?: CommandAnalysis): SafetyDecision {
+  const impact = analyzeOperationImpact(operation, analysis);
   if (settings.revision !== operation.scope.policyRevision) return decision('error', 'policy-stale', 'Policy changed after this operation was proposed');
   if (operation.scope.conversationRevision !== undefined && settings.conversationRevision !== undefined
     && settings.conversationRevision !== operation.scope.conversationRevision) {
@@ -350,6 +339,7 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     const absolute = literalPath(target, operation.scope.cwd)!;
     if (isBlockDevice(absolute) || CRITICAL_FILES.has(absolute)) return decision('deny', 'system-resource', 'Changing disks or essential system files is forbidden');
   }
+  if (impact.sensitiveRead === 'detected' && (operation.kind !== 'command' || analysis && !analysis.hasError)) return decision('deny', 'credential-resource', 'AI cannot read or transfer credential file contents');
   if (protectedTarget(operation)) return decision('deny', 'protected-resource', 'Target belongs to a user-protected resource');
   if (operation.kind === 'delete-path') {
     const target = literalPath(operation.path, operation.scope.cwd);
@@ -358,7 +348,6 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
   if (operation.kind === 'command') {
     if (!analysis) return decision('error', 'analyzer-missing', 'Command analysis unavailable');
     if (analysis.hasError) return decision('error', 'parse-failed', 'Command could not be parsed completely');
-    if (sensitiveRead(analysis, operation.scope.cwd)) return decision('deny', 'credential-resource', 'AI cannot read credential file contents');
     const hard = hardCommandReason(analysis, operation.scope.cwd);
     if (hard) return decision('deny', 'system-blacklist', hard);
     if (protectedCommandTarget(operation, analysis)) return decision('deny', 'protected-resource', 'Command accesses or removes a user-protected resource');

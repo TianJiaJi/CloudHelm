@@ -1,4 +1,4 @@
-import { isEffectFreeQuery, isSudoStatusProbe, operationIntentKey, sudoTarget, type CommandAnalyzer, type ProposedOperation } from '@cloudhelm/core';
+import { analyzeOperationImpact, isSudoStatusProbe, operationIntentKey, sudoTarget, type CommandAnalyzer, type ProposedOperation } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
@@ -31,12 +31,13 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
     // gate's own classification, so a repeated observation (ss, ip, ping, literal reads)
     // is a new observation, not a replay of a change. A prior denial still binds its exact
     // intent, and unknown results or in-flight dispatches still block non-query requests.
+    const readOnly = analyzeOperationImpact(operation, analysis).mutation === 'none';
     const key = operationIntentKey(operation);
     const denied = !manualReview && deps.operations().find((item) =>
       item.intentKey === key && item.status === 'denied' && item.ruleId === 'ai-review-deny');
     if (denied) return blockedOperationFeedback(operation.id, 'prior-review-denied',
       `Not executed; effects: none. Independent AI review already denied the same operation (${denied.id}). Do not retry it under a new ID or wrapper. Propose a substantively safer action or let the user request exact manual review.`, denied.id);
-    if (!analysis || !isEffectFreeQuery(analysis)) {
+    if (!readOnly) {
       const previous = deps.operations().find((item) => item.intentKey === key
         && (['running', 'proposed', 'approved', 'unknown'].includes(item.status) || (item.status === 'succeeded' && deps.replayProtected.has(item.id))));
       if (previous) return blockedOperationFeedback(operation.id, 'replay-protected', `Not executed: operation ${previous.id} already records this action (${previous.status}). Read its log and inspect the actual result; do not replay it. A new operation ID does not make a retry safe.`, previous.id);
@@ -45,7 +46,7 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
     // paid for; the serial executor still re-checks the same condition at dispatch.
     // A bound stop request is the remedy for a running operation, never a new write;
     // blocking it because that operation is running would make it unstoppable.
-    if ((!analysis || !isEffectFreeQuery(analysis)) && !(operation.kind === 'command' && operation.processControl)) {
+    if (!readOnly && !(operation.kind === 'command' && operation.processControl)) {
       const blocker = deps.hostBlocked?.(operation.scope.hostId);
       if (blocker) return blockedOperationFeedback(operation.id, 'unresolved-prior-operation',
         `Not executed; effects: none. ${blocker} Read-only inspection may continue; a new write needs its own review after the original outcome is verified.`);

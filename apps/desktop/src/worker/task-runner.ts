@@ -543,10 +543,10 @@ export class TaskRunner {
         }
         await commitOperationSnapshot(this.operations.get(operation.id), this.signals.commitOperation);
       },
-      classified: async (id, readOnly) => {
+      classified: async (id, readOnly, impact) => {
         const view = this.operations.get(id);
         if (!view) return;
-        view.readOnly = readOnly;
+        view.readOnly = readOnly; view.impactAnalysis = impact;
         this.signals.event({ type: 'operation', value: view });
       },
       decided: async (id, decision) => {

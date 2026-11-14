@@ -171,8 +171,11 @@ export interface TaskView {
 }
 
 export * from './read-audit.js';
+export * from './operation-impact.js';
 
 export interface OperationView {
+  /** Optional versioned facts. Missing legacy facts remain unknown, never permissions. */
+  impactAnalysis?: import('./operation-impact.js').OperationImpactView;
   /** Durable read decisions share the operation journal; metadata only. */
   readAudit?: import('./read-audit.js').RemoteReadAudit;
   /** Versioned backend process observation, independent of model settlement. */

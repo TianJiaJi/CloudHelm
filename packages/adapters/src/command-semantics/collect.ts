@@ -35,10 +35,10 @@ export function collectCommands(node: SyntaxNode, analysis: CommandAnalysis, dep
   if (['redirected_statement', 'file_redirect', 'herestring_redirect', 'heredoc_redirect'].includes(node.type)) analysis.hasRedirection = true;
   if (node.type === 'file_redirect') {
     const destination = node.childForFieldName('destination');
-    if (destination && !/^\d*</u.test(node.text.trimStart())) {
+    if (destination) {
       const target = literalArgument(destination);
-      analysis.redirectTargets.push(target);
-      analysis.redirectEffects!.push({ target, context });
+      if (/^\d*</u.test(node.text.trimStart())) (analysis.readRedirectEffects ??= []).push({ target, context });
+      else { analysis.redirectTargets.push(target); analysis.redirectEffects!.push({ target, context }); }
     }
   }
   if (node.type === 'command') {

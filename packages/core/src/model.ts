@@ -109,6 +109,8 @@ export interface CommandAnalysis {
   redirectTargets: string[];
   /** Per-redirection shell context; wrapper cwd does not affect shell redirection. */
   redirectEffects?: Array<{ target: string; context: CommandContext }>;
+  /** Input file redirections are reads, never write targets. No inline heredoc bodies. */
+  readRedirectEffects?: Array<{ target: string; context: CommandContext }>;
   /** New analyzers attach scoped contexts; absent for legacy synthetic analysis. */
   scopedContexts?: boolean;
   hasExpansion: boolean;

@@ -11,6 +11,7 @@ export * from './ports.js';
 export * from './fingerprint.js';
 export * from './safety.js';
 export * from './approval-lifecycle.js';
+export * from './operation-impact.js';
 export * from './sensitive-read.js';
 export * from './docker-query-policy.js';
 export * from './diagnostic-query-policy.js';
