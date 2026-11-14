@@ -11,8 +11,10 @@ const BAD_DISK_TOOLS = new Set(['mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkswap', 'wipe
 const CRITICAL_FILES = new Set(['/etc/passwd', '/etc/shadow', '/etc/sudoers', '/etc/fstab']);
 const SENSITIVE_FILE = /(?:^\/etc\/(?:shadow|gshadow)$|\/\.ssh\/(?:id_[^/]+|authorized_keys)$|(?:^|\/)\.?Xauthority(?:-[^/]*)?$|(?:^|\/)\.env(?:\.[^/]+)?$)/u;
 const ORDINARY_COMMANDS = new Set(['mkdir', 'touch', 'cp', 'mv', 'install', 'tee', 'truncate', 'chmod', 'chown', 'ln',
-  'sed', 'patch', 'tar', 'unzip', 'git', 'npm', 'pnpm', 'yarn', 'pip', 'pip3', 'python', 'python3', 'node',
-  'systemctl', 'service', 'docker', 'apt', 'apt-get', 'dnf', 'yum', 'apk', 'brew', 'make', 'cmake', 'rsync', 'rm', 'rmdir']);
+  'sed', 'patch', 'tar', 'unzip', 'git', 'python', 'python3', 'node',
+  'systemctl', 'service', 'docker', 'apt', 'apt-get', 'dnf', 'yum', 'apk', 'brew', 'rsync', 'rm', 'rmdir']);
+/** These tools may execute project manifests, lifecycle hooks or build rules. */
+const PROJECT_CODE_COMMANDS = new Set(['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'pip', 'pip3', 'make', 'gmake', 'cmake', 'ninja', 'meson']);
 const OPAQUE_COMMANDS = new Set(['bash', 'sh', 'zsh', 'fish', 'python', 'python3', 'node', 'perl', 'ruby', 'php', 'eval', 'source', '.']);
 const HIGH_IMPACT_COMMANDS = new Set(['useradd', 'userdel', 'usermod', 'groupadd', 'groupdel', 'passwd', 'chpasswd',
   'iptables', 'ip6tables', 'nft', 'ufw', 'firewall-cmd', 'shutdown', 'reboot', 'poweroff']);
@@ -212,6 +214,7 @@ function isQuery(call: CommandCall): boolean {
   if (name === 'hostname') return call.args.every((arg) => ['-f', '--fqdn', '-s', '--short', '-I', '--all-ip-addresses', '-i', '--ip-address', '-d', '--domain', '-A', '--all-fqdns', '--help', '--version'].includes(arg));
   if (isServiceQuery(name, call.args)) return true;
   if (name === 'docker') return isDockerMetadataQuery(call.args);
+  if (PROJECT_CODE_COMMANDS.has(name)) return call.args.length === 1 && call.args[0] === '--version';
   if ((BAD_DISK_TOOLS.has(name) || name.startsWith('mkfs.')) && call.args.length === 1
     && ['--help', '--version', '-h', '-V'].includes(call.args[0]!)) return true;
   if (name === 'fdisk') return ['-l', '--list'].includes(call.args[0] ?? '')
@@ -460,6 +463,13 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     // Three-tier routing for identified high impact: the cautious tier asks,
     // the AI tier triages first, and even the permissive tier keeps asking.
     if (high) return highImpactDecision('high-impact-command', high, settings);
+    if (analysis.calls.some((call) => PROJECT_CODE_COMMANDS.has(path.posix.basename(call.name)))) {
+      return { verdict: settings.mode === 'ai-review' ? 'evaluate' : settings.mode === 'permissive' ? 'allow' : 'ask',
+        ruleId: 'project-code-entry', impact: 'unknown',
+        reason: settings.mode === 'permissive'
+          ? 'Project code execution explicitly permitted by full-access mode; lifecycle/build effects remain unverified'
+          : 'Package/build tools can execute project code or lifecycle hooks; program name alone does not bound their effects' };
+    }
     if (ordinaryCommand(analysis)) return decision('allow', 'ordinary-command', 'Bounded ordinary command');
   }
   if (highImpactFile(operation)) {
