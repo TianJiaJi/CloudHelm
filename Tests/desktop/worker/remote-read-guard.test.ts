@@ -14,6 +14,8 @@ it('refuses user-protected trees and credential files, and allows ordinary sourc
   const protectedPaths = ['/etc/nginx', '/srv/secrets'];
   expect(() => assertRemoteReadAllowed('/etc/nginx/nginx.conf', protectedPaths)).toThrow('Protected path');
   expect(() => assertRemoteReadAllowed('/srv/secrets/a', protectedPaths)).toThrow('Protected path');
+  expect(() => assertRemoteReadAllowed('/srv/private/a', ['/srv/app/../private/'])).toThrow('Protected path');
+  expect(() => assertRemoteReadAllowed('/srv/../etc/shadow', [])).toThrow('Credential file');
   for (const target of ['/home/deploy/.ssh/id_ed25519', '/srv/app/.env.production', '/root/.Xauthority',
     '/etc/shadow', '/etc/gshadow', '/root/.ssh/authorized_keys']) {
     expect(() => assertRemoteReadAllowed(target, [])).toThrow('Credential file');

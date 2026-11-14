@@ -261,13 +261,13 @@ export class WorkerServer {
                 path.posix.resolve(operation.scope.cwd, scriptPath));
               return inspected.sha256 === sha256;
             }
-          }, this.environment, call.priorInputs, (hostId, filePath, cwd, signal) => {
+          }, this.environment, call.priorInputs, (hostId, filePath, cwd, signal, maxBytes = REMOTE_READ_LIMIT) => {
             const host = call.hosts.find((candidate) => candidate.id === hostId);
             if (!host) throw new Error('Host is outside this conversation');
             // Reads never bypass a user protection rule or the credential boundary.
             const target = resolveRemoteReadTarget(filePath, cwd);
             assertRemoteReadAllowed(target, host.protectedReadPaths ?? host.protectedPaths);
-            return this.ssh.readFileForEdit(hostId, target, REMOTE_READ_LIMIT, signal);
+            return this.ssh.readFileForEdit(hostId, target, maxBytes, signal);
           });
         this.tasks.set(call.task.id, runner);
         const start = runner.start(call.restored, call.thinkingLevel, call.document, call.initialMessage, call.intent);

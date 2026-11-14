@@ -15,7 +15,11 @@ export function resolveRemoteReadTarget(filePath: string, cwd: string | undefine
 }
 
 export function assertRemoteReadAllowed(target: string, protectedReadPaths: readonly string[]): void {
-  const inside = (root: string) => target === root || target.startsWith(root.endsWith('/') ? root : `${root}/`);
+  target = resolveRemoteReadTarget(target, '/');
+  const inside = (raw: string) => {
+    const root = path.posix.normalize(raw);
+    return target === root || target.startsWith(root.endsWith('/') ? root : `${root}/`);
+  };
   if (protectedReadPaths.some((root) => typeof root === 'string' && root.startsWith('/') && inside(root)))
     throw new Error('Protected path; read it yourself or change the rule first');
   if (CREDENTIAL.test(target) || SYSTEM_CREDENTIAL.test(target))

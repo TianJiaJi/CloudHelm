@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SshTransport } from '@cloudhelm/adapters';
+import { RemoteFileMissingError, type SshTransport } from '@cloudhelm/adapters';
 import { TerminalManager } from '@cloudhelm/application';
 import { operationFingerprint, operationOutcome, type ProposedOperation } from '@cloudhelm/core';
 import { FileOperationExecutor } from '../../../apps/desktop/src/worker/file-operation-executor.js';
@@ -15,7 +15,7 @@ function fixture() {
   const writeFile = vi.fn(); const deleteFile = vi.fn();
   const ssh = { writeFile, deleteFile, connectionGeneration: () => 1,
     // Default: the target does not exist yet, so a plain create/write proceeds.
-    readFileForEdit: vi.fn(async () => { throw new Error('Remote file does not exist'); }) } as unknown as SshTransport;
+    readFileForEdit: vi.fn(async () => { throw new RemoteFileMissingError(); }) } as unknown as SshTransport;
   const commands = { execute: vi.fn() };
   return { terminal, id, scope, writeFile, deleteFile, ssh, commands, executor: new FileOperationExecutor(terminal, ssh, commands) };
 }
@@ -133,6 +133,16 @@ describe('conditional write and read-back verification', () => {
     f.writeFile.mockResolvedValue({ backup: undefined });
     const result = await f.executor.execute(operation, operationFingerprint(operation));
     expect(result.stdoutTail).toContain('final content is unconfirmed');
+    expect(result).toMatchObject({ status: 'unknown', effects: 'possible' });
+    expect(result.exitCode).toBeUndefined();
+  });
+
+  it('does not recreate a disappeared file when a prior hash was required', async () => {
+    const f = fixture();
+    const operation = { ...writeOp({ expectedSha256: 'a'.repeat(64) }), scope: f.scope } as ProposedOperation;
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
+    expect(f.writeFile).not.toHaveBeenCalled();
   });
 
   it('honours createOnly without overwriting an existing file', async () => {

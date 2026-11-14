@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { RemoteFileError, type SshTransport } from '@cloudhelm/adapters';
+import { RemoteFileError, RemoteFileMissingError, type SshTransport } from '@cloudhelm/adapters';
 import { operationFingerprint, type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 import type { TerminalManager } from '@cloudhelm/application';
 import { LocalFileAccess } from './local-file-access.js';
@@ -46,14 +46,16 @@ export class FileOperationExecutor implements OperationExecutor {
       // Always confirm the current state first: an existing file may only be replaced
       // with the exact reviewed content, and createOnly must actually be enforced.
       if (operation.kind === 'write-file') {
+        if (operation.createOnly && operation.expectedSha256) return notDispatched('Choose createOnly or expectedSha256, not both.');
         let current: Awaited<ReturnType<SshTransport['readFileForEdit']>> | undefined;
         try {
           current = await this.ssh.readFileForEdit(operation.scope.hostId, remotePath, 1_048_576, signal);
         } catch (error) {
-          if (!/does not exist/u.test(error instanceof Error ? error.message : String(error))) {
+          if (!(error instanceof RemoteFileMissingError)) {
             return notDispatched(`Could not confirm the current remote file (${error instanceof Error ? error.message : String(error)}); nothing was written.`);
           }
         }
+        if (!current && operation.expectedSha256) return notDispatched('Remote file disappeared since it was read; nothing was written.');
         if (operation.createOnly && current) return notDispatched('Remote file already exists; create-only was requested, so nothing was written.');
         if (current && !operation.expectedSha256) return notDispatched('Remote file already exists and no expected hash was supplied; read it first, then propose the exact replacement.');
         if (current && current.sha256 !== operation.expectedSha256) {
@@ -71,19 +73,23 @@ export class FileOperationExecutor implements OperationExecutor {
       // Read the result back: a recovery copy is not proof that the new content landed,
       // and it is not a general rollback of the service's expectations.
       let verification = '';
+      let verified = operation.kind === 'delete-path';
       if (operation.kind !== 'delete-path') {
         const expected = createHash('sha256').update(intended).digest('hex');
         try {
           const written = await this.ssh.readFileForEdit(operation.scope.hostId, remotePath, 1_048_576, signal);
-          verification = written.sha256 === expected
-            ? ` Verified read-back hash ${expected.slice(0, 12)}…${written.truncated ? ' (file larger than the read limit; hash covers the prefix only)' : ''}.`
+          verified = !written.truncated && written.sha256 === expected;
+          verification = verified
+            ? ` Verified read-back hash ${expected.slice(0, 12)}….`
             : ` WARNING: read-back hash ${written.sha256?.slice(0, 12) ?? 'unavailable'}… does not match the written content ${expected.slice(0, 12)}…; inspect the file before relying on it.`;
         } catch (error) {
           verification = ` Read-back verification failed (${error instanceof Error ? error.message : String(error)}); the write was requested but its final content is unconfirmed.`;
         }
       }
       return {
-        operationId: operation.id, status: handover ? 'handed-over' : 'succeeded', exitCode: 0,
+        operationId: operation.id, status: handover ? 'handed-over' : verified ? 'succeeded' : 'unknown',
+        ...(verified && !handover ? { exitCode: 0 } : {}),
+        ...(!verified ? { effects: 'possible' as const, failureKind: 'unknown' as const } : {}),
         stdoutTail: `${operation.kind === 'delete-path' ? 'Deleted' : 'Wrote'} ${remotePath}.`
           + (backup ? ` Recovery copy: ${backup} (restores this file only, not the service state).` : ' New file; no previous version.')
           + (written && 'modeDropped' in written && written.modeDropped

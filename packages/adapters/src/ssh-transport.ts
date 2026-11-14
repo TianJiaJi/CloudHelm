@@ -31,6 +31,10 @@ export class RemoteFileError extends Error {
 }
 
 /** A read-back snapshot. sha256 is present only for a complete read. */
+export class RemoteFileMissingError extends Error {
+  constructor() { super('Remote file does not exist'); }
+}
+
 export interface ReadFileSnapshot {
   content: string; bytes: number; truncated: boolean; sha256?: string; mode: number; uid: number; gid: number;
 }
@@ -316,14 +320,17 @@ export class SshTransport {
       check();
       await this.checkSafeParent(sftp, absolutePath);
       const entry = await this.lstatOptional(sftp, absolutePath);
-      if (!entry) throw new Error('Remote file does not exist');
+      if (!entry) throw new RemoteFileMissingError();
       if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('Only a regular file can be read for editing');
       const truncated = entry.size > maxBytes;
       if (truncated) return { content: '', bytes: entry.size, truncated: true, sha256: undefined,
         mode: entry.mode, uid: entry.uid, gid: entry.gid };
       const content = await readBoundedSftpFile(sftp, absolutePath, maxBytes, check);
       check();
-      return { content: content.toString('utf8'), bytes: content.length, truncated: false,
+      const text = content.toString('utf8');
+      if (content.includes(0) || !Buffer.from(text, 'utf8').equals(content))
+        throw new Error('Remote edit requires UTF-8 text without NUL bytes');
+      return { content: text, bytes: content.length, truncated: false,
         sha256: createHash('sha256').update(content).digest('hex'), mode: entry.mode, uid: entry.uid, gid: entry.gid };
     }, signal);
   }

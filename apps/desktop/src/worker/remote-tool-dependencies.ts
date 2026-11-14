@@ -10,7 +10,7 @@ export interface RemoteToolDependencies {
   hosts: RuntimeHost[];
   localFiles: LocalFileAccess;
   /** Bounded SFTP read for the edit loop; sha256 exists only for a complete read. */
-  readRemoteFile?(hostId: string, path: string, cwd: string | undefined, signal?: AbortSignal): Promise<RemoteFileSnapshot>;
+  readRemoteFile?(hostId: string, path: string, cwd: string | undefined, signal?: AbortSignal, maxBytes?: number): Promise<RemoteFileSnapshot>;
   background?(signal: AbortSignal | undefined, run: (signal: AbortSignal) => ReturnType<RemoteToolDependencies['runOperation']>): ReturnType<RemoteToolDependencies['runOperation']>;
   ensureTerminal(hostId: string, sessionId?: string): Promise<string>;
   requestRoot?(host: RuntimeHost, command: string, cwd: string, reason: string, signal?: AbortSignal, method?: import('@cloudhelm/core').PrivilegeMethod): Promise<unknown>;
