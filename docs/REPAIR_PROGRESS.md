@@ -4,6 +4,13 @@
 >
 > 本表是逐项状态账，不替代 [42项总表](PROJECT_REMEDIATION_SUMMARY.md)、[UI方案](AI_UI_REMEDIATION_PLAN.md) 和 [工具/root/终端方案](AI_TOOL_PRIVILEGE_REMEDIATION.md)。交接报告记录的是实施前状态。
 
+## 当前总览
+
+完整简表见 [当前整改进度总览](REPAIR_STATUS_OVERVIEW.md)，业务基准`80f18a7`。本账为详细证据来源。
+
+- 42父项：**4已完成、18已实现待验收、11进行中、9待开始**；U01–U12为细化包，不另计父项，尚未整体验收。
+- 本次整理将C02由待验收校正为进行中：ACL/xattr策略仍有明确实现缺口。没有新增完成父项，不把局部检查当整体完成。
+
 ## 规则与预算
 
 - 不遗漏 A01–H05 的42个父项或 U01–U12 的12个UI工作包；子项完成不等于父项全部完成。
@@ -42,20 +49,20 @@
 | A01 | 分离稳定远端目标/风险域与连接配置版本。只修改超时等设置产生新 hostId 时，不能失去旧未决操作锁；重复配置需有目标关联策略。 | 1 安全与数据 | 进行中 | 已复现并修复超时/登录修订绕过旧未决锁：后端按持久化previousHostId链派生风险域，连接/凭据/审批身份仍独立；首批5文件41项、扩展6文件29项与工程检查通过（两批有重叠，不累加）。跨配置恢复卡/人工接管7文件90项与真实隐藏Electron验收通过；交还控制后存活完成信号的绑定缺口另有反例，修复后5文件35项通过。长链专项与全量258文件2374项通过（7文件25项条件跳过）；工程/构建/隐藏风险恢复通过，标准桌面截图超时经定界后改用原生stayHidden路径，15项相关回归及全部隐藏桌面复验通过；最终259文件2383项通过（7文件25项条件跳过），headless UI/剪贴板通过；本子包验收完成，准备本地保存。重复配置/未知别名、完整链和真实SSH验收仍待，不按IP或指纹简单合并 |
 | A02 | 模型地址、密钥密文、配置修订原子保存；成功后才更新内存。检查其他同类配置提交点。 | 1 安全与数据 | 已完成 | `93a79be`；Tests/desktop/main/credential-isolation.test.ts真实SQLite故障注入及审核事务回滚通过；Tests/smoke/credential-isolation-smoke.mjs真实IPC/OS加密保存通过，全量2190项通过 |
 | A03 | 原始用户指令、引用资料、模型摘要保留独立来源；禁止将粘贴摘要标为原始 explicit 意图。 | 1 安全与数据 | 已实现待验收 | Tests/application/prepare-message.test.ts：9项；相关6文件47项及工程检查通过；原文保留、摘要仅作派生资料、来源先验证，待全量与真实链复验 |
-| A04 | 重做流式脱敏的跨块状态：ANSI、长行溢出、引号、多行 cookie 等使用一致规则。 | 1 安全与数据 | 已实现待验收 | Tests/core/redaction-stream.test.ts：16项；相关5文件86项＋工程检查通过；待全量调用方/真实输出链复验，E04无限引用捕获尚未完成 |
+| A04 | 重做流式脱敏的跨块状态：ANSI、长行溢出、引号、多行 cookie 等使用一致规则。 | 1 安全与数据 | 已实现待验收 | Tests/core/redaction-stream.test.ts：16项；相关5文件86项＋工程检查通过；待全量调用方/真实输出链复验；E04有界捕获已另行落地，真实长日志仍待 |
 | A05 | 统一操作影响分析，供静态分类、防重放、执行、调度和报告共享；分别表示变更、敏感读取、外传和不确定性。 | 2 执行与审核 | 进行中 | 首包提取QueryImpact统一查询证明，供自动审核与isEffectFreeQuery共同使用。有界诊断/字面查询列表不再仅因旧单查询白名单遗漏而询问，敏感/保护路径检查仍优先，额外提权和未知管道不新增自动授权。9文件309项、类型与构建通过；含真实Worker/Pi/Main/SQLite中谨慎模式ss与df/free组合零审批及持久审计。后续已加入单一前台字面查询管道的AST拓扑证明，后续过滤器限stdin-only；新增有界ps常用参数。12文件365项、类型/lint/构建通过，grep退出1保留failed/effects:none。后续已补固定审核原因码；完整变更/外传共享事实、复杂管道及执行上下文仍未完成。 |
 | A06 | 校准审核策略的风险排序：普通诊断不应因表达形式频繁打断；npm install、make 等项目代码入口不能仅按程序名宽松放行。 | 2 执行与审核 | 进行中 | 包管理/构建入口从普通自动放行列表移除：谨慎模式询问、AI审核模式送独立审核；用户显式宽松模式仍允许，但标记 project-code-entry 与未知影响，不冒充有界普通操作。精确单参数 --version 查询保持轻量，只读能力不扩展到额外参数；脚本检查也不能将 make/npm 再包装成普通有界脚本。类型检查、项目入口/核心策略局部回归与生产构建通过。现已接入A05查询影响首包，普通诊断和字面查询列表减少误询问；现已补齐受限查询管道，具体原因及审批/审计依据首包已接入；复杂管道/上下文和完整风险排序仍待A05/A07。 |
 | A07 | 明确静态策略、独立 AI 审核和人工审批的职责；只在需要语义判断时调用 AI，并记录不确定/拒绝/升级原因。 | 2 执行与审核 | 进行中 | 首包为QueryImpact增加固定审核原因码，区分动态输入、上下文、参数/代码/身份及管道拓扑/来源/过滤器；审批展示不再覆盖具体依据。独立审核和人工决定保留前序规则与静态原因到既有operation.reason，三档路由及硬拒绝不变。12文件195项、类型/lint/构建通过；生产Worker/Pi/Main/SQLite拒批零派发，重开数据库依据存在。全面审核职责矩阵、所有取消/超时/恢复状态及真实链路仍待，父项未完成。 |
 | B01 | 保存可靠的派发阶段。不能将尚未批准、可证明未派发的 proposed 与可能执行过的操作一律恢复为 unknown。 | 2 执行与审核 | 已实现待验收 | 恢复时 proposed、以及无执行记录的 approved 判为 failed + effects:none + failureKind:not-dispatched，并给出可修正结果；仅 running 与已有执行记录的 approved 保持 unknown。Tests/desktop/main/operation-recovery.test.ts 与 app-state 恢复用例通过；真实断线/重启链待全量复验 |
-| B02 | 分离进程状态、原始退出码、可能影响和业务含义。修复正常诊断非零退出引发的变更风险锁。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | terminal-manager 对只读诊断的非零退出保留原退出码但不再标记可能变更，因此不制造变更风险锁；Tests/application/terminal-manager.test.ts 与 host-serial-executor 22项通过；服务 inactive 等真实样本待 H03
-| B03 | 上传本地文件审核后变化等派发前失败，返回明确未执行/无远端影响/修正操作结果。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 新增 failureKind `not-dispatched`：审核后本地文件变化/不可读、租约过期等派发前失败返回 failed+effects:none，执行结果解释为 not-started 与 revise-operation，不要求核验远端；Tests/desktop/worker/file-operation-executor.test.ts 6项与 operation-outcome 通过
-| B04 | 统一运行时、持久化恢复、UI 恢复卡和结果解释使用的未决判定。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 运行时与持久化共用同一未决判定：仅显式 effects:'none' 释放主机写锁，failed 但影响未分类时重启前后都保持锁定；渲染端复用同一规则。host-serial-executor/recovery-ipc/recovery-card 38项与新增反例通过
-| B05 | 分开请求去重、未知结果重试、用户明确的新操作与重复观察。统一预检与安全层的查询能力分类。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 预检改用与 SafetyGate 相同的 isEffectFreeQuery：同轮重复 ss/ip/ping/有界读取属新观察，未知结果与换 ID 重放仍阻断，AI 拒绝仍绑定精确意图且可人工单次复核；新增 5项预检测试与 docker 查询回归通过
+| B02 | 分离进程状态、原始退出码、可能影响和业务含义。修复正常诊断非零退出引发的变更风险锁。 | 2 执行与审核 | 已实现待验收 | terminal-manager 对只读诊断的非零退出保留原退出码但不再标记可能变更，因此不制造变更风险锁；Tests/application/terminal-manager.test.ts 与 host-serial-executor 22项通过；服务 inactive 等真实样本待 H03 |
+| B03 | 上传本地文件审核后变化等派发前失败，返回明确未执行/无远端影响/修正操作结果。 | 2 执行与审核 | 已实现待验收 | 新增 failureKind `not-dispatched`：审核后本地文件变化/不可读、租约过期等派发前失败返回 failed+effects:none，执行结果解释为 not-started 与 revise-operation，不要求核验远端；Tests/desktop/worker/file-operation-executor.test.ts 6项与 operation-outcome 通过 |
+| B04 | 统一运行时、持久化恢复、UI 恢复卡和结果解释使用的未决判定。 | 2 执行与审核 | 已实现待验收 | 运行时与持久化共用同一未决判定：仅显式 effects:'none' 释放主机写锁，failed 但影响未分类时重启前后都保持锁定；渲染端复用同一规则。host-serial-executor/recovery-ipc/recovery-card 38项与新增反例通过 |
+| B05 | 分开请求去重、未知结果重试、用户明确的新操作与重复观察。统一预检与安全层的查询能力分类。 | 2 执行与审核 | 已实现待验收 | 预检改用与 SafetyGate 相同的 isEffectFreeQuery：同轮重复 ss/ip/ping/有界读取属新观察，未知结果与换 ID 重放仍阻断，AI 拒绝仍绑定精确意图且可人工单次复核；新增 5项预检测试与 docker 查询回归通过 |
 | B06 | 报告状态退出新轮次、防重放清理与执行控制。 | 2 执行与审核 | 已实现待验收 | 防重放释放改由后端事实决定：无未决远端结果，且本轮记录过的变更已核验（或本轮无变更）才释放；报告书写的措辞不再是开关，未核验成功的变更在任何新 ID 下仍被阻断，其他不同操作不受影响。新增 Tests/desktop/worker/task-runner-replay-boundary.test.ts 2项，控制类 13项回归通过 |
 | B07 | 已知资源冲突、未决操作和不支持条件尽量在审批前发现；派发前再核验动态条件。 | 2 执行与审核 | 已实现待验收 | 已知主机未决写锁在审批卡与独立审核之前拒绝，只读核验继续可用，派发前串行器再核验同一条件；绑定的停止请求例外，避免运行中的操作无法停止。新增预检反例 5项与后台任务 5项通过；真实并发仍待 H03 |
-| B08 | 定义阻断范围与恢复动作，拆开审计记录和协调控制；避免 OperationAudit.decided 同时隐式决定整轮暂停。 | 2 执行与审核 | 已实现待验收 | 已实现待验收 | 审计记录不再隐式暂停整轮：新增 review-coordination 分类，可修正的请求错误与 AI 拒绝回到模型、策略拒绝与安全组件失败才暂停；连续三次 AI 拒绝仍暂停。Tasksrunner AI 审核/停止回归与新增分类测试通过
+| B08 | 定义阻断范围与恢复动作，拆开审计记录和协调控制；避免 OperationAudit.decided 同时隐式决定整轮暂停。 | 2 执行与审核 | 已实现待验收 | 审计记录不再隐式暂停整轮：新增 review-coordination 分类，可修正的请求错误与 AI 拒绝回到模型、策略拒绝与安全组件失败才暂停；连续三次 AI 拒绝仍暂停。Tasksrunner AI 审核/停止回归与新增分类测试通过 |
 | C01 | SFTP 写入/删除使用正向普通文件检查，补齐读取上限、超时与中断语义。 | 1 安全与数据 | 已实现待验收 | Tests/adapters/sftp-read.test.ts＋ssh-sftp-session.test.ts等5文件48项及工程检查通过；普通文件守卫/有界读取/取消/30秒期限已接入，真实VM文件验收待做；元数据与路径竞态仍归C02/C03 |
-| C02 | 明确原子替换的 owner/group、mode、ACL/xattr 等元数据保持/禁止策略。 | 1 安全与数据 | 已实现待验收 | 原子替换前 setstat 恢复 owner/group 与普通权限；后续策略已改为默认不保留 setuid/setgid，备份副本仍为 0o600。ACL/xattr 仍缺可验证的保持或拒绝策略，代码注释不等于策略已实现。Tests/adapters/ssh-transport.test.ts 13项通过；真实 rsync/ACL 场景待验收 |
+| C02 | 明确原子替换的 owner/group、mode、ACL/xattr 等元数据保持/禁止策略。 | 1 安全与数据 | 进行中 | 本次整理按剩余实现校正状态（非新增修复）：原子替换前 setstat 恢复 owner/group 与普通权限；后续策略已改为默认不保留 setuid/setgid，备份副本仍为 0o600。ACL/xattr 仍缺可验证的保持或拒绝策略，代码注释不等于策略已实现。Tests/adapters/ssh-transport.test.ts 13项通过；真实 rsync/ACL 场景待验收 |
 | C03 | 补充有界文件读取、差异/补丁编辑、源版本/哈希校验、写后验证和明确恢复信息；提供 root 文件闭环，不再让模型自行拼暂存＋sudo install。 | 3 工具与权限 | 进行中 | 新增 read_remote_file（SFTP 有界读取，默认 128 KiB/上限 1 MiB，仅普通文件；完整读取才返回 sha256，截断读取不给哈希，因此摘录无法授权整文件覆盖）；write_remote_file 增加 expectedSha256 版本预检与 createOnly：目标已存在而无哈希、哈希不符、createOnly 命中已存在时一律未派发失败且不写入；写入后读回比对并报告 Verified/WARNING/未确认，恢复副本明确“只恢复该文件、不等于服务状态回滚”；setuid/setgid 默认不随内容变更保留（需显式 preserveSpecialMode），并在结果中说明被丢弃的位；读取入口独立守卫，拒绝受保护树与凭据文件（不依靠命令审核）。Tests/desktop/worker/file-operation-executor.test.ts 11项、remote-read-guard 2项、ssh-transport 13项通过；差异/补丁编辑与 root 文件闭环仍待 C04/C05，真实 SFTP 与 ACL 场景待 H03 |
 | C04 | 命令、文件、服务共享操作级权限意图与后端路由；收敛 legacy root 会话入口；封闭额外参数，拒绝不支持的权限字段。 | 3 工具/文件/环境 | 进行中 | 首个子包封闭命令/文件/服务/本地目录/root请求参数，不支持的 privilege/sudo/保留特殊位等字段在 Pi 原始参数校验层拒绝，不能静默忽略；root+sessionId、createOnly+expectedSha256 在分配终端前拒绝，哈希要求64位小写十六进制。参数子包 `2237acd` 类型检查、2项局部验证与生产构建通过。服务工具新增 privilege=current/root，root 意图经 OperationPrivilege 覆盖预检/日志/重启/复查；旧 sudo=true 映射为同一意图，避免日志请求被忽略，混用 sessionId 或 current+sudo 在分配终端前拒绝；类型检查、局部服务/参数回归及生产构建通过。legacy root 收敛与 root 文件闭环仍未完成。 |
 | C05 | 优先补齐远端 read/diff/条件写入、服务日志与配置检查等高价值能力；复用 manage_service 的预检→动作→观察方向，统一派发/权限/结果/下一步反馈。 | 3 工具/文件/环境 | 进行中 | 新增 edit_remote_file：绝对路径、完整原文件哈希、唯一字面片段替换（含重叠重复拒绝）、1 MiB上限；源被脱敏/截断、哈希变化或无实际改动时在分配终端前拒绝。准备出的完整内容仍走既有 write-file/SafetyGate/版本复核/写后核验，不使用Shell补丁或绕开审核。服务权限已统一；完整diff展示、root文件事务及业务配置检查仍待补齐。 |
@@ -111,6 +118,8 @@
 | 旧数据/多主机 | 稳定风险域、未派发/派发事实、保守迁移、重复配置/重连不丢锁 | A01/B01/B04/H04 |
 
 ## 最新记录
+
+- 进度整理（业务基准80f18a7）：新增REPAIR_STATUS_OVERVIEW.md，逐项列出42父项/12UI包、近6个子包提交及剩余边界；C02因ACL/xattr实现缺口由待验收校正为进行中，清理重复状态列和A04引用E04的过时说明。当前4完成/18待验收/11进行中/9待开始；不改变业务代码，也不重算局部测试为全量验收。
 
 - A07原因与依据首包：共享QueryImpact提供最多4项固定原因码/文案，不复述argv、源码或原始错误；审批卡保留后端具体理由，AI/人工最终决定保留前序规则与静态依据，写入既有operation.reason。12文件195项、类型、改动文件lint与构建通过；真实Worker/Pi/Main/文件SQLite验证ss未覆盖参数提示、拒批零派发及依据持久存在，自动查询/受限管道和curl高危审核同步复验。修正的是同进程测试夹具的同步回执，按真实IPC异步交付，不吞错误；不宣称生产审批时序漏洞已修复。A07转进行中，A05/A06仍进行中，非全量/真实SSH/付费模型验收。
 

@@ -9,14 +9,31 @@ const packages = Array.from({ length: 12 }, (_, index) => `U${String(index + 1).
 
 describe('complete remediation tracking (not proof of product acceptance)', () => {
   it('keeps exactly all 42 parent IDs in both the audit and implementation ledger', () => {
-    for (const name of ['PROJECT_REMEDIATION_SUMMARY', 'REPAIR_PROGRESS']) {
+    for (const name of ['PROJECT_REMEDIATION_SUMMARY', 'REPAIR_PROGRESS', 'REPAIR_STATUS_OVERVIEW']) {
       expect(ids(document(name), /^\| ([A-H]\d{2}) \|/gmu), name).toEqual(parents);
     }
   });
 
   it('keeps exactly all 12 UI packages in both the plan and implementation ledger', () => {
-    for (const name of ['AI_UI_REMEDIATION_PLAN', 'REPAIR_PROGRESS']) {
+    for (const name of ['AI_UI_REMEDIATION_PLAN', 'REPAIR_PROGRESS', 'REPAIR_STATUS_OVERVIEW']) {
       expect(ids(document(name), /^\| (U\d{2}) \|/gmu), name).toEqual(packages);
+    }
+  });
+
+  it('keeps the concise overview statuses and totals identical to the detailed ledger', () => {
+    const ledger = document('REPAIR_PROGRESS'), overview = document('REPAIR_STATUS_OVERVIEW');
+    const statuses = (text: string, pattern: RegExp, column: number) => new Map(text.split('\n')
+      .filter((row) => pattern.test(row)).map((row) => {
+        const cells = row.split('|').map((cell) => cell.trim());
+        return [cells[1]!, cells[column]!] as const;
+      }));
+    const expected = statuses(ledger, /^\| [A-H]\d{2} \|/u, 4);
+    expect([...statuses(overview, /^\| [A-H]\d{2} \|/u, 3)]).toEqual([...expected]);
+    expect([...statuses(overview, /^\| U\d{2} \|/u, 3)])
+      .toEqual([...statuses(ledger, /^\| U\d{2} \|/u, 3)]);
+    for (const status of ['已完成', '已实现待验收', '进行中', '待开始']) {
+      const count = [...expected.values()].filter((value) => value === status).length;
+      expect(overview).toContain(`| ${status} | ${count} |`);
     }
   });
 
