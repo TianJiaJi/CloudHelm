@@ -7,7 +7,7 @@ import { feedbackTail } from './operation-feedback.js';
 
 const parameters = Type.Object({ hostId: Type.String(), unit: Type.String({ minLength: 1, maxLength: 200 }),
   action: Type.Union([Type.Literal('inspect'), Type.Literal('restart'), Type.Literal('logs')]),
-  sudo: Type.Optional(Type.Boolean()), sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })) });
+  sudo: Type.Optional(Type.Boolean()), sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })) }, { additionalProperties: false });
 type Phase = 'preflight' | 'restart' | 'check' | 'logs' | 'inspect';
 interface Observation {
   phase: Phase; operationId: string; status: string; readOnly: boolean | 'unclassified';
