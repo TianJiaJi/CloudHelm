@@ -1,14 +1,15 @@
 import { expect, it } from 'vitest';
-import { isEffectFreeQuery, isReadOnlyQuery } from '@cloudhelm/core';
+import { analyzeQueryImpact, isEffectFreeQuery, isReadOnlyQuery } from '@cloudhelm/core';
 import { BashAnalyzer } from '../../packages/adapters/src/bash-analyzer.js';
 const analyzer = new BashAnalyzer();
 it.each([
   'ping -c 10 -W 2 114.114.114.114', '/usr/bin/ping -n -c10 -W2 www.example.com', 'ping6 -c 3 -W 1 2001:db8::1',
-  'lscpu', 'lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS', 'ip -br addr', 'ip route show', 'ss -ltnp', 'nproc --all',
+  'lscpu', 'lscpu | head -n 3', 'lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS', 'ip -br addr', 'ip route show', 'ss -ltnp', 'nproc --all',
   'uname -a; lscpu; free -h; df -h; ip -br addr', 'ping -c 1 -W 1 192.0.2.1 || ping -c 1 -W 1 192.0.2.2'
-])('attests literal diagnostic effects without granting automatic approval: %s', async (command) => {
+])('attests diagnostic effects and shared automatic-review eligibility: %s', async (command) => {
   const analysis = await analyzer.analyze(command);
   expect(isEffectFreeQuery(analysis)).toBe(true); expect(isReadOnlyQuery(analysis)).toBe(false);
+  expect(analyzeQueryImpact(analysis)).toMatchObject({ effects: 'none', autoApproval: 'eligible' });
 });
 it.each([
   'ping example.com', 'ping -c 10 example.com', 'ping -W 2 example.com', 'ping -c 11 -W 2 example.com',
@@ -22,7 +23,7 @@ it.each([
   'sudo ping -c 1 -W 1 example.com', 'env ping -c 1 -W 1 example.com', '/tmp/ping -c 1 -W 1 example.com',
   'ss -K dst 192.0.2.1', 'ss -E', 'ss -F /tmp/filter', 'ip route add default via 192.0.2.1', 'ip link set eth0 down',
   'ip -batch /tmp/input', 'lscpu --sysroot /tmp/root', 'lsblk --output-all /dev/sda',
-  'uname -a; echo decoration; lscpu', 'lscpu | head -n 3', 'nproc --all; rm -rf /tmp/something'
+  'uname -a; echo decoration; lscpu', 'lscpu | head -n 3 /srv/file', 'nproc --all; rm -rf /tmp/something'
 ])('does not attest unsupported traffic, writes or opaque syntax: %s', async (command) => {
   expect(isEffectFreeQuery(await analyzer.analyze(command))).toBe(false);
 });

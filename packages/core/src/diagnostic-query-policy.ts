@@ -10,6 +10,7 @@ export function isBoundedDiagnosticCall(call: CommandCall): boolean {
   const args = call.args;
   if (args.some((arg) => !arg || arg.length > 1024 || /[\u0000-\u0020\u007f$`*?{}\[\]<>]/u.test(arg))) return false;
   if (name === 'ping' || name === 'ping6') return boundedPing(args);
+  if (name === 'ps') return !args.length || args.length === 1 && ['aux', '-ef', '-e', '-A'].includes(args[0]!);
   if (name === 'lscpu') return !args.length || (args.length === 1 && args[0] === '--json');
   if (name === 'nproc') return !args.length || (args.length === 1 && args[0] === '--all');
   if (name === 'lsblk') {

@@ -103,6 +103,9 @@ export interface CommandAnalysis {
   calls: CommandCall[];
   /** Literal foreground commands in shell evaluation order; absent for opaque syntax. */
   steps?: Array<{ call: CommandCall; condition: 'always' | 'success' | 'failure' }>;
+  /** Parser evidence for exactly one foreground literal pipeline, not a flattened list.
+   * Every stage must match a depth-zero call's original source span. */
+  literalPipeline?: { stages: Array<{ start: number; end: number }> };
   redirectTargets: string[];
   /** Per-redirection shell context; wrapper cwd does not affect shell redirection. */
   redirectEffects?: Array<{ target: string; context: CommandContext }>;

@@ -8,7 +8,8 @@ import { openAiFixture } from './openai-sse-fixture.js';
 vi.mock('electron', () => ({ safeStorage: { isEncryptionAvailable: () => false } }));
 afterEach(() => vi.restoreAllMocks());
 
-it.each(['ss -ltnp', 'df -h && free -m'])('runs proven query %s in cautious mode without human or AI review, with durable audit', async (command) => {
+it.each([['ss -ltnp', 0], ['df -h && free -m', 0], ['ss -ltnp | grep -F nginx', 1],
+  ['ps aux | grep nginx | head -n 20', 0]] as const)('runs proven query %s (exit %i) in cautious mode without review, with durable audit', async (command, exitCode) => {
   const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', port: 22, username: 'user', auth: 'agent',
     status: 'connected', protectedPaths: [], defaultMode: 'ask', policyRevision: 1 };
   vi.spyOn(SshTransport.prototype, 'matchesConnection').mockReturnValue(true);
@@ -21,7 +22,7 @@ it.each(['ss -ltnp', 'df -h && free -m'])('runs proven query %s in cautious mode
     // Inspect Main's durable journal at the transport boundary, not after execution.
     expect(f.store.list<OperationView>('operations')).toEqual([expect.objectContaining({
       readOnly: true, ruleId: 'low-risk-command' })]);
-    exit = () => exits.get(this)!(0);
+    exit = () => exits.get(this)!(exitCode);
   });
   const f = await securityWorker(host);
   let requests = 0;
@@ -42,7 +43,7 @@ it.each(['ss -ltnp', 'df -h && free -m'])('runs proven query %s in cautious mode
     const disk = new SqliteStore(f.file);
     try {
       expect(disk.list<OperationView>('operations')).toEqual([expect.objectContaining({ taskId: task.id,
-        status: 'succeeded', readOnly: true, effects: 'none', ruleId: 'low-risk-command' })]);
+        status: exitCode === 0 ? 'succeeded' : 'failed', exitCode, readOnly: true, effects: 'none', ruleId: 'low-risk-command' })]);
     } finally { disk.close(); }
   } finally { exit?.(); await model.close(); await f.close(); }
 });

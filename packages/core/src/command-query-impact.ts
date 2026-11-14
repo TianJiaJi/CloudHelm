@@ -4,6 +4,7 @@ import { hasIncompleteCommandSemantics } from './command-semantics.js';
 import { isServiceQuery } from './service-observation.js';
 import { isDockerMetadataQuery } from './docker-query-policy.js';
 import { isBoundedDiagnosticCall } from './diagnostic-query-policy.js';
+import { isQueryPipeline } from './query-pipeline-policy.js';
 
 const QUERY_COMMANDS = new Set(['pwd', 'whoami', 'id', 'uname', 'uptime', 'date', 'df', 'free', 'hostname', 'ls', 'stat', 'cat']);
 export const BAD_DISK_TOOLS: ReadonlySet<string> = new Set(['mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkswap', 'wipefs', 'sfdisk', 'fdisk', 'parted', 'blkdiscard']);
@@ -101,7 +102,7 @@ function singleSudoEffectFree(analysis: CommandAnalysis): boolean {
 export interface QueryImpact {
   effects: 'none' | 'unknown';
   autoApproval: 'eligible' | 'review-required';
-  evidence: 'known-query' | 'bounded-diagnostic' | 'literal-query-list' | 'privileged-query' | 'unproven';
+  evidence: 'known-query' | 'bounded-diagnostic' | 'literal-query-list' | 'query-pipeline' | 'privileged-query' | 'unproven';
 }
 
 export function analyzeQueryImpact(analysis: CommandAnalysis): QueryImpact {
@@ -113,6 +114,7 @@ export function analyzeQueryImpact(analysis: CommandAnalysis): QueryImpact {
       && !analysis.hasCompound && analysis.calls.length === 1 && isBoundedDiagnosticCall(analysis.calls[0]!);
     if (diagnostic) return known('bounded-diagnostic');
     if (literalReadList(analysis)) return known('literal-query-list');
+    if (isQueryPipeline(analysis, (call) => isQuery(call) || isBoundedDiagnosticCall(call))) return known('query-pipeline');
     if (plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true) || singleSudoEffectFree(analysis)) return known('privileged-query', false);
   }
   return { effects: 'unknown', autoApproval: 'review-required', evidence: 'unproven' };

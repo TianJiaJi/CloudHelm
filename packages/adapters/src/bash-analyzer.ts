@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectCommands } from './command-semantics/collect.js';
+import { literalPipeline } from './command-semantics/pipeline.js';
 import { isDynamic, literalArgument } from './command-semantics/words.js';
 import { Language, Parser, type Node as SyntaxNode } from 'web-tree-sitter';
 import type { CommandAnalysis, CommandCall, CommandAnalyzer } from '@cloudhelm/core';
@@ -124,6 +125,7 @@ export class BashAnalyzer implements CommandAnalyzer {
         || tree.rootNode.children.some((node) => ['&', ';', '&&', '||'].includes(node.type));
       collectCommands(tree.rootNode, analysis, 0, parser);
       analysis.steps = literalSteps(tree.rootNode);
+      analysis.literalPipeline = literalPipeline(tree.rootNode);
       if (analysis.calls.length > 1) analysis.hasCompound = true;
       return analysis;
     } finally {
