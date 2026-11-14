@@ -24,7 +24,13 @@
 
 ## 3. 两会话串行与 Worker 重启恢复
 
-待运行。需要实际检查同一个 WorkerServer 的执行器实例与持久未决记录恢复，不以各自构造的两个锁实例通过替代。
+命令：`pnpm exec vitest run Tests/desktop/worker/security-serialization-runtime.test.ts --maxWorkers=1`
+
+- 运行两个独立 Pi 会话，共享生产 WorkerServer；观察两个 gate 都进入真实 HostSerialExecutor.execute，并断言接收者是同一个实例，不替换其锁逻辑。
+- 第一条 touch 在传输替身内保持未退出；第二条已进入真实队列且记录 running，但尚未到达传输层。第一条以真实 TerminalManager 退出观察完成后，第二条才派发。
+- 再生成一条无退出码的 unknown 记录，调用生产 Main.runtimeStopped，重开同一 SQLite 构造 AppState，然后创建全新 WorkerServer。
+- 按生产 main/index.ts 的顺序先 restore-operations（含风险域绑定），再接纳新会话：变更被 unresolved-prior-operation 拦截，传输替身调用数不增加；df只读查询仍可执行。
+- 1项复合运行用例通过。锁位于 WorkerServer 唯一的 HostSerialExecutor 内存实例；重建后依靠 Main 的持久记录恢复，不是内存锁跨进程存活。未执行真正的 utilityProcess 杀死/重启或真实SSH进程测试。
 
 ## 4. 保护规则配置
 
