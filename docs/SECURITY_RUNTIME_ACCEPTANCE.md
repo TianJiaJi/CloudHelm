@@ -34,7 +34,21 @@
 
 ## 4. 保护规则配置
 
-待专项核对。已定位可配置 protectedReadPaths/protectedWritePaths 与默认凭据路径规则；默认规则是否覆盖 pem/key 仍需记录实际结果。
+已完成代码审查（只报告，不修改业务规则）：
+
+- 硬编码默认拦截位于 apps/desktop/src/worker/remote-read-guard.ts；shadow/gshadow、.env及其后缀、.ssh/id_*、authorized_keys 等被覆盖。
+- 未覆盖任意目录的 *.pem、*.key，以及 .ssh 目录之外的 id_rsa；自定义 secret.yaml 不因文件名自动被视为秘密。
+- 用户规则不是死列表：主机安全设置中的“禁止 AI 读取的路径”可填写绝对文件或目录前缀，例如 /home/app/config/secret.yaml 或 /home/app/config。支持文件/子树，不支持glob。
+- 配置链为 SafetyDialog → registerHostSafetyIpc → WorkerServer.update-host-safety → TaskRunner.updateHostSafety，并保存在主机记录的 protectedReadPaths，更新 policyRevision。
+- 结论：可配置保护存在；默认覆盖不完整，列表外只读不经独立语义审核，脱敏只是尽力识别而非完整防泄漏。
+
+## 本次结论
+
+1. 只读审计对齐：存在缺陷，运行已复现，未修复。
+2. 只读保护强度：并非不可配置，但默认规则有空缺，未修复。
+3. 运行核验：curl拒批及持久记录、跨会话串行/持久恢复路径通过本地生产链路测试；真实utility process崩溃与SSH进程仍未验证。
+
+按用户要求本次只检查报告，生产业务代码未修改。只提交复现测试与本报告，不将特征测试通过当作安全验收通过。
 
 ## 未验收边界
 
