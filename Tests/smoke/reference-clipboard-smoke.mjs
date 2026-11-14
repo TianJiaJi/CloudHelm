@@ -47,9 +47,6 @@ try {
   const preserved = await page.evaluate(() => window.fixture.nativePaste.custom || window.fixture.nativePaste.html);
   assert.equal(preserved, true, 'native copy/paste must preserve reference provenance, not silently downgrade it to plain input');
   await input.getByRole('button', { name: 'Terminal', exact: true }).nth(1).waitFor();
-  await page.getByRole('button', { name: '丢弃草稿', exact: true }).click();
-  await page.waitForFunction(() => !document.querySelector('[data-message-editor] [data-reference]'));
-  await input.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
-  assert.equal(await input.getByRole('button', { name: 'Terminal', exact: true }).count(), 0, 'discard clears undo history');
-  console.log(JSON.stringify({ nativeClipboardProvenance: true, discardClearsUndo: true, paidModelRequests: 0, virtualMachineConnections: 0 }));
+  assert.equal(await page.getByRole('button', { name: '丢弃草稿', exact: true }).count(), 0, 'composer no longer exposes the discard-draft button');
+  console.log(JSON.stringify({ nativeClipboardProvenance: true, discardButtonRemoved: true, paidModelRequests: 0, virtualMachineConnections: 0 }));
 } finally { await browser?.close(); await server.close(); }

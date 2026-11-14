@@ -3,7 +3,7 @@ import { ConversationQueue } from './conversation-queue.js';
 import workspaceStyles from './execution-workspace.module.css';
 import { MessageEditor } from './message-editor.js';
 import { draftFor, finishDraftRequest, useMessageDrafts } from './message-drafts.js';
-import { discardReferenceDraft, holdDraftReferences } from './reference-drafts.js';
+import { holdDraftReferences } from './reference-drafts.js';
 import { ReasoningContent } from './reasoning-content.js';
 import { ThinkingPicker } from './thinking-picker.js';
 import { useEffect, useRef, useState } from 'react';
@@ -235,9 +235,6 @@ function Composer({ execution, operations, hostId, host, usage, compaction, conv
       <MessageEditor draftKey={draftKey} scope={{ conversationId: conversation?.id, hostId }} disabled={legacy || waiting || busy || locked} placeholder={waiting ? '请先回答上方问题，或停止本轮对话' : hostId ? '描述你的目标，或补充下一步…' : '问点什么…'} send={() => void send()} />
       {(preparing || locked) && !draftState?.discarding && <p className={styles.note} role="status">{(compressing || draftState?.compressing) ? '正在压缩超出上下文容量的内容…' : '正在准备发送…'} {draftState?.summaryRequests && `摘要请求 ${draftState.summaryRequests.used}/${draftState.summaryRequests.limit} `}<button type="button" onClick={() => { const id = draftFor(draftKey).request?.id; if (id) void capture(() => window.cloudhelm.cancelMessage(id), report); }}>取消发送</button></p>}
       <div className={composerStyles.composerTools}>
-        <button type="button" disabled={busy || locked || legacy} onClick={() => void capture(async () => {
-          if (await discardReferenceDraft(draftKey)) { composerDrafts.delete(draftKey); setAttachments([]); }
-        }, report)}>{draftState?.discarding ? '正在丢弃…' : '丢弃草稿'}</button>
         <div className={composerStyles.attachControl}>
           <button type="button" aria-label="添加本地资料" title="添加本地资料" disabled={legacy || waiting || busy || locked}
             aria-haspopup="menu" aria-expanded={!!attachmentMenu.anchor} {...attachmentMenu.trigger}><Icon name="plus" size={18} /></button>
