@@ -10,9 +10,10 @@ afterEach(() => vi.restoreAllMocks());
 const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', port: 22, username: 'user', auth: 'agent',
   status: 'connected', protectedPaths: [], defaultMode: 'ask', policyRevision: 1 };
 
-it.each(['/srv/app/.env', '/srv/app/config.yaml'])('persists read refusal/redaction through the actual WorkerServer (%s)', async (target) => {
+it.each(['/srv/app/.env', '/srv/app/config.yaml', '/srv/app/plain.txt'])('persists read refusal/redaction through the actual WorkerServer (%s)', async (target) => {
   const f = await securityWorker(host);
-  const read = vi.spyOn(SshTransport.prototype, 'readFileForEdit').mockResolvedValue({ content: 'password="synthetic-hidden"\n',
+  const plain = target.endsWith('plain.txt');
+  const read = vi.spyOn(SshTransport.prototype, 'readFileForEdit').mockResolvedValue({ content: plain ? 'listen=8080\n' : 'password="synthetic-hidden"\n',
     sha256: 'a'.repeat(64), bytes: 28, truncated: false, mode: 0o600, uid: 1000, gid: 1000 });
   let requests = 0;
   const model = await openAiFixture(async () => {
@@ -32,7 +33,7 @@ it.each(['/srv/app/.env', '/srv/app/config.yaml'])('persists read refusal/redact
       expect(fixtureMessageText(result!)).toContain('Credential file');
       expect(read).not.toHaveBeenCalled();
     } else {
-      expect(fixtureMessageText(result!)).toContain('REDACTED');
+      expect(fixtureMessageText(result!)).toContain(plain ? 'listen=8080' : 'REDACTED');
       expect(read).toHaveBeenCalledOnce();
     }
     expect(JSON.stringify(model.requests)).not.toContain('synthetic-hidden');
@@ -44,7 +45,7 @@ it.each(['/srv/app/.env', '/srv/app/config.yaml'])('persists read refusal/redact
         status: target.endsWith('.env') ? 'denied' : 'succeeded' });
       expect(records[0]!.readAudit!.events.at(-1)).toMatchObject(target.endsWith('.env')
         ? { phase: 'denied', code: 'credential-resource' }
-        : { phase: 'completed', redacted: true, truncated: false });
+        : { phase: 'completed', redacted: !plain, truncated: false });
       expect(JSON.stringify(records)).not.toContain('synthetic-hidden');
       expect(records[0]?.outputTail).toBeUndefined();
     } finally { reopened.close(); }

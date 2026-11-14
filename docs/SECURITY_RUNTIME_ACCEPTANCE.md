@@ -44,7 +44,7 @@
 
 ## 本次结论
 
-1. 只读审计对齐：原始盲区已复现；后续修复已接入，故障专项验收另见下节。
+1. 只读审计对齐：原始盲区已修复，本轮正常与故障专项局部验收通过，见下节；不扩大为所有工具/所有平台审计验收。
 2. 只读保护强度：原始默认覆盖空缺已补；结构化和识别到的命令读取共用策略，运行中撤权复核通过，应用自定义秘密仍需显式保护。
 3. 运行核验：curl拒批及持久记录、跨会话串行/持久恢复路径通过本地生产链路测试；真实utility process崩溃与SSH进程仍未验证。
 
@@ -66,6 +66,20 @@
 - 默认补齐任意目录pem/key（含大小写和常见备份后缀）、PKCS容器、SSH私钥名；PEM可能为公开证书，此处采取保守默认拒绝。任意应用secret.yaml仍通过用户自定义绝对文件/目录规则保护，不宣称能自动识别所有秘密。
 - 读取授权绑定用户名、策略修订和保护路径快照；授权审计确认后、SFTP返回后、结果审计确认后均重新复核。变化则丢弃结果并记录拒绝，不交付旧策略下读取的内容。审计路径按实际cwd解析为规范化绝对路径。
 - 类型检查、3文件5项局部回归及生产构建通过；包含真实WorkerServer/Pi中读取进行时新增自定义secret.yaml保护：旧结果未交付、下一次读取在SFTP前被拒，两种拒绝均有持久记录。
+
+### 只读故障专项局部验收
+
+命令：`pnpm exec vitest run Tests/desktop/worker/security-read-runtime.test.ts Tests/desktop/worker/security-read-failure.test.ts Tests/desktop/worker/security-read-revocation.test.ts Tests/desktop/worker/read-audit-confirmation.test.ts Tests/desktop/main/read-audit-validation.test.ts Tests/core/sensitive-read.test.ts --maxWorkers=2`
+
+- 6文件15项通过，类型检查、生产构建及改动文件lint通过；未运行全量或桌面窗口测试。
+- .env拒绝零SFTP读取且有持久记录；普通非秘密读取记录redacted=false；含合成密码的配置只向模型交付脱敏文本，记录redacted=true且审计无正文。
+- 在真实WorkerServer→Main→文件SQLite链路注入requested/authorized/denied阶段写入故障：SFTP读取0次；completed阶段故障：SFTP读取1次，但模型交付正文0次。模型和审计均不包含合成正文或底层存储错误。
+- 审计故障可能只保留此前已确认的阶段，不能保证故障记录自身能写入；缺少最终确认不视为已交付，也不放行内容。
+- 原有OperationCommitClient确认超时后，迟到成功回执不恢复读取、不重试；缺少持久写入器也没有legacy只读旁路。
+- 越权主机读取被拒绝并写入同一操作存储，未触及SFTP；Main拒绝审计夹带正文、原始错误和进程能力，拒绝改写历史事件及路径/策略绑定。
+- 同一轮还复验了敏感默认规则、读取期间撤权，以及下一次自定义保护路径读取的提前拒绝。
+
+本轮限定的三项子任务已完成并局部验收。这里只证明生产应用链路在受控本地模型/传输替身下的行为，不代表真实SSH、进程崩溃或完整防泄漏验收。
 
 ## 未验收边界
 
