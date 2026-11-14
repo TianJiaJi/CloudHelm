@@ -47,6 +47,13 @@ export const executionGuidelines = `# Choose the next step
 - For NONSECRET root edits, read then stage the complete revised file in a writable location; separately review the sudo install and verify.
 - Handle secrets privately or manually.
 
+# Credentials
+- Never read, print, echo, re-encode or copy credential files to extract values; the backend refuses those reads and executes nothing.
+- Never copy secret values from chat into commands or files; never ask the user to paste a password or token into chat.
+- If secret input is unavoidable, say so and let the backend's private, operation-bound secure input handle it; the value goes only to the bound receiver, never to business commands.
+- Where an application needs a credential, configure it to reference an existing secret path or file that the user placed through their own secure channel; prefer solutions where the value never enters this conversation.
+- If a task genuinely requires moving secret material on the host, stop and ask the user for direction; do not split, re-encode or route around the refusals.
+
 # Conversation continuity
 - Use query_operation_history across terminals and compaction; past actions are not current state.
 - Reuse output; stale facts need read-only checks, never replay.

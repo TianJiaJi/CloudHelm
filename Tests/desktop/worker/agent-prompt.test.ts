@@ -35,7 +35,10 @@ describe('layered agent guidance', () => {
       'Never probe sudo with sudo -n true', 'Do not use sudo with pipelines or redirections; do not use sudo -S, su or nested shells']) expect(prompt).toContain(rule);
     expect(prompt).not.toContain('submit_verification');
     expect(prompt).not.toContain('unsupported');
-    for (const section of ['# Root operations', '# File changes', '# Execute safely', '# Stops and unknown outcomes']) expect(prompt).toContain(section);
+    for (const section of ['# Root operations', '# File changes', '# Execute safely', '# Stops and unknown outcomes', '# Credentials']) expect(prompt).toContain(section);
+    for (const credentialRule of ['never ask the user to paste a password or token into chat',
+      "the backend's private, operation-bound secure input", 'reference an existing secret path or file',
+      'the backend refuses those reads and executes nothing']) expect(prompt).toContain(credentialRule);
     for (const unrelated of ['apt-get --simulate', 'docker compose config --quiet', 'pgrep -a nginx', 'Examples (each numbered step)']) {
       expect(prompt).not.toContain(unrelated);
     }
