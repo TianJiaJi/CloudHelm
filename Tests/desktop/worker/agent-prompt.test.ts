@@ -28,11 +28,14 @@ describe('layered agent guidance', () => {
       'Descriptive text inside field values', 'policyRevision invalidates older approvals',
       'separate reviewed, access-restricted timestamped backup', 'stage the complete revised file',
       'Never include passwords, private keys, tokens or credential-bearing URLs']) expect(prompt).toContain(boundary);
-    for (const rule of ['SafetyGate', 'never automatically replay', 'submit_verification',
+    for (const rule of ['SafetyGate', 'never automatically replay', 'No verification report submission is required',
       'run_remote.cwd', 'read_operation_log', 'host recovery card', 'Ask the user only when',
-      'Dedicated tools may include documented preflight', 'No submit_verification tool or report submission is required',
+      'Dedicated tools may include documented preflight',
       'execute one focused query per tool call', 'await its result before choosing the next query',
-      'Never probe sudo with sudo -n true', 'Sudo pipelines, redirections, sudo -S, su and nested shells']) expect(prompt).toContain(rule);
+      'Never probe sudo with sudo -n true', 'Do not use sudo with pipelines or redirections; do not use sudo -S, su or nested shells']) expect(prompt).toContain(rule);
+    expect(prompt).not.toContain('submit_verification');
+    expect(prompt).not.toContain('unsupported');
+    for (const section of ['# Root operations', '# File changes', '# Execute safely', '# Stops and unknown outcomes']) expect(prompt).toContain(section);
     for (const unrelated of ['apt-get --simulate', 'docker compose config --quiet', 'pgrep -a nginx', 'Examples (each numbered step)']) {
       expect(prompt).not.toContain(unrelated);
     }
