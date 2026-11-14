@@ -14,7 +14,13 @@
 
 ## 2. read 拒绝与审计
 
-待运行。已静态发现 read_remote_file 不调用 OperationAudit/commitOperation；仅有保护路径异常和工具返回不能证明拒绝已持久化。
+命令：`pnpm exec vitest run Tests/desktop/worker/security-read-runtime.test.ts --maxWorkers=1`
+
+- 实际运行 WorkerServer → Pi SDK → tool_search → read_remote_file → 生产保护路径回调；不是直接单测正则。
+- 请求 `/srv/app/.env`：工具返回 Credential file，SFTP读取调用0次，保护实际生效。
+- 对照读取 `/srv/app/config.yaml`：传输替身返回含合成密码的内容，模型后续请求只得到 REDACTED，不含原始值。
+- 两条路径都没有发出 commitOperation；独立连接同一文件 SQLite 查询 operations 均为空。**审计对齐验收失败：授权、凭据拦截与脱敏没有进入变更链的持久操作审计。**
+- 测试的2项通过仅表示上述缺陷已稳定复现，不表示审计已修复。Pi会话中的工具消息/界面活动不等于统一的授权审计，不能称完全没有任何痕迹，也不能用它们代替审计。
 
 ## 3. 两会话串行与 Worker 重启恢复
 
