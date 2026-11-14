@@ -574,6 +574,7 @@ export class AppState {
     const task = this.tasks.get(operation.taskId), prior = this.operations.get(operation.id);
     if (operation.kind === 'read-file' || operation.readAudit) validateReadAudit(operation, prior);
     if (operation.impactAnalysis && !Value.Check(OperationImpactSchema, operation.impactAnalysis)) throw new Error('Invalid operation impact');
+    if (operation.promptVersion !== undefined && !/^[0-9A-Za-z.-]{1,32}$/.test(operation.promptVersion)) throw new Error('Invalid prompt version');
     const deniedForeignRead = operation.kind === 'read-file' && operation.status === 'denied'
       && operation.ruleId === 'read-host-out-of-scope';
     if (this.closed || !task || (!task.hostIds.includes(operation.hostId) && !deniedForeignRead)

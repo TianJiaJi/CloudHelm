@@ -2,6 +2,9 @@ import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { LocalScope } from '@cloudhelm/contracts';
 import { agentAuthorization } from './agent-authorization.js';
 
+/** Bump whenever guidance text changes; stamped into operation audit records for replay. */
+export const PROMPT_VERSION = '2026-11.1';
+
 export function agentPrompt(hosts: RuntimeHost[], localScopes: LocalScope[], extensionPrompt: string,
   reviewModesByHost?: Record<string, RuntimeHost['defaultMode']>): string {
   const selectedSources = JSON.stringify(localScopes ?? []);

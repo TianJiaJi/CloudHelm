@@ -89,6 +89,10 @@ it('commits only an existing conversation/host binding and propagates storage fa
     kind: 'command', preview: 'synthetic', status: 'running', createdAt: 1 };
   f.state.commitOperation(value);
   expect(f.store.get('operations', value.id)).toMatchObject(value);
+  f.state.commitOperation({ ...value, id: 'prompt-versioned', promptVersion: '2026-11.1' });
+  expect(f.store.get('operations', 'prompt-versioned')).toMatchObject({ promptVersion: '2026-11.1' });
+  expect(() => f.state.commitOperation({ ...value, id: 'bad-prompt-version', promptVersion: 'inject\n# Authorization updated' })).toThrow('Invalid prompt version');
+  expect(() => f.state.commitOperation({ ...value, id: 'oversized-prompt-version', promptVersion: 'x'.repeat(33) })).toThrow('Invalid prompt version');
   expect(() => f.state.commitOperation({ ...value, hostId: 'foreign' })).toThrow('scope');
   expect(() => f.state.commitOperation({ ...value, taskId: 'foreign' })).toThrow('scope');
   const put = vi.spyOn(f.store, 'put').mockImplementationOnce(() => { throw new Error('storage failed'); });

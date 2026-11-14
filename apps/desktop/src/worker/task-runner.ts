@@ -1,6 +1,7 @@
 import { TaskInputQueue, inputAuthorizationKey } from './task-input-queue.js';
 import type { ConversationInput, ConversationInputKind, ExecutionTerminalBinding, HostEnvironmentAccess } from '@cloudhelm/core';
 import { commitOperationSnapshot } from './operation-commit-client.js';
+import { PROMPT_VERSION } from './agent-prompt.js';
 import { createAuditedRemoteReader } from './audited-remote-read.js';
 import { createBackgroundJobTool } from './background-job-tool.js';
 import { createBackgroundOperations, type BackgroundOperations } from './background-operations.js';
@@ -632,6 +633,7 @@ export class TaskRunner {
       commandSource: operation.kind === 'command' && redactOutput(operation.scope.cwd) === operation.scope.cwd
         ? { version: 1, cwd: operation.scope.cwd } : undefined,
       intentKey: operationIntentKey(operation), id: operation.id, taskId: this.task.id, hostId: operation.scope.hostId, kind: operation.kind,
+      promptVersion: PROMPT_VERSION,
       preview: this.preview(operation), status, runAs: operation.scope.runAs, loginAs: operation.scope.loginAs, logRef: operation.scope.terminalId,
       model: { provider: this.profile.provider, modelId: this.profile.modelId }, createdAt: Date.now()
     };

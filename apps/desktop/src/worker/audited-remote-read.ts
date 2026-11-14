@@ -5,6 +5,7 @@ import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
 import type { TaskSignals } from './task-signals.js';
 import { assertRemoteReadAllowed, RemoteReadPolicyError, resolveRemoteReadTarget } from './remote-read-guard.js';
+import { PROMPT_VERSION } from './agent-prompt.js';
 
 type Reader = NonNullable<RemoteToolDependencies['readRemoteFile']>;
 class ReadStateChanged extends Error {
@@ -30,7 +31,7 @@ export function createAuditedRemoteReader(taskId: string, hosts: RuntimeHost[], 
     try { target = resolveRemoteReadTarget(filePath, cwd); } catch (error) { invalidPath = error; }
     const safePath = redactOutput(target ?? filePath).replace(/[\u0000-\u001f\u007f]/gu, '?').slice(0, 4096);
     const record: OperationView = { id: randomUUID(), taskId, hostId, kind: 'read-file', preview: `Read ${safePath}`,
-      status: 'proposed', readOnly: true, effects: 'none', createdAt: Date.now(),
+      status: 'proposed', readOnly: true, effects: 'none', createdAt: Date.now(), promptVersion: PROMPT_VERSION,
       ...(host ? { loginAs: host.username, runAs: host.username } : {}),
       readAudit: { version: 1, path: safePath, policyRevision: host?.policyRevision ?? 0, events: [] } };
     const persist = async (phase: RemoteReadAuditEvent['phase'], code: RemoteReadAuditEvent['code'],

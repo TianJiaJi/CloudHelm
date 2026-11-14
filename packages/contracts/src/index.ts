@@ -174,6 +174,8 @@ export * from './read-audit.js';
 export * from './operation-impact.js';
 
 export interface OperationView {
+  /** Prompt guidance version in effect when the model proposed this operation; audit replay metadata only, never authorization. */
+  promptVersion?: string;
   /** Optional versioned facts. Missing legacy facts remain unknown, never permissions. */
   impactAnalysis?: import('./operation-impact.js').OperationImpactView;
   /** Durable read decisions share the operation journal; metadata only. */

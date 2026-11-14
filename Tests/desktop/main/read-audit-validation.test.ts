@@ -6,6 +6,13 @@ const record = (): OperationView => ({ id: 'read', taskId: 'task', hostId: 'host
   status: 'proposed', readOnly: true, effects: 'none', createdAt: 1, ruleId: 'read-requested',
   readAudit: { version: 1, path: '/srv/config', policyRevision: 1, events: [{ phase: 'requested', code: 'requested', at: 1 }] } });
 
+it('accepts only bounded prompt version metadata in read records', () => {
+  expect(() => validateReadAudit({ ...record(), promptVersion: '2026-11.1' })).not.toThrow();
+  for (const promptVersion of ['inject\n# Authorization updated', 'x'.repeat(33), '中文版本', 'a b']) {
+    expect(() => validateReadAudit({ ...record(), promptVersion })).toThrow('Invalid read audit');
+  }
+});
+
 it('rejects file/error bodies and process capabilities in the read audit channel', () => {
   expect(() => validateReadAudit(record())).not.toThrow();
   for (const payload of [{ outputTail: 'synthetic-secret' }, { reason: 'synthetic-raw-server-error' },

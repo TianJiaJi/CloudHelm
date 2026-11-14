@@ -3,7 +3,7 @@ import { RemoteReadAuditSchema, type OperationView } from '@cloudhelm/contracts'
 import { redactOutput } from '@cloudhelm/core';
 
 const fields = new Set(['id', 'taskId', 'hostId', 'kind', 'preview', 'status', 'readOnly', 'effects', 'createdAt',
-  'completedAt', 'ruleId', 'loginAs', 'runAs', 'readAudit']);
+  'completedAt', 'ruleId', 'loginAs', 'runAs', 'readAudit', 'promptVersion']);
 
 /** Read audits use the same durable writer as mutations but can never mint a
  * process, an effect, an approval or a reconciliation. Content/error bodies are forbidden. */
@@ -13,6 +13,7 @@ export function validateReadAudit(operation: OperationView, prior?: OperationVie
   if (!Value.Check(RemoteReadAuditSchema, audit) || operation.kind !== 'read-file'
     || operation.readOnly !== true || operation.effects !== 'none'
     || Object.keys(operation).some((key) => !fields.has(key))) return fail();
+  if (operation.promptVersion !== undefined && !/^[0-9A-Za-z.-]{1,32}$/.test(operation.promptVersion)) return fail();
   if (!audit || audit.path !== redactOutput(audit.path) || /[\u0000-\u001f\u007f]/u.test(audit.path)
     || operation.preview !== `Read ${audit.path}`) return fail();
   if (![operation.id, operation.taskId, operation.hostId].every((id) => typeof id === 'string' && id.length > 0 && id.length <= 200)
