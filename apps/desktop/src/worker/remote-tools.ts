@@ -1,4 +1,5 @@
 import { createServiceTool } from './service-tool.js';
+import { createRemoteFileEditTool } from './remote-file-edit-tool.js';
 import { OperationPrivilege } from './operation-privilege.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { OutputRedactor, PrivilegeError, privilegeGuidance, redactOutput, type BusinessTool } from '@cloudhelm/core';
@@ -163,5 +164,5 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       }
     }
   };
-  return [createServiceTool(deps, gate), rootTool, tool, readTool, writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+  return [createServiceTool(deps, gate), rootTool, tool, readTool, createRemoteFileEditTool(deps, gate), writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
 }
