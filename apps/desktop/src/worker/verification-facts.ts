@@ -57,13 +57,14 @@ export function buildVerificationReport(input: {
       : operations.some((op) => op.readOnly !== true && op.effects !== 'none') ? 'not-assessed' : 'effect-free',
     operations: operations.map((op) => ({ operationId: op.id, hostId: op.hostId, kind: op.kind, status: op.status, exitCode: op.exitCode, readOnly: op.readOnly })),
     riskOperationIds, unresolvedOperationIds, uncheckedOperationIds };
+  const visible = operations.filter((op) => op.internal === undefined);
   const observations = facts.goals === 'execution-observed' ? '已确认运行并保存输出；尚未比较输出与业务要求。'
     : facts.goals === 'passed' ? '已登记的具体检查通过，影响另列。' : '检查结论与缺失证据见下方具体记录。';
   return { version: 3, summary: input.submitted?.summary ?? `${facts.execution === 'succeeded-after-retry' ? '后续运行已成功，未启动的原尝试仍保留。' : '已自动整理实际执行记录。'}${observations}`,
     access: input.submitted?.access ?? [], recovery: input.submitted?.recovery ?? ['未自动执行恢复；恢复操作仍须单独审核。'],
-    changes: input.submitted?.changes?.length ? input.submitted.changes : operations.slice(-32).map((op) =>
+    changes: input.submitted?.changes?.length ? input.submitted.changes : visible.slice(-32).map((op) =>
       `${op.status === 'succeeded' ? '已完成' : op.status === 'failed' ? '失败尝试（详见操作记录）' : op.status}：${hasJournalCredentials(redactOutput(op.preview)) ? '正文含疑似凭据，未复制到报告。' : redactOutput(op.preview).slice(0, 512)}`)
-      .concat(operations.length > 32 ? [`更早的 ${operations.length - 32} 项见全部操作。`] : []),
+      .concat(visible.length > 32 ? [`更早的 ${visible.length - 32} 项见全部操作。`] : []),
     evidenceOperationIds: [...new Set(goalChecks.flatMap((check) => check.operationIds))], goalChecks, facts,
     unverifiedChanges: input.submitted?.unverifiedChanges ?? [] };
 }

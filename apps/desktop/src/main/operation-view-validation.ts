@@ -5,7 +5,9 @@ const hash = Type.String({ pattern: '^[a-f0-9]{64}$' });
 const schema = Type.Object({ version: Type.Literal(1), directoryId: Type.String({ pattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' }),
   path: Type.String({ minLength: 1, maxLength: 4096, pattern: '^/' }), beforeSha256: hash, beforeMetadataDigest: hash,
   afterSha256: hash, afterMetadataDigest: hash }, { additionalProperties: false });
-export function validateFileTransactionView(operation: OperationView): void {
+export function validateOperationView(operation: OperationView): void {
+  if (operation.internal !== undefined && (operation.internal !== 'identity-probe' || operation.kind !== 'command'))
+    throw new Error('Invalid internal preflight marker');
   const receipt = operation.fileRecovery;
   if (receipt && (!Value.Check(schema, receipt) || /[\u0000-\u001f\u007f]/u.test(receipt.path)
     || operation.kind !== 'write-file' || operation.verificationSource?.kind !== 'file-write'

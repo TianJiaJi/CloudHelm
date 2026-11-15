@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { redactOutput, type ProposedOperation } from '@cloudhelm/core';
 export function operationPreview(operation: ProposedOperation): string {
   if (operation.kind === 'inspect-file') return `Inspect file ${redactOutput(operation.path)} (${operation.privilege ?? 'current'} identity${operation.recoveryDirectoryId ? ', bound recovery entry' : ''})`;
+  if (operation.kind === 'command' && operation.probe) return `身份探测（后端自动预检，不计入业务完成）· ${redactOutput(operation.command)}`;
   if (operation.kind === 'command') return operation.processControl
     ? `请求停止后台任务 ${operation.processControl.jobId}（SIGINT，目标进程 ${operation.processControl.pid}；不是退出确认）` : redactOutput(operation.command);
   if (operation.kind === 'write-file') return operation.fileEdit

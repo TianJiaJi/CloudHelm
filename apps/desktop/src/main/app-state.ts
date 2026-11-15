@@ -1,7 +1,7 @@
 import { AgentActivityStore } from './agent-activity-store.js';
 import { OperationImpactSchema } from '@cloudhelm/contracts';
 import { validateReadAudit } from './read-audit-validation.js';
-import { validateFileTransactionView } from './file-transaction-validation.js';
+import { validateOperationView } from './operation-view-validation.js';
 import { ConversationInputStore } from './conversation-input-store.js';
 import { ConversationThinking, taskWithModel } from './conversation-thinking.js';
 import { recoverOperation } from './operation-recovery.js';
@@ -572,7 +572,7 @@ export class AppState {
   }
 
   commitOperation(operation: OperationView): void {
-    validateFileTransactionView(operation);
+    validateOperationView(operation);
     const task = this.tasks.get(operation.taskId), prior = this.operations.get(operation.id);
     if (operation.kind === 'read-file' || operation.readAudit) validateReadAudit(operation, prior);
     if (operation.impactAnalysis && !Value.Check(OperationImpactSchema, operation.impactAnalysis)) throw new Error('Invalid operation impact');

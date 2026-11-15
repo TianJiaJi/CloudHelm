@@ -9,9 +9,12 @@ import { executeControlledFile } from './controlled-file-executor.js';
 /** Executes reviewed structured writes over SFTP without exposing arbitrary SFTP access to the renderer. */
 export class FileOperationExecutor implements OperationExecutor {
   readonly supportsFileTransactions = true;
-  private readonly fileDriver: FileTransactionRunner;
+  private fileDriver?: FileTransactionRunner;
   constructor(private readonly terminal: TerminalManager, private readonly ssh: SshTransport,
-    private readonly commands: OperationExecutor, secret?: FileSecretInput) { this.fileDriver = new FileTransactionRunner(ssh, secret); }
+    private readonly commands: OperationExecutor, private readonly secret?: FileSecretInput) {}
+  /** Built only for a controlled file operation, so ordinary, legacy and privileged
+   * command paths never depend on the file driver being present. */
+  private driver(): FileTransactionRunner { return this.fileDriver ??= new FileTransactionRunner(this.ssh, this.secret); }
 
   async execute(operation: ProposedOperation, fingerprint: string, signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
     if (operation.kind === 'command') return this.commands.execute(operation, fingerprint, signal, options);
@@ -29,7 +32,7 @@ export class FileOperationExecutor implements OperationExecutor {
       status: 'failed', effects: 'none', failureKind: 'not-dispatched', stdoutTail: message });
     if (!authorized()) return notDispatched('Authorization expired before any remote call; nothing was written. Propose the operation again.');
     if (operation.kind === 'inspect-file' || operation.kind === 'write-file' && operation.fileEdit)
-      return executeControlledFile(this.fileDriver, operation, authorized, signal, options);
+      return executeControlledFile(this.driver(), operation, authorized, signal, options);
     const remotePath = path.posix.resolve(operation.scope.cwd,
       operation.kind === 'upload' ? operation.remotePath : operation.path);
     let remoteStarted = false;

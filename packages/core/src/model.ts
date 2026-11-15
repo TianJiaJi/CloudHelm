@@ -40,6 +40,8 @@ export type ProposedOperation =
         processSequence: number; connectionId: string };
       /** Operation-level root request, normalized before review; never an approval. */
       privilege?: 'root';
+      /** Backend-created preflight (identity discovery). Model tools cannot set it. */
+      probe?: 'identity';
       outputExpectation?: { expectedOutput: string; expectedExitCode?: number }; scope: OperationScope }
   | { id: string; kind: 'write-file'; path: string; content: string; scope: OperationScope;
       privilege?: 'root'; fileEdit?: import('./file-transaction.js').FileEditCommit;

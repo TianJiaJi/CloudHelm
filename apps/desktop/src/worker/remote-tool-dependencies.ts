@@ -10,6 +10,8 @@ export interface RemoteToolDependencies {
   hosts: RuntimeHost[];
   controlledFiles?: boolean;
   taskId?: string;
+  /** Fixed refusal code for diagnostics only; never carries arguments or content. */
+  refused?: (tool: string, code: string) => void;
   fileBinding?(): string;
   fileOperations?(): readonly import('@cloudhelm/contracts').OperationView[];
   localFiles: LocalFileAccess;

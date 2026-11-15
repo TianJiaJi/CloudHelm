@@ -17,7 +17,7 @@ import { blockedOperationFeedback } from './operation-feedback.js';
 
 
 function outOfScope() {
-  return { content: [{ type: 'text' as const, text: 'Host is outside the conversation authorization scope' }], details: undefined, isError: true };
+  return { content: [{ type: 'text' as const, text: 'Host is outside the conversation authorization scope' }], details: { code: 'out-of-scope-host' }, isError: true };
 }
 export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate) {
     const privilege = new OperationPrivilege(deps);
@@ -171,5 +171,14 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       }
     }
   };
-  return [createServiceTool(deps, gate), rootTool, tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files), createRemoteFileEditTool(deps, gate), writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+  const tools = [createServiceTool(deps, gate), rootTool, tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files), createRemoteFileEditTool(deps, gate), writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+  // Pre-dispatch refusals create no operation record, so surface a fixed reason code
+  // for diagnosis. The code is allowlisted; arguments and content never reach the log.
+  return deps.refused ? (tools as BusinessTool<any>[]).map((item) => ({ ...item,
+    execute: async (id: string, args: any, signal?: AbortSignal) => {
+      const reply = await item.execute(id, args, signal);
+      const code = (reply?.details as { code?: unknown } | undefined)?.code;
+      if (reply?.isError) deps.refused!(item.name, typeof code === 'string' && /^[a-z0-9-]{1,64}$/u.test(code) ? code : 'tool-refused');
+      return reply;
+    } })) : tools;
 }

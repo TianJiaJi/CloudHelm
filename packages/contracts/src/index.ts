@@ -194,6 +194,8 @@ export interface OperationView {
   reconciledAt?: number;
   reconciliation?: OperationReconciliation;
   intentKey?: string;
+  /** Backend preflight whose result is not a user-visible business step. */
+  internal?: 'identity-probe';
   verificationSource?: import('./verification-v3.js').VerificationSource;
   outputExpectation?: import('./verification-v3.js').OutputExpectation;
   /** Backend observed a terminal completion/code, never reconciliation prose; launch failure may still mean the payload did not start. */

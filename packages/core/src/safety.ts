@@ -326,6 +326,10 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     && settings.reviewerRevision !== operation.scope.reviewerRevision) {
     return decision('error', 'reviewer-stale', 'Reviewer configuration changed after this operation was proposed');
   }
+  if (operation.kind === 'command' && operation.probe !== undefined && (operation.probe !== 'identity' || operation.command !== 'id -u'
+    || operation.privilege || operation.executionMode || operation.processControl || operation.outputExpectation || operation.serviceUnit
+    || operation.scope.sessionId !== undefined))
+    return decision('error', 'invalid-internal-probe', 'Backend identity probe has an invalid shape; nothing dispatched');
   if (operation.kind === 'write-file' && operation.fileEdit && (!validFileEditCommit(operation.fileEdit) || !operation.expectedSha256 || operation.createOnly))
     return decision('error', 'invalid-file-transaction', 'Invalid backend file transaction; nothing dispatched');
   if (operation.kind === 'inspect-file' && operation.recoveryDirectoryId && !FILE_TRANSACTION_UUID.test(operation.recoveryDirectoryId))

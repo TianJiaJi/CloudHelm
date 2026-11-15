@@ -35,7 +35,7 @@ export class OperationPrivilege {
     if (session) return this.inSession(gate, host, operation, session, signal);
     let uid = this.identities.get(key);
     if (uid === undefined) {
-      const identity = await this.deps.runOperation(gate, { id: randomUUID(), kind: 'command', command: 'id -u',
+      const identity = await this.deps.runOperation(gate, { id: randomUUID(), kind: 'command', command: 'id -u', probe: 'identity',
         scope: this.deps.scope(host, operation.scope.terminalId, '/') }, signal, host.label);
       const observed = identity.result;
       if (identity.isError || observed?.status !== 'succeeded' || observed.exitCode !== 0) return identity;

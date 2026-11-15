@@ -6,7 +6,7 @@ import type { FileInspection } from '@cloudhelm/core';
 import type { OperationView, TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { FileOperationExecutor } from '../../../apps/desktop/src/worker/file-operation-executor.js';
-import { validateFileTransactionView } from '../../../apps/desktop/src/main/file-transaction-validation.js';
+import { validateOperationView } from '../../../apps/desktop/src/main/operation-view-validation.js';
 import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -57,7 +57,7 @@ it('uses native discovery and the production task/gate/file executor chain for r
   const events: Parameters<TaskSignals['event']>[0][] = [];
   const runner = new TaskRunner(task, [host], { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: model.baseUrl },
     [], terminals, executor, open, { event: (event) => events.push(structuredClone(event)), requestApproval, cancelApproval() {},
-      commitOperation: async (value) => { validateFileTransactionView(value); records.set(value.id, structuredClone(value)); } });
+      commitOperation: async (value) => { validateOperationView(value); records.set(value.id, structuredClone(value)); } });
   try {
     await runner.start(); expect(model.errors).toEqual([]); expect(requests).toBe(7); expect(task.status).toBe('answered');
     expect(state.content).toBe('port=80\n'); expect(ordinary.execute).not.toHaveBeenCalled();

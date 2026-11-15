@@ -22,7 +22,7 @@ export function operationFingerprint(operation: ProposedOperation): string {
     privilege: operation.kind === 'command' || operation.kind === 'write-file' || operation.kind === 'inspect-file' ? operation.privilege : undefined,
     executionMode: operation.kind === 'command' ? operation.executionMode : undefined,
     processControl: operation.kind === 'command' ? operation.processControl : undefined,
-    payload: operation.kind === 'command' ? operation.command
+    payload: operation.kind === 'command' ? [operation.command, operation.probe]
       : operation.kind === 'write-file' ? [operation.path, operation.content, operation.expectedSha256, operation.createOnly, operation.fileEdit]
       : operation.kind === 'upload' ? [operation.localPath, operation.remotePath, operation.localRoot, operation.contentSha256, operation.size]
       : operation.kind === 'inspect-file' ? [operation.path, operation.recoveryDirectoryId] : operation.path

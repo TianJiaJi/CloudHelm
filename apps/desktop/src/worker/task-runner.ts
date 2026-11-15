@@ -149,6 +149,7 @@ export class TaskRunner {
     const gate = this.createGate();
     const remoteTools = createRemoteTools({ hosts: this.hosts, localFiles: this.localFiles,
       taskId: this.task.id, controlledFiles: this.executor.supportsFileTransactions, fileBinding: () => this.requestGeneration(), fileOperations: () => this.operationViews(),
+      refused: (tool, code) => this.diagnostic({ event: 'tool.refused', tool, errorCode: code }),
       background: (signal, run) => this.background.withLifetime(signal, run),
       ensureTerminal: async (id, sessionId) => {
         this.assertRemoteActive();
@@ -613,6 +614,7 @@ export class TaskRunner {
       ...(connectionId ? { executionContext: { version: 1, connectionId, terminalId: operation.scope.terminalId,
         terminalGeneration: operation.scope.terminalGeneration } } : {}),
       ...(operation.kind === 'command' && operation.processControl ? { processControl: { ...operation.processControl } } : {}),
+      ...(operation.kind === 'command' && operation.probe ? { internal: 'identity-probe' as const } : {}),
       verificationSource: source,
       outputExpectation: operation.kind === 'command' ? operation.outputExpectation : undefined,
       serviceUnit: operation.kind === 'command' ? operation.serviceUnit : undefined,
