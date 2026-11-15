@@ -5,9 +5,10 @@ import type { CommandCall } from './model.js';
 export function commandTransfer(call: CommandCall): { reads: string[]; sendsData: boolean } {
   const name = path.posix.basename(call.name), reads: string[] = [];
   let sendsData = false;
-  if (name !== 'curl') return { reads, sendsData: ['scp', 'sftp', 'rsync', 'nc', 'ncat', 'netcat', 'socat'].includes(name) };
+  if (name !== 'curl') return { reads, sendsData: ['scp', 'sftp', 'rsync', 'nc', 'ncat', 'netcat', 'socat'].includes(name)
+    || name === 'git' && (call.semantics?.git?.subcommand ?? call.args[0]) === 'push' };
   const options = new Set(['-d', '--data', '--data-binary', '--data-ascii', '--data-urlencode', '--json',
-    '-F', '--form', '-T', '--upload-file', '-K', '--config', '--data-raw']);
+    '-F', '--form', '--form-string', '-T', '--upload-file', '-K', '--config', '--data-raw']);
   for (let i = 0; i < call.args.length; i++) {
     const arg = call.args[i]!;
     if (arg === '--') break;
@@ -21,7 +22,7 @@ export function commandTransfer(call: CommandCall): { reads: string[]; sendsData
     if (!config) sendsData = true;
     if (!value || value === '-') continue;
     if (config || option === '-T' || option === '--upload-file') { reads.push(value); continue; }
-    if (option === '--data-raw') continue;
+    if (option === '--data-raw' || option === '--form-string') continue;
     if (option === '-F' || option === '--form') {
       const marker = /^[^=]+=[@<](.+)$/u.exec(value)?.[1];
       if (marker) reads.push(marker.split(';')[0]!);

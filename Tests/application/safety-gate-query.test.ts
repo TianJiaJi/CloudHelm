@@ -28,7 +28,10 @@ describe('authoritative query effects', () => {
     const f = setup({ status: 'failed', exitCode: 1, effects: 'possible', failureKind: 'permission-denied', stdoutTail: 'permission denied' }, mode);
     const outcome = await f.gate.execute(operation);
     expect(f.analyze).toHaveBeenCalledOnce();
-    expect(f.classified).toHaveBeenCalledWith(operation.id, true);
+    expect(f.classified).toHaveBeenCalledWith(operation.id, true, {
+      version: 1, mutation: 'none', sensitiveRead: 'not-detected', externalTransfer: 'not-detected',
+      codeExecution: 'not-detected', evidence: 'query-proof', uncertaintyCodes: []
+    });
     expect(f.execute).toHaveBeenCalledWith(expect.anything(), expect.any(String), undefined,
       expect.objectContaining({ readOnly: true, isAuthorized: expect.any(Function) }));
     expect(outcome.result).toMatchObject({ status: 'failed', exitCode: 1, effects: 'none', failureKind: 'permission-denied' });
@@ -39,7 +42,10 @@ describe('authoritative query effects', () => {
   it('does not turn a failed mutation with permission denial into a harmless query', async () => {
     const f = setup({ status: 'failed', exitCode: 1, effects: 'possible', failureKind: 'permission-denied', stdoutTail: 'permission denied' }, 'ask', false);
     const outcome = await f.gate.execute({ ...operation, command: 'touch /tmp/file' });
-    expect(f.classified).toHaveBeenCalledWith(operation.id, false);
+    expect(f.classified).toHaveBeenCalledWith(operation.id, false, {
+      version: 1, mutation: 'possible', sensitiveRead: 'not-detected', externalTransfer: 'not-detected',
+      codeExecution: 'not-detected', evidence: 'known-mutation', uncertaintyCodes: []
+    });
     expect(outcome.result?.effects).toBe('possible');
   });
 

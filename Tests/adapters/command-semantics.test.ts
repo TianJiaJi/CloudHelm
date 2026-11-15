@@ -33,10 +33,19 @@ describe('Git global options preserve operation classification', () => {
     expect((await classify('git -C /srv/private status', 'ask', { protectedReadPaths: ['/srv/private'] })).verdict).toBe('deny');
   });
   it.each(['git --future-option status', 'git -C', 'git -c alias.wipe=reset wipe --hard',
-    'git -c core.sshCommand=custom push', 'git --config-env=core.pager=PAGER log'])(
+    'git --config-env=core.pager=PAGER log'])(
     'does not claim bounded ordinary effects for %s', async (command) => {
       expect(await classify(command, 'ask')).toMatchObject({ verdict: 'ask', ruleId: 'uncertain-command' });
     });
+});
+
+it('retains incomplete configuration evidence when routing detected Git transfer', async () => {
+  for (const mode of modes) {
+    const result = await classify('git -c core.sshCommand=custom push', mode);
+    expect(result).toMatchObject({ verdict: mode === 'ai-review' ? 'evaluate' : mode === 'ask' ? 'ask' : 'allow',
+      ruleId: 'external-transfer', impact: 'unknown' });
+    expect(result.reason).toContain('[argument-semantics]');
+  }
 });
 
 describe('tar operands have directional roles', () => {

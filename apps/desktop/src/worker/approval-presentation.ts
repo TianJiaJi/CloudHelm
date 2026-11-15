@@ -5,6 +5,8 @@ const reasons: Record<string, string> = {
   'high-impact-file': '目标文件涉及主机访问或安全配置',
   'high-impact-script': '脚本涉及主机访问、可用性或大范围变更',
   'project-code-entry': '包管理或构建工具可能执行项目代码及生命周期脚本',
+  'code-execution': '命令可能执行程序代码、钩子或安装脚本，不能仅按程序名称判断影响',
+  'external-transfer': '命令可能向当前主机之外传输数据，需要核对接收方及数据范围',
   'uncertain-command': '无法可靠判断这条命令的实际影响',
   'script-uninspectable': '执行前无法安全读取脚本内容',
   'script-uncertain': '脚本包含无法可靠判断的操作',

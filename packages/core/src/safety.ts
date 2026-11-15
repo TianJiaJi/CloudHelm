@@ -285,7 +285,8 @@ export function inspectScriptSafety(operation: Extract<ProposedOperation, { kind
   const base = decideSafety(inspected, { ...settings, mode: 'ask' }, analysis);
   if (base.verdict === 'deny' || base.verdict === 'error') return base;
   const high = base.ruleId === 'high-impact-command';
-  const bounded = !high && !analysis.hasExpansion && !analysis.hasPipeline && analysis.calls.length > 0
+  const impact = analyzeOperationImpact(inspected, analysis);
+  const bounded = !high && impact.codeExecution !== 'detected' && impact.externalTransfer !== 'detected' && !analysis.hasExpansion && !analysis.hasPipeline && analysis.calls.length > 0
     && !analysis.calls.some((call) => call.dynamic || !['echo', 'printf'].includes(path.posix.basename(call.name))
       && !ordinaryCommand({ ...analysis, calls: [call], hasCompound: false, hasRedirection: false, hasPipeline: false }));
   if (bounded) return decision('allow', 'inspected-script', 'The current script source contains only bounded recognized actions');
@@ -362,6 +363,18 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
         reason: settings.mode === 'permissive'
           ? 'Project code execution explicitly permitted by full-access mode; lifecycle/build effects remain unverified'
           : 'Package/build tools can execute project code or lifecycle hooks; program name alone does not bound their effects' };
+    }
+    // Detected effects outrank the legacy ordinary-program fast path. These
+    // signals require review in cautious/AI modes, not a new hard prohibition;
+    // permissive mode continues to allow opacity, never identified high impact.
+    if (impact.externalTransfer === 'detected' || impact.codeExecution === 'detected') {
+      const transfer = impact.externalTransfer === 'detected';
+      const summary = transfer ? 'Command can transfer data outside the current host; destination and data scope remain unverified'
+        : 'Command can execute code, hooks or package scripts; program name alone does not bound their effects';
+      const reason = `${summary}；${describeCommandReview(impact.uncertaintyCodes)}`;
+      return { verdict: settings.mode === 'ai-review' ? 'evaluate' : settings.mode === 'permissive' ? 'allow' : 'ask',
+        ruleId: transfer ? 'external-transfer' : 'code-execution', impact: 'unknown',
+        reason: settings.mode === 'permissive' ? `按所选宽松模式允许，影响未经确认；${reason}` : reason };
     }
     if (ordinaryCommand(analysis)) return decision('allow', 'ordinary-command', 'Bounded ordinary command');
   }

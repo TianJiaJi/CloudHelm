@@ -6,7 +6,7 @@ import { createAuditedRemoteReader } from './audited-remote-read.js';
 import { createBackgroundJobTool } from './background-job-tool.js';
 import { createBackgroundOperations, type BackgroundOperations } from './background-operations.js';
 import { createWorkspaceContextTools } from './workspace-context.js';
-import { applyOperationObservation } from './operation-observation.js';
+import { applyOperationDecision, applyOperationObservation } from './operation-observation.js';
 import { blockedOperationFeedback, operationToolResult } from './operation-feedback.js';
 import { decideTaskCompletion } from './task-completion.js';
 import { VerificationRoundTracker } from './verification-round.js';
@@ -28,9 +28,8 @@ import { TaskProgress } from './task-progress.js';
 import { observeProgressTools } from './task-progress-observer.js';
 import { RequestBudgetError, PrivilegeError, privilegeGuidance } from '@cloudhelm/core';
 import { operationIntentKey, safeDiagnostic, serialCall, type ConversationSession, type SessionStorage, type DiagnosticEvent, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
-import type { ApprovalView, OperationView, InterruptionSource, UserInterruption, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
+import type { LocalScope, OperationView, InterruptionSource, UserInterruption, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
-import type { LocalScope } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 import { recoveryContextMessage } from './recovery-context.js';
 import { mergeOperationViews } from './runtime-facts.js';
@@ -38,7 +37,7 @@ import { applyCommittedRiskAcceptance } from './risk-acceptance.js';
 import { deriveInputIntent, TaskIntent } from './task-intent.js';
 import { createRemoteTools } from './remote-tools.js';
 import { createTaskPrompt } from './task-prompt.js';
-import { approvalPresentation } from './approval-presentation.js';
+import { createTaskApprovals } from './task-approval.js';
 import { taskOperationPreflight } from './task-operation-preflight.js';
 import { reviewCoordination } from './review-coordination.js';
 import { reviewDeniedOperation } from './task-denial-review.js';
@@ -552,7 +551,11 @@ export class TaskRunner {
       },
       decided: async (id, decision) => {
         this.diagnostic({ event: 'review.result', operationId: id, status: decision.verdict, ruleId: decision.ruleId });
-        this.updateDecision(id, decision);
+        const view = this.operations.get(id);
+        if (view) {
+          applyOperationDecision(view, decision, this.consecutiveAiDenials);
+          this.signals.event({ type: 'operation', value: view });
+        }
         await commitOperationSnapshot(this.operations.get(id), this.signals.commitOperation);
         if (decision.ruleId === 'ai-review-deny') {
           const proposed = this.proposedOperations.get(id);
@@ -588,23 +591,8 @@ export class TaskRunner {
       } : { provider: this.profile.provider, modelId: this.profile.modelId, apiKey: this.profile.apiKey,
         baseUrl: this.profile.baseUrl, kind: 'current' }, createTaskReviewer(this.task.id, this.signals.budget, () => this.assertRemoteActive(), () => this.requestGeneration()),
       () => this.operationViews().slice(-5).map((item) => `${item.kind} ${item.status}: ${item.kind === 'command' ? redactOutput(item.preview).slice(0, 400) : item.preview.split('\n')[0]}`)),
-      approvals: { requestApproval: async (request) => {
-        this.setStatus('waiting-review');
-        const presentation = approvalPresentation(request);
-        const view: ApprovalView = {
-          id: request.id, taskId: request.operation.scope.taskId, operationId: request.operation.id,
-          hostId: request.operation.scope.hostId, fingerprint: request.fingerprint, title: presentation.title,
-          explanation: request.operation.kind === 'command' && request.operation.executionMode === 'background'
-            ? `后台执行：AI 回答结束不会终止进程；停止须另行操作。${presentation.explanation}` : presentation.explanation,
-          preview: this.preview(request.operation), account: request.operation.scope.runAs,
-          cwd: request.operation.scope.cwd, impact: request.impact,
-          targets: request.targets?.map((target) => redactOutput(target)),
-          recovery: presentation.recovery,
-          expiresAt: request.expiresAt
-        };
-        try { return await this.signals.requestApproval(view); }
-        finally { if (this.status === 'waiting-review') this.setStatus('running'); }
-      }, cancelApproval: (id) => this.signals.cancelApproval(id) },
+      approvals: createTaskApprovals(this.signals, (operation) => this.preview(operation),
+        () => this.setStatus('waiting-review'), () => { if (this.status === 'waiting-review') this.setStatus('running'); }),
       executor, audit, lease: {
         currentGeneration: (id) => this.terminal.currentGeneration(id),
         isAgentOwner: (id) => this.terminal.isAgentOwner(id)
@@ -639,16 +627,6 @@ export class TaskRunner {
     };
     this.replayProtected.add(operation.id);
     this.operations.set(operation.id, view);
-    this.signals.event({ type: 'operation', value: view });
-  }
-
-  private updateDecision(id: string, decision: SafetyDecision): void {
-    const view = this.operations.get(id);
-    if (!view) return;
-    view.status = decision.verdict === 'allow' ? 'running' : 'denied';
-    view.reason = decision.reason;
-    view.ruleId = decision.ruleId;
-    view.manualReviewAvailable = decision.ruleId === 'ai-review-deny' && this.consecutiveAiDenials + 1 < 3;
     this.signals.event({ type: 'operation', value: view });
   }
 

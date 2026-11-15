@@ -24,7 +24,7 @@ it.each([false, true])('keeps bounded ping failure separate from a possible muta
   let count = 0;
   const command = 'ping -c 10 -W 2 192.0.2.1';
   const fixture = await openAiFixture(async (request) => {
-    if (request.review) throw new Error('Exact human approval should be retained');
+    if (request.review) throw new Error('Proven bounded diagnostics should not request independent review');
     if (++count === 1) return { calls: [{ id: 'ping', name: 'run_remote', arguments: { hostId: 'host', command } }] };
     if (unknown) throw new Error('Unknown exit must not continue');
     const output = fixtureMessageText(request.messages.find((message) => message.tool_call_id === 'ping')!);
@@ -44,9 +44,11 @@ it.each([false, true])('keeps bounded ping failure separate from a possible muta
     { event: (event) => events.push(structuredClone(event)), requestApproval: approve, cancelApproval() {} });
   try {
     await runner.start(); expect(fixture.errors).toEqual([]); expect(channel.commands).toEqual([command]);
-    expect(approve).toHaveBeenCalledOnce(); expect(approve.mock.calls[0]).toEqual([expect.objectContaining({ preview: command })]);
+    expect(approve).not.toHaveBeenCalled();
     const final = events.filter((event) => event.type === 'task-status').at(-1);
     const ops = new Map<string, OperationView>(); for (const event of events) if (event.type === 'operation') ops.set(event.value.id, event.value);
+    expect([...ops.values()][0]).toMatchObject({ readOnly: true, ruleId: 'low-risk-command',
+      impactAnalysis: { mutation: 'none', evidence: 'query-proof' } });
     if (unknown) {
       expect(count).toBe(1); expect(final).toMatchObject({ status: 'paused' });
       expect([...ops.values()][0]?.effects).not.toBe('none');

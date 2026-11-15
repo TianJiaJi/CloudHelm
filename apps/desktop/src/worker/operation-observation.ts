@@ -1,5 +1,13 @@
-import { redactOutput, type OperationResult } from '@cloudhelm/core';
+import { redactOutput, type OperationResult, type SafetyDecision } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
+
+/** Review projection only; callers persist it before coordinating the round. */
+export function applyOperationDecision(operation: OperationView, decision: SafetyDecision, consecutiveAiDenials: number): void {
+  operation.status = decision.verdict === 'allow' ? 'running' : 'denied';
+  operation.reason = decision.reason;
+  operation.ruleId = decision.ruleId;
+  operation.manualReviewAvailable = decision.ruleId === 'ai-review-deny' && consecutiveAiDenials + 1 < 3;
+}
 
 /** One projection for both synchronous results and late transport completions.
  * Model/session lifecycle and summaries never supply these fields. */

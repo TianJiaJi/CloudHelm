@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { CommandAnalysis, ProposedOperation } from './model.js';
-import { analyzeQueryImpact, PROJECT_CODE_COMMANDS } from './command-query-impact.js';
+import { analyzeQueryImpact } from './command-query-impact.js';
+import { hasCodeExecution } from './command-code-execution.js';
 import { hasIncompleteCommandSemantics } from './command-semantics.js';
 import { hasSensitiveCommandRead } from './command-sensitive-read.js';
 import { isSensitiveReadPath } from './sensitive-read.js';
@@ -20,7 +21,6 @@ export interface OperationImpact {
   uncertaintyCodes: CommandReviewReasonCode[];
 }
 const MUTATORS = new Set(['mkdir', 'touch', 'cp', 'mv', 'install', 'tee', 'truncate', 'chmod', 'chown', 'ln', 'rm', 'rmdir']);
-const CODE = new Set(['bash', 'sh', 'zsh', 'fish', 'python', 'python3', 'node', 'perl', 'ruby', 'php', 'awk', 'sed', 'eval', 'source', '.', 'xargs']);
 
 export function analyzeOperationImpact(operation: ProposedOperation, analysis?: CommandAnalysis): OperationImpact {
   if (operation.kind !== 'command') return { version: 1, mutation: 'possible', evidence: 'structured-file',
@@ -37,8 +37,7 @@ export function analyzeOperationImpact(operation: ProposedOperation, analysis?: 
   return { version: 1, mutation: readOnly ? 'none' : 'possible',
     sensitiveRead: hasSensitiveCommandRead(analysis, operation.scope.cwd) ? 'detected' : fallback,
     externalTransfer: analysis.calls.some((call) => commandTransfer(call).sendsData) ? 'detected' : fallback,
-    codeExecution: !readOnly && analysis.calls.some((call) => CODE.has(path.posix.basename(call.name))
-      || PROJECT_CODE_COMMANDS.has(path.posix.basename(call.name))) ? 'detected' : fallback,
+    codeExecution: !readOnly && analysis.calls.some(hasCodeExecution) ? 'detected' : fallback,
     evidence: readOnly ? 'query-proof' : knownMutation ? 'known-mutation' : 'unproven',
     uncertaintyCodes: knownMutation ? [] : query.reviewReasons ?? (readOnly ? [] : ['unrecognized-operation']) };
 }
