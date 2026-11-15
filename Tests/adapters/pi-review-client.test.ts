@@ -23,6 +23,44 @@ const operation: ProposedOperation = { id: 'op', kind: 'command', command: 'dock
   policyRevision: 1, allowedWorkingRoots: ['/srv/app'], protectedPaths: [], goal: 'Deploy service'
 } };
 
+describe('review request cancellation', () => {
+  it.each(['jev', 'current'] as const)('does not reserve or dispatch pre-canceled %s review', async (kind) => {
+    const reserve = vi.fn(), controller = new AbortController(); controller.abort();
+    const evaluator = new AiRiskEvaluator(() => ({ provider: 'openai', modelId: 'test', apiKey: 'fixture', kind }), new PiReviewClient(reserve));
+    expect(await evaluator.evaluate(operation, undefined, undefined, controller.signal)).toMatchObject({ verdict: 'error' });
+    expect(reserve).not.toHaveBeenCalled(); expect(catalog.classify).not.toHaveBeenCalled(); expect(catalog.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it.each(['jev', 'current'] as const)('passes caller cancellation to %s and rejects a late allow', async (kind) => {
+    const controller = new AbortController();
+    let finish!: (value: unknown) => void;
+    const method = kind === 'jev' ? catalog.classify : catalog.completeSimple;
+    method.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const evaluator = new AiRiskEvaluator(() => ({ provider: 'openai', modelId: 'test', apiKey: 'fixture', kind }), budgetedClient());
+    const pending = evaluator.evaluate(operation, undefined, undefined, controller.signal);
+    await vi.waitFor(() => expect(method).toHaveBeenCalledOnce());
+    const signal = method.mock.calls[0]![2].signal as AbortSignal;
+    controller.abort(); expect(signal.aborted).toBe(true);
+    finish(kind === 'jev' ? { stopReason: 'stop', answers: { safe: { type: 'choice', choice: 'allow', confidence: 1 } } }
+      : { stopReason: 'stop', content: [{ type: 'text', text: '{"verdict":"allow"}' }] });
+    expect(await pending).toMatchObject({ verdict: 'error', reason: '审核请求已中止' });
+    expect(method).toHaveBeenCalledOnce();
+  });
+
+  it.each(['jev', 'current'] as const)('does not dispatch %s after cancellation during budget confirmation', async (kind) => {
+    const controller = new AbortController(); let confirm!: () => void;
+    const confirmation = new Promise<void>((resolve) => { confirm = resolve; });
+    const reserve = vi.fn(async (_operation: unknown, _attempt: unknown, signal: AbortSignal | undefined) => { await confirmation; signal?.throwIfAborted(); });
+    const evaluator = new AiRiskEvaluator(() => ({ provider: 'openai', modelId: 'test', apiKey: 'fixture', kind }), new PiReviewClient(reserve));
+    const pending = evaluator.evaluate(operation, undefined, undefined, controller.signal);
+    await vi.waitFor(() => expect(reserve).toHaveBeenCalledOnce());
+    controller.abort(); confirm();
+    expect(await pending).toMatchObject({ verdict: 'error' });
+    expect(catalog.classify).not.toHaveBeenCalled(); expect(catalog.completeSimple).not.toHaveBeenCalled();
+    expect(reserve).toHaveBeenCalledOnce();
+  });
+});
+
 describe('review request deadlines', () => {
   it.each(['jev', 'current'] as const)('rejects %s without a budget authority before contacting the provider', async (kind) => {
     const evaluator = new AiRiskEvaluator(() => ({ provider: 'openai', modelId: 'test', apiKey: 'test-only', kind }), new PiReviewClient());

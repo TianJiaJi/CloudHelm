@@ -14,8 +14,9 @@ import { verificationSource } from './verification-source.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { ConversationTerminalPool, ClarificationCoordinator, SafetyGate, type TerminalManager } from '@cloudhelm/application';
-import { AiRiskEvaluator, BashAnalyzer, createConversationSession } from '@cloudhelm/adapters';
-import { createTaskReviewer, resolveTaskReviewer } from './task-review-client.js';
+import { BashAnalyzer, createConversationSession } from '@cloudhelm/adapters';
+import { createTaskRiskEvaluator, needsTaskReviewer, resolveTaskReviewer } from './task-review-client.js';
+import { TaskReviewLifetime } from './task-review-lifetime.js';
 import { taskSessionEvents } from './task-session-events.js';
 import type { TaskSignals } from './task-signals.js';
 export type { TaskSignals } from './task-signals.js';
@@ -26,8 +27,7 @@ import { interruptionContext } from './task-input-context.js';
 import { taskContextSnapshot } from './task-context.js';
 import { TaskProgress } from './task-progress.js';
 import { observeProgressTools } from './task-progress-observer.js';
-import { RequestBudgetError, PrivilegeError, privilegeGuidance } from '@cloudhelm/core';
-import { operationIntentKey, safeDiagnostic, serialCall, type ConversationSession, type SessionStorage, type DiagnosticEvent, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
+import { RequestBudgetError, PrivilegeError, privilegeGuidance, operationIntentKey, safeDiagnostic, serialCall, type ConversationSession, type SessionStorage, type DiagnosticEvent, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
 import type { LocalScope, OperationView, InterruptionSource, UserInterruption, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
@@ -54,6 +54,7 @@ export class TaskRunner {
   private readonly intent: TaskIntent;
   private readonly localFiles: LocalFileAccess;
   private readonly analyzer = new BashAnalyzer();
+  private readonly reviews = new TaskReviewLifetime();
   private agent?: ConversationSession;
   private readonly budget: TaskRequestBudget;
   private requestCount = 0;
@@ -312,7 +313,7 @@ export class TaskRunner {
   }
 
   pause(): void {
-    this.controlVersion++;
+    this.controlVersion++; this.reviews.invalidate('canceled');
     void this.inputQueue.stop().catch(() => this.blockRemote('队列停止状态保存失败；请核验后重新发送。'));
     if (!['running', 'waiting-review', 'waiting-user', 'human-control'].includes(this.status)) { void this.agent?.abort(); return; }
     this.setStatus('paused', undefined, 'interrupted');
@@ -378,6 +379,7 @@ export class TaskRunner {
   get canDelete(): boolean { return !this.inputQueue.hasPending && !isActiveTaskStatus(this.status) && !this.agent?.isStreaming && !this.terminal.pendingOperations(this.task.id).length; }
 
   async close(): Promise<void> {
+    this.reviews.close();
     await this.agent?.abort();
     await this.agent?.waitForIdle();
     this.dispose();
@@ -385,6 +387,7 @@ export class TaskRunner {
 
   /** Releases the task's terminals after the conversation has been deleted. */
   dispose(): void {
+    this.reviews.close();
     this.inputQueue.dispose();
     this.background.close();
     this.agent?.dispose();
@@ -415,6 +418,7 @@ export class TaskRunner {
   updateHostSafety(hostId: string, mode: ReviewMode, protectedReadPaths: string[], protectedWritePaths: string[], revision: number): void {
     const host = this.hosts.find((candidate) => candidate.id === hostId);
     if (!host) return;
+    this.reviews.invalidate();
     this.signals.clearCredentials?.();
     host.defaultMode = mode;
     host.protectedReadPaths = [...protectedReadPaths];
@@ -425,6 +429,7 @@ export class TaskRunner {
 
   updateConversationReviewMode(hostId: string, mode: ReviewMode, revision: number): void {
     if (!this.task.hostIds.includes(hostId)) throw new Error('Host is outside this conversation');
+    this.reviews.invalidate();
     this.task.reviewModesByHost = { ...this.task.reviewModesByHost, [hostId]: mode };
     this.task.reviewRevision = revision;
   }
@@ -584,12 +589,9 @@ export class TaskRunner {
     return new SafetyGate({
       analyzer: this.analyzer,
       scripts: this.scripts,
-      evaluator: new AiRiskEvaluator(() => this.profile.reviewer ? {
-        provider: this.profile.reviewer.provider, modelId: this.profile.reviewer.modelId,
-        apiKey: this.profile.reviewer.apiKey, baseUrl: this.profile.reviewer.baseUrl,
-        kind: this.profile.reviewer.selection.kind
-      } : { provider: this.profile.provider, modelId: this.profile.modelId, apiKey: this.profile.apiKey,
-        baseUrl: this.profile.baseUrl, kind: 'current' }, createTaskReviewer(this.task.id, this.signals.budget, () => this.assertRemoteActive(), () => this.requestGeneration()),
+      reviewSignal: () => this.reviews.signal(),
+      evaluator: createTaskRiskEvaluator(this.task.id, this.signals.budget, () => this.assertRemoteActive(),
+        () => this.requestGeneration(), () => this.profile,
       () => this.operationViews().slice(-5).map((item) => `${item.kind} ${item.status}: ${item.kind === 'command' ? redactOutput(item.preview).slice(0, 400) : item.preview.split('\n')[0]}`)),
       approvals: createTaskApprovals(this.signals, (operation) => this.preview(operation),
         () => this.setStatus('waiting-review'), () => { if (this.status === 'waiting-review') this.setStatus('running'); }),
@@ -665,17 +667,13 @@ export class TaskRunner {
   setReviewKey(jevKey?: string): void { this.profile = { ...this.profile, jevKey }; this.agent?.setReviewKey(jevKey); }
 
   needsReviewProfile(reviewer: NonNullable<RuntimeProfile['reviewer']>): boolean {
-    reviewer = resolveTaskReviewer(this.profile, reviewer);
-    const current = this.profile.reviewer;
-    return !current || reviewer.revision > current.revision
-      || current.provider !== reviewer.provider || current.modelId !== reviewer.modelId
-      || current.apiKey !== reviewer.apiKey || current.baseUrl !== reviewer.baseUrl
-      || JSON.stringify(current.selection) !== JSON.stringify(reviewer.selection);
+    return needsTaskReviewer(this.profile, reviewer);
   }
 
   setReviewProfile(reviewer: NonNullable<RuntimeProfile['reviewer']>): void {
     reviewer = resolveTaskReviewer(this.profile, reviewer);
     if (!this.needsReviewProfile(reviewer)) return;
+    this.reviews.invalidate();
     this.profile = { ...this.profile, reviewer: { ...reviewer,
       revision: Math.max(reviewer.revision, (this.profile.reviewer?.revision ?? 0) + 1) } };
   }
@@ -696,6 +694,7 @@ export class TaskRunner {
 
   setModel(profile: RuntimeProfile): void {
     if (!this.agent) throw new Error('会话尚未就绪');
+    this.reviews.invalidate();
     void this.inputQueue.stop().catch(() => this.blockRemote('切换模型时队列取消未获确认。'));
     this.agent.select(profile);
     this.profile = { ...profile, reviewer: profile.reviewer ? {
@@ -786,6 +785,7 @@ export class TaskRunner {
 
   private setStatus(status: TaskStatus, summary?: string, resumeReason?: ResumeReason): void {
     this.status = status;
+    if (!this.isRunning()) this.reviews.invalidate('canceled');
     if (['paused', 'failed', 'human-control', 'recovering', 'answered'].includes(status))
       void this.inputQueue.stop().catch(() => this.blockRemote('待投递消息的终止状态保存失败。'));
     this.resumeReason = resumeReason;

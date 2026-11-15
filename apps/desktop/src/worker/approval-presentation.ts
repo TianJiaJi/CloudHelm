@@ -11,6 +11,7 @@ const reasons: Record<string, string> = {
   'script-uninspectable': '执行前无法安全读取脚本内容',
   'script-uncertain': '脚本包含无法可靠判断的操作',
   'ai-review-unavailable': '独立审核未完成，需要你判断',
+  'ai-review-timeout': '独立审核等待超时且请求已中止，需要你判断',
   'ai-review-uncertain': '独立审核无法确定风险，需要你判断',
   'ai-denial-manual-review': '你要求对这条被独立审核拒绝的操作进行一次人工复核'
 };

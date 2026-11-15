@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { executeReview } from './review-execution.js';
 import {
-  ApprovalInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, operationFingerprint, scriptFilePath, redactOutput,
+  ApprovalInterruptedError, ReviewInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, operationFingerprint, scriptFilePath, redactOutput,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
   type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
   type SafetyDecision, type SafetySettings, type ScriptInspector, type TerminalLease
@@ -23,6 +24,8 @@ export interface SafetyGateDependencies {
   lease: TerminalLease;
   /** Task activity may continue only for an exact already-started background operation. */
   isOperationActive?(operation: ProposedOperation): boolean;
+  /** Worker-owned review generation, revoked on stop/model/policy changes. */
+  reviewSignal?(): AbortSignal;
   settings(hostId: string): SafetySettings;
 }
 
@@ -42,6 +45,7 @@ export class SafetyGate {
     try {
       const operation = structuredClone(proposed);
       const fingerprint = operationFingerprint(operation);
+      const reviewSignal = this.deps.reviewSignal?.();
       await this.deps.audit.proposed(operation, fingerprint);
       if (!validProcessControl(operation)) {
         const decision = { verdict: 'error', ruleId: 'invalid-process-control', reason: 'Process control does not match its exact review binding; nothing sent' } as const;
@@ -105,26 +109,6 @@ export class SafetyGate {
           }
         }
       }
-      if (manualReview && safety.verdict !== 'deny' && safety.verdict !== 'error') safety = {
-        verdict: 'ask', ruleId: 'ai-denial-manual-review', reason: `User requested a one-time review of this exact denied operation；静态依据：${safeReviewBasis(safety.reason)}`
-      };
-      if (safety.verdict === 'evaluate') {
-        const basis = safeReviewBasis(`[${safety.ruleId}] ${safety.reason}`);
-        let assessment: Awaited<ReturnType<RiskEvaluator['evaluate']>>;
-        try { assessment = await this.deps.evaluator.evaluate(operation, analysis, {
-            classification: safety, inspectedScriptSha256: inspectedScript?.sha256, impactAnalysis: structuredClone(impact)
-          }); }
-        catch { assessment = { verdict: 'error', reason: '审核模型调用失败' }; }
-        const result = typeof assessment === 'string' ? { verdict: assessment } : assessment;
-        const detail = result.reason ? `：${safeReviewBasis(result.reason).slice(0, 400)}` : result.verdict === 'deny' ? '（审核模型未提供具体理由）' : '';
-        safety = result.verdict === 'allow'
-          ? { verdict: 'allow', ruleId: 'ai-review-allow', reason: `独立审核已放行${detail}；静态依据：${basis}` }
-          : result.verdict === 'deny'
-            ? { verdict: 'deny', ruleId: 'ai-review-deny', reason: `独立审核拒绝该操作${detail}；静态依据：${basis}` }
-            : { verdict: 'ask', ruleId: result.verdict === 'error' ? 'ai-review-unavailable' : 'ai-review-uncertain',
-              reason: `独立审核需要人工判断${detail}；静态依据：${basis}` };
-      }
-
       const stillCurrent = () => {
         try {
           const current = this.deps.settings(operation.scope.hostId);
@@ -134,12 +118,42 @@ export class SafetyGate {
             && current.revision === operation.scope.policyRevision
             && (operation.scope.conversationRevision === undefined || current.conversationRevision === operation.scope.conversationRevision)
             && (operation.scope.reviewerRevision === undefined || current.reviewerRevision === operation.scope.reviewerRevision)
-            && operationFingerprint(operation) === fingerprint && !signal?.aborted;
+            && operationFingerprint(operation) === fingerprint && !signal?.aborted && !reviewSignal?.aborted;
         } catch { return false; }
       };
+      if (manualReview && safety.verdict !== 'deny' && safety.verdict !== 'error') safety = {
+        verdict: 'ask', ruleId: 'ai-denial-manual-review', reason: `User requested a one-time review of this exact denied operation；静态依据：${safeReviewBasis(safety.reason)}`
+      };
+      if (safety.verdict === 'evaluate') {
+        const basis = safeReviewBasis(`[${safety.ruleId}] ${safety.reason}`);
+        const review = await executeReview(this.deps.evaluator, operation, analysis, {
+          classification: safety, inspectedScriptSha256: inspectedScript?.sha256, impactAnalysis: structuredClone(impact)
+        }, stillCurrent, signal, reviewSignal);
+        if (review.kind === 'canceled' || review.kind === 'stale' || !stillCurrent()) {
+          const canceled = review.kind === 'canceled' || signal?.aborted
+            || reviewSignal?.reason instanceof ReviewInterruptedError && reviewSignal.reason.outcome === 'canceled';
+          const interrupted: SafetyDecision = { verdict: 'error',
+            ruleId: canceled ? 'review-canceled' : 'authorization-expired',
+            reason: `${canceled ? '审核已取消' : '审核绑定已失效'}，操作未执行；静态依据：${basis}` };
+          await this.deps.audit.decided(operation.id, interrupted, fingerprint);
+          return { decision: interrupted };
+        }
+        const timedOut = review.kind === 'timeout';
+        const assessment = review.kind === 'assessment' ? review.assessment
+          : { verdict: 'error' as const, reason: '审核模型等待超时' };
+        const result = typeof assessment === 'string' ? { verdict: assessment } : assessment;
+        const detail = result.reason ? `：${safeReviewBasis(result.reason).slice(0, 400)}` : result.verdict === 'deny' ? '（审核模型未提供具体理由）' : '';
+        safety = result.verdict === 'allow'
+          ? { verdict: 'allow', ruleId: 'ai-review-allow', reason: `独立审核已放行${detail}；静态依据：${basis}` }
+          : result.verdict === 'deny'
+            ? { verdict: 'deny', ruleId: 'ai-review-deny', reason: `独立审核拒绝该操作${detail}；静态依据：${basis}` }
+            : { verdict: 'ask', ruleId: result.verdict === 'error' ? timedOut ? 'ai-review-timeout' : 'ai-review-unavailable' : 'ai-review-uncertain',
+              reason: `独立审核需要人工判断${detail}；静态依据：${basis}` };
+      }
+
       if (safety.verdict === 'ask') {
         const basis = safeReviewBasis(`[${safety.ruleId}] ${safety.reason}`);
-        if (signal?.aborted) {
+        if (signal?.aborted || reviewSignal?.aborted && reviewSignal.reason instanceof ReviewInterruptedError && reviewSignal.reason.outcome === 'canceled') {
           const canceled = { verdict: 'error', ruleId: 'review-canceled', reason: `Operation was canceled before review；审核依据：${basis}` } as const;
           await this.deps.audit.decided(operation.id, canceled, fingerprint);
           return { decision: canceled };
@@ -151,8 +165,13 @@ export class SafetyGate {
             ...(analysis?.calls.flatMap((call) => call.args.filter((arg) => /^(?:\/|\.\.?\/)/u.test(arg))) ?? [])
           ])].slice(0, 8) : [operation.kind === 'upload' ? operation.remotePath : operation.path],
           scriptSha256: inspectedScript?.sha256, expiresAt: Date.now() + 10 * 60_000 };
-        const approval = stillCurrent() ? await this.awaitApproval(request, signal) : 'stale';
-        safety = ['expired', 'canceled', 'unavailable'].includes(approval)
+        const approvalSignal = reviewSignal ? AbortSignal.any([reviewSignal, ...(signal ? [signal] : [])]) : signal;
+        const approval = stillCurrent() ? await this.awaitApproval(request, approvalSignal) : 'stale';
+        const staleReview = !signal?.aborted && reviewSignal?.aborted
+          && !(reviewSignal.reason instanceof ReviewInterruptedError && reviewSignal.reason.outcome === 'canceled');
+        safety = staleReview
+          ? { verdict: 'error', ruleId: 'authorization-expired', reason: 'Review generation changed; operation was not executed' }
+          : ['expired', 'canceled', 'unavailable'].includes(approval)
           ? { verdict: 'error', ruleId: approval === 'expired' ? 'approval-expired' : approval === 'canceled' ? 'review-canceled' : 'approval-unavailable',
             reason: 'Approval did not complete; operation was not executed' }
           : !stillCurrent() || approval === 'stale'

@@ -22,9 +22,9 @@ type ReviewJson = string | number | boolean | null | ReviewJson[] | { [key: stri
 
 export interface ReviewClient {
   jev(operation: ProposedOperation, analysis: CommandAnalysis | undefined, key: string,
-    history?: string[], context?: ReviewContext): Promise<RiskAssessment | RiskAssessment['verdict']>;
+    history?: string[], context?: ReviewContext, signal?: AbortSignal): Promise<RiskAssessment | RiskAssessment['verdict']>;
   ordinary(operation: ProposedOperation, analysis: CommandAnalysis | undefined, profile: ReviewProfile,
-    history?: string[], context?: ReviewContext): Promise<RiskAssessment | RiskAssessment['verdict']>;
+    history?: string[], context?: ReviewContext, signal?: AbortSignal): Promise<RiskAssessment | RiskAssessment['verdict']>;
 }
 
 /** Review never falls back to another billing account or reviewer on failure. */
@@ -33,18 +33,20 @@ export class AiRiskEvaluator implements RiskEvaluator {
     private readonly client: ReviewClient = new PiReviewClient(),
     private readonly history: () => string[] = () => []) {}
 
-  async evaluate(operation: ProposedOperation, analysis: CommandAnalysis | undefined, context?: ReviewContext): Promise<RiskAssessment> {
+  async evaluate(operation: ProposedOperation, analysis: CommandAnalysis | undefined, context?: ReviewContext, signal?: AbortSignal): Promise<RiskAssessment> {
     const profile = this.profile();
     if (!profile?.apiKey) return { verdict: 'error', reason: '审核模型未配置凭据' };
     try {
+      signal?.throwIfAborted();
       const history = this.history().slice(-5);
       const result = profile.kind === 'jev'
-        ? await this.client.jev(operation, analysis, profile.apiKey, history, context)
-        : await this.client.ordinary(operation, analysis, profile, history, context);
+        ? await this.client.jev(operation, analysis, profile.apiKey, history, context, signal)
+        : await this.client.ordinary(operation, analysis, profile, history, context, signal);
+      signal?.throwIfAborted();
       return typeof result === 'string' ? { verdict: result, reviewer: profile.modelId }
         : { ...result, reviewer: result.reviewer ?? profile.modelId };
     } catch {
-      return { verdict: 'error', reason: '审核服务暂不可用', reviewer: profile.modelId };
+      return { verdict: 'error', reason: signal?.aborted ? '审核请求已中止' : '审核服务暂不可用', reviewer: profile.modelId };
     }
   }
 }
@@ -87,13 +89,15 @@ export class PiReviewClient implements ReviewClient {
     = () => { throw new Error('Reviewer budget authorization unavailable'); }) {}
 
   async jev(operation: ProposedOperation, analysis: CommandAnalysis | undefined, key: string,
-    history: string[] = [], context?: ReviewContext): Promise<RiskAssessment> {
+    history: string[] = [], context?: ReviewContext, requestSignal?: AbortSignal): Promise<RiskAssessment> {
     const model = this.models.getModelOfType('classifier', 'vercel-ai-gateway', 'typesafe-ai/jev');
     if (!model) return { verdict: 'error', reason: 'Jev 审核模型不可用' };
-    const signal = AbortSignal.timeout(30_000);
+    const deadline = AbortSignal.timeout(30_000);
+    const signal = requestSignal ? AbortSignal.any([requestSignal, deadline]) : deadline;
     const meter = meterModelRequest({ api: model.api, purpose: 'review', signal,
       reserve: (attempt, activeSignal) => this.reserve(operation, attempt, activeSignal) });
     await meter.beforeStream();
+    signal.throwIfAborted();
     const result = await this.models.classify(model, {
       state: reviewState(operation, analysis, history, context),
       questions: { safe: {
@@ -102,6 +106,7 @@ export class PiReviewClient implements ReviewClient {
         criteria: { allow: 'Bounded and justified by the goal', review: 'Uncertain or needs human confirmation', deny: 'Clearly dangerous or unrelated' }
       } }
     }, { apiKey: key, env: {}, maxRetries: 0, signal, ...(meter.fetch ? { fetch: meter.fetch } : {}) });
+    signal.throwIfAborted();
     if (result.stopReason !== 'stop') return { verdict: 'error', reason: 'Jev 审核未正常完成' };
     const answer = result.answers.safe;
     if (answer?.type !== 'choice' || !Number.isFinite(answer.confidence) || answer.confidence < 0.8 || answer.confidence > 1) {
@@ -111,14 +116,16 @@ export class PiReviewClient implements ReviewClient {
   }
 
   async ordinary(operation: ProposedOperation, analysis: CommandAnalysis | undefined, profile: ReviewProfile,
-    history: string[] = [], context?: ReviewContext): Promise<RiskAssessment> {
+    history: string[] = [], context?: ReviewContext, requestSignal?: AbortSignal): Promise<RiskAssessment> {
     const models = createModelCatalog(profile);
     const model = models.getModel(profile.provider, profile.modelId) as Model<any> | undefined;
     if (!model || !profile.apiKey) return { verdict: 'error', reason: '指定审核模型或凭据不可用' };
-    const signal = AbortSignal.timeout(30_000);
+    const deadline = AbortSignal.timeout(30_000);
+    const signal = requestSignal ? AbortSignal.any([requestSignal, deadline]) : deadline;
     const meter = meterModelRequest({ api: model.api, purpose: 'review', signal,
       reserve: (attempt, activeSignal) => this.reserve(operation, attempt, activeSignal) });
     await meter.beforeStream();
+    signal.throwIfAborted();
     const result = await models.completeSimple(model, {
       systemPrompt: [
         'You are an independent security reviewer for proposed SSH operations. You have no tools and cannot authorize hard prohibitions.',
@@ -134,6 +141,7 @@ export class PiReviewClient implements ReviewClient {
       ].join(' '),
       messages: [{ role: 'user', content: JSON.stringify(reviewState(operation, analysis, history, context)), timestamp: Date.now() }]
     }, { apiKey: profile.apiKey, env: {}, maxRetries: 0, maxTokens: 180, signal, ...(meter.fetch ? { fetch: meter.fetch } : {}) });
+    signal.throwIfAborted();
     if (result.stopReason !== 'stop') return { verdict: 'error', reason: '审核模型未正常完成' };
     const answer = result.content.filter((part) => part.type === 'text').map((part) => part.text).join('').trim();
     return parseAssessment(answer);
