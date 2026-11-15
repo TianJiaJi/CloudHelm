@@ -5,7 +5,7 @@ const testKey = process.env.CLOUDHELM_TEST_SSH_KEY;
 const run = testKey ? it : it.skip;
 
 describe('SSH transport against an opt-in local SSH server', () => {
-  run('verifies the host key, opens a real PTY and preserves SFTP recovery copies', async () => {
+  run('verifies the host key, opens a PTY, refuses metadata-unknown replacement and retains a deletion content copy', async () => {
     const transport = new SshTransport();
     const host: SshHost = {
       id: 'smoke-host', label: 'Local test server', address: '127.0.0.1',
@@ -40,13 +40,12 @@ describe('SSH transport against an opt-in local SSH server', () => {
       const remoteRoot = process.env.CLOUDHELM_TEST_REMOTE_ROOT ?? (process.platform === 'darwin' ? '/private/tmp' : '/tmp');
       const remote = `${remoteRoot}/cloudhelm-transport-${Date.now()}`;
       expect(await transport.writeFile(host.id, remote, Buffer.from('first'))).toBeUndefined();
-      const backup = await transport.writeFile(host.id, remote, Buffer.from('second'));
-      expect(backup).toContain('.cloudhelm-backup-');
-      expect((await transport.execFixed(host.id, `cat '${remote}'`)).output).toContain('second');
-      expect((await transport.execFixed(host.id, `cat '${backup}'`)).output).toContain('first');
+      await expect(transport.writeFile(host.id, remote, Buffer.from('second')))
+        .rejects.toMatchObject({ effects: 'none', code: 'metadata-unverifiable' });
+      expect((await transport.execFixed(host.id, `cat '${remote}'`)).output).toContain('first');
       const deletedBackup = await transport.deleteFile(host.id, remote);
-      expect((await transport.execFixed(host.id, `cat '${deletedBackup}'`)).output).toContain('second');
-      await transport.execFixed(host.id, `rm -f -- '${backup}' '${deletedBackup}'`);
+      expect((await transport.execFixed(host.id, `cat '${deletedBackup}'`)).output).toContain('first');
+      await transport.execFixed(host.id, `rm -f -- '${deletedBackup}'`);
     } finally { transport.close(); }
   }, 20_000);
 });

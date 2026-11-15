@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RemoteFileMissingError, type SshTransport } from '@cloudhelm/adapters';
+import { RemoteFileMetadataError, RemoteFileMissingError, type SshTransport } from '@cloudhelm/adapters';
 import { TerminalManager } from '@cloudhelm/application';
 import { operationFingerprint, operationOutcome, type ProposedOperation } from '@cloudhelm/core';
 import { FileOperationExecutor } from '../../../apps/desktop/src/worker/file-operation-executor.js';
@@ -107,7 +107,7 @@ describe('conditional write and read-back verification', () => {
     expect(f.writeFile).not.toHaveBeenCalled();
   });
 
-  it('writes with the expected hash and verifies the result by reading it back', async () => {
+  it('forwards a reviewed hash and verifies a transport-confirmed write by read-back', async () => {
     const f = fixture();
     const intended = Buffer.from('next\n');
     const hash = createHash('sha256').update(intended).digest('hex');
@@ -121,8 +121,32 @@ describe('conditional write and read-back verification', () => {
     expect(f.writeFile).toHaveBeenCalledOnce();
     expect(result.stdoutTail).toContain('Verified read-back hash');
     expect(f.writeFile.mock.calls[0]?.[5]).toEqual({ expectedSha256: hash, createOnly: false });
-    // A recovery copy restores this file only; it is never described as a rollback.
-    expect(result.stdoutTail).toContain('restores this file only');
+    // This transport double accepts replacement; production SFTP now refuses it.
+    // A returned backup is only bytes, never proof of metadata or service rollback.
+    expect(result.stdoutTail).toContain('file bytes only');
+    expect(result.stdoutTail).toContain('ACL/xattr and service state are not restored');
+  });
+
+  it('reports an SFTP metadata refusal as not started, with no remote outcome to verify', async () => {
+    const f = fixture(), hash = 'a'.repeat(64);
+    const operation = { ...writeOp({ expectedSha256: hash }), scope: f.scope } as ProposedOperation;
+    f.ssh.readFileForEdit = vi.fn(async () => ({ content: 'current', bytes: 7, truncated: false,
+      sha256: hash, mode: 0o600, uid: 1, gid: 1 }));
+    f.writeFile.mockRejectedValue(new RemoteFileMetadataError());
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
+    expect(operationOutcome(result)).toMatchObject({ execution: 'not-started', effects: 'none', nextAction: 'revise-operation' });
+    expect(result.stdoutTail).toContain('ACL/xattr'); expect(result.stdoutTail).toContain('not delete-and-recreate');
+    expect(f.ssh.readFileForEdit).toHaveBeenCalledOnce();
+  });
+
+  it('describes a deletion backup as bytes only, not metadata-preserving recovery', async () => {
+    const f = fixture(); f.deleteFile.mockResolvedValue('/srv/app/file.backup');
+    const operation: ProposedOperation = { id: 'delete', kind: 'delete-path', path: '/srv/app/file', scope: f.scope };
+    const result = await f.executor.execute(operation, operationFingerprint(operation));
+    expect(result.status).toBe('succeeded');
+    expect(result.stdoutTail).toContain('Content-only recovery copy');
+    expect(result.stdoutTail).toContain('owner/group/mode, ACL/xattr and service state are not restored');
   });
 
   it('reports an unverified write instead of claiming success when the read-back differs', async () => {

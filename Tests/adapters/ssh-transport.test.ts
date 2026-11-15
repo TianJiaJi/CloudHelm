@@ -38,10 +38,38 @@ function sftpFixture(existing: boolean, afterWrite: () => void, regular = true) 
       else callback({ code: 2 });
     },
     readFile: (_path: string, callback: (error: null, value: Buffer) => void) => callback(null, Buffer.from('old')),
-    writeFile: write, ext_openssh_rename: rename, unlink, setstat: vi.fn((_p: string, _attrs: unknown, cb: (e: null) => void) => cb(null)), end: vi.fn()
+    writeFile: write, ext_openssh_rename: rename,
+    rename: vi.fn((_from: string, _to: string, cb: (error: null) => void) => cb(null)), unlink, setstat: vi.fn((_p: string, _attrs: unknown, cb: (e: null) => void) => cb(null)), end: vi.fn()
   };
   return { write, rename, unlink, open, read, setstat: state.sftp.setstat as ReturnType<typeof vi.fn> };
 }
+
+describe('SFTP metadata policy', () => {
+  it.each([false, true])('refuses existing-file replacement before any read/write, even with preserveSpecialMode=%s', async (preserveSpecialMode) => {
+    const calls = sftpFixture(true, () => {});
+    const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+    try {
+      await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'), () => {}, undefined,
+        { expectedSha256: createHash('sha256').update('old').digest('hex'), preserveSpecialMode }))
+        .rejects.toMatchObject({ effects: 'none', permissionDenied: false, code: 'metadata-unverifiable' });
+      expect(calls.open).not.toHaveBeenCalled(); expect(calls.read).not.toHaveBeenCalled();
+      expect(calls.write).not.toHaveBeenCalled(); expect(calls.setstat).not.toHaveBeenCalled();
+      expect(calls.rename).not.toHaveBeenCalled(); expect(calls.unlink).not.toHaveBeenCalled();
+    } finally { ssh.close(); }
+  });
+
+  it('uses only non-overwriting rename for an absent target without a createOnly hint', async () => {
+    const calls = sftpFixture(false, () => {});
+    const rename = vi.fn((_from: string, _to: string, callback: (error: null) => void) => callback(null));
+    state.sftp.rename = rename;
+    const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
+    try {
+      await ssh.writeFile('host', '/srv/app/file', Buffer.from('new'));
+      expect(rename).toHaveBeenCalledOnce(); expect(calls.rename).not.toHaveBeenCalled();
+      expect(calls.write).toHaveBeenCalledWith(expect.any(String), Buffer.from('new'), { mode: 0o600, flag: 'wx' }, expect.any(Function));
+    } finally { ssh.close(); }
+  });
+});
 
 describe('SFTP commit authorization', () => {
   it('rejects non-regular targets before any backup read or mutation', async () => {
@@ -100,8 +128,7 @@ describe('SFTP commit authorization', () => {
 });
 
 describe('SFTP version conditions', () => {
-  const oldHash = createHash('sha256').update('old').digest('hex');
-  it('rejects an outdated version before backup or staging writes', async () => {
+  it('does not treat a supplied hash as proof that metadata can be discarded', async () => {
     const calls = sftpFixture(true, () => {});
     const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
     await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('next'), () => {}, undefined,
@@ -109,17 +136,21 @@ describe('SFTP version conditions', () => {
     expect(calls.write).not.toHaveBeenCalled();
     expect(calls.rename).not.toHaveBeenCalled();
   });
-  it('rechecks the version after staging and refuses a changed target', async () => {
-    let changed = false;
-    const calls = sftpFixture(true, () => { changed = true; });
-    state.sftp.read = (_handle: Buffer, buffer: Buffer, offset: number, length: number, position: number,
-      cb: (error: null, count: number) => void) => cb(null,
-        Buffer.from(changed ? 'new' : 'old').copy(buffer, offset, position, position + length));
+  it('refuses a target that appears while a new file is staged', async () => {
+    let appeared = false;
+    const calls = sftpFixture(false, () => { appeared = true; });
+    const lstat = state.sftp.lstat as (path: string, callback: (error: unknown, value?: unknown) => void) => void;
+    state.sftp.lstat = (target: string, callback: (error: unknown, value?: unknown) => void) => {
+      if (target === '/srv/app/file' && appeared) callback(null, { isFile: () => true });
+      else lstat(target, callback);
+    };
     const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
-    await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('next'), () => {}, undefined,
-      { expectedSha256: oldHash })).rejects.toMatchObject({ effects: 'possible' });
-    expect(calls.write).toHaveBeenCalledTimes(2);
-    expect(calls.rename).not.toHaveBeenCalled();
+    try {
+      await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('next'))).rejects.toMatchObject({ effects: 'possible' });
+      expect(calls.write).toHaveBeenCalledOnce(); expect(state.sftp.rename).not.toHaveBeenCalled();
+      expect(calls.rename).not.toHaveBeenCalled(); expect(calls.unlink).toHaveBeenCalledOnce();
+      expect(calls.unlink.mock.calls[0]![0]).toContain('.cloudhelm-new-');
+    } finally { ssh.close(); }
   });
   it('uses non-overwriting rename for create-only and never falls back to POSIX overwrite', async () => {
     const calls = sftpFixture(false, () => {});
@@ -195,34 +226,18 @@ it('retains possible effects when staging already began before failure', async (
   await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({ effects: 'possible', permissionDenied: true });
 });
 
-it('preserves owner/group and the reviewed mode, dropping setuid/setgid unless explicitly kept', async () => {
+it.each([0o600, 0o4764])('does not infer absent ACL/xattr from ordinary mode/owner/group (%s)', async (mode) => {
   const calls = sftpFixture(true, () => {});
-  const originalMode = 0o4764;
-  calls.setstat.mockClear();
-  state.sftp.lstat = (path: string, callback: (error: null, stat: unknown) => void) => {
-    if (path === '/srv/app/file') {
-      callback(null, { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, size: 3,
-        mode: originalMode, uid: 2003, gid: 2004 });
-    } else {
-      callback(null, { isDirectory: () => true, isSymbolicLink: () => false });
-    }
-  };
+  state.sftp.lstat = (target: string, callback: (error: null, stat: unknown) => void) => callback(null,
+    target === '/srv/app/file' ? { isFile: () => true, isSymbolicLink: () => false, size: 3, mode, uid: 2003, gid: 2004 }
+      : { isDirectory: () => true, isSymbolicLink: () => false });
   const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
-  // Default policy: a content change must not inherit the previous binary's privileges.
-  const replaced = await ssh.writeFile('host', '/srv/app/file', Buffer.from('new'));
-  expect(calls.setstat).toHaveBeenCalledOnce();
-  const [setstatPath, setstatAttrs] = calls.setstat.mock.calls[0]!;
-  expect(setstatPath).toContain('.cloudhelm-new-');
-  expect(setstatAttrs).toEqual({ uid: 2003, gid: 2004, mode: originalMode & ~0o6000 });
-  expect(replaced?.modeDropped).toBe('04000'); // only the setuid bit was present
-  expect(calls.rename).toHaveBeenCalledOnce();
-  expect(calls.setstat.mock.invocationCallOrder[0]!).toBeLessThan(calls.rename.mock.invocationCallOrder[0]!);
-  // Explicit opt-in keeps them, and the caller can then say so.
-  calls.setstat.mockClear();
-  const kept = await ssh.writeFile('host', '/srv/app/file', Buffer.from('next'), () => {}, undefined,
-    { preserveSpecialMode: true });
-  expect(calls.setstat.mock.calls[0]![1]).toEqual({ uid: 2003, gid: 2004, mode: originalMode });
-  expect(kept?.modeDropped).toBeUndefined();
+  try {
+    await expect(ssh.writeFile('host', '/srv/app/file', Buffer.from('new'))).rejects.toMatchObject({
+      effects: 'none', code: 'metadata-unverifiable', message: expect.stringContaining('ACL/xattr') });
+    expect(calls.write).not.toHaveBeenCalled(); expect(calls.setstat).not.toHaveBeenCalled();
+    expect(calls.open).not.toHaveBeenCalled(); expect(calls.rename).not.toHaveBeenCalled();
+  } finally { ssh.close(); }
 });
 
 it('caches only successful Python preflight per SSH connection generation', async () => {

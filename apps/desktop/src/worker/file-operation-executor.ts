@@ -39,14 +39,15 @@ export class FileOperationExecutor implements OperationExecutor {
           return notDispatched('Selected local file changed after review; nothing was sent to the host. Propose the upload again with the current file.');
         }
       }
-      // Compare-and-swap before any remote mutation. An existing file may only be
+      // Version preflight before any remote mutation, not an atomic CAS. An existing file may only be
       // replaced with the exact content the review was based on; a truncated read
       // has no hash, so it can never authorize a whole-file overwrite.
       const intended = operation.kind === 'write-file' ? Buffer.from(operation.content) : content!;
       if (operation.kind !== 'delete-path' && intended.length > 1_048_576)
         return notDispatched('Structured writes are limited to 1 MiB; nothing was written.');
       // Always confirm the current state first: an existing file may only be replaced
-      // with the exact reviewed content, and createOnly must actually be enforced.
+      // with the exact reviewed content and a supporting metadata-preserving backend.
+      // Current SFTP refuses existing targets even with a hash; createOnly is enforced.
       if (operation.kind === 'write-file') {
         if (operation.createOnly && operation.expectedSha256) return notDispatched('Choose createOnly or expectedSha256, not both.');
         let current: Awaited<ReturnType<SshTransport['readFileForEdit']>> | undefined;
@@ -96,7 +97,7 @@ export class FileOperationExecutor implements OperationExecutor {
         ...(verified && !handover ? { exitCode: 0 } : {}),
         ...(!verified ? { effects: 'possible' as const, failureKind: 'unknown' as const } : {}),
         stdoutTail: `${operation.kind === 'delete-path' ? 'Deleted' : 'Wrote'} ${remotePath}.`
-          + (backup ? ` Recovery copy: ${backup} (restores this file only, not the service state).` : ' New file; no previous version.')
+          + (backup ? ` Content-only recovery copy: ${backup} (file bytes only; owner/group/mode, ACL/xattr and service state are not restored).` : ' New file; no previous version.')
           + (written && 'modeDropped' in written && written.modeDropped
             ? ` Special mode bits ${written.modeDropped} were not preserved; re-apply them only if the service still needs them.` : '')
           + verification,
