@@ -63,10 +63,10 @@ export function prepareFileEdit(snapshot: FileEditSource, expectedSha256: string
     return refuse('remote-edit-source-changed', 'Complete source version unavailable or changed; read it again. Nothing written.');
   if (snapshot.redacted || !safeText(source))
     return refuse('remote-edit-unavailable', 'A redacted or sensitive observation cannot prepare a whole-file replacement. Nothing written.');
-  if (!oldText || Buffer.byteLength(oldText) > FILE_EDIT_MAX_BYTES || Buffer.byteLength(newText) > FILE_EDIT_MAX_BYTES || !validText(oldText) || !validText(newText))
+  if (!oldText && source !== '' || Buffer.byteLength(oldText) > FILE_EDIT_MAX_BYTES || Buffer.byteLength(newText) > FILE_EDIT_MAX_BYTES || !validText(oldText) || !validText(newText))
     return refuse('remote-edit-invalid', 'Literal edit inputs must be bounded UTF-8 without NUL bytes. Nothing written.');
   const start = source.indexOf(oldText);
-  if (start < 0 || source.indexOf(oldText, start + 1) !== -1)
+  if (start < 0 || !!oldText && source.indexOf(oldText, start + 1) !== -1)
     return refuse('remote-edit-ambiguous', 'oldText must match exactly one location, including overlapping matches. Nothing written.');
   const content = source.slice(0, start) + newText + source.slice(start + oldText.length);
   if (content === source || Buffer.byteLength(content) > FILE_EDIT_MAX_BYTES)

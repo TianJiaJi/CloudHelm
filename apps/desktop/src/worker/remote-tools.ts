@@ -1,3 +1,5 @@
+import { FileEditService } from './file-edit-service.js';
+import { controlledFileTools } from './controlled-file-tools.js';
 import { createServiceTool } from './service-tool.js';
 import { createRemoteFileEditTool } from './remote-file-edit-tool.js';
 import { createRemoteFilePrepareTool } from './remote-file-prepare-tool.js';
@@ -19,6 +21,7 @@ function outOfScope() {
 }
 export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate) {
     const privilege = new OperationPrivilege(deps);
+    const files = deps.controlledFiles && deps.taskId ? new FileEditService(deps, gate) : undefined;
     const parameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()),
       privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])),
       background: Type.Optional(Type.Boolean()),
@@ -50,13 +53,16 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       }
     };
     const readParameters = Type.Object({ hostId: Type.String(), path: Type.String(), cwd: Type.Optional(Type.String()),
-      maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1048576 })) }, { additionalProperties: false });
+      maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1048576 })),
+      privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])) },  { additionalProperties: false });
     const readTool: BusinessTool<Static<typeof readParameters>> = {
-      access: 'query', deferred: true, available: () => !!deps.readRemoteFile,
+      access: 'query', deferred: true, available: () => !!files || !!deps.readRemoteFile,
       name: 'read_remote_file', label: 'Read a bounded remote file for editing',
-      description: 'Read one regular remote file over SFTP, at most 1 MiB (default 128 KiB). Returns redacted content plus sha256 only for a complete unmodified text observation; truncated, oversized or redacted content has no preview hash. Use prepare_remote_edit for a read-only diff; a hash never authorizes replacement. Symlinks/directories are refused. Reading never elevates privileges.',
+      description: 'Read bounded regular UTF-8 text, default 128 KiB, max 1 MiB. Current identity is default; explicit privilege=root uses the controlled driver, SafetyGate and private on-demand sudo authentication. Without that driver root is refused, not silently ignored. Complete safe source has a sha256 for prepare_remote_edit; truncated/redacted source grants no edit hash. No symlink/directory reads, implicit identity switching or secret values in chat. A hash alone never authorizes a commit.',
       parameters: readParameters, replay: 'never',
       execute: async (_id, params, signal) => {
+        if (files && (params.privilege === 'root' || !deps.readRemoteFile)) return files.read(_id, params, signal);
+        if (params.privilege === 'root') return blockedOperationFeedback(_id, 'file-transactions-unavailable', 'Controlled root reader is unavailable; no automatic fallback.', undefined, true);
         // Authorization denials must reach the audited reader too, not vanish here.
         if (!deps.readRemoteFile) return { content: [{ type: 'text' as const, text: 'Remote file reading is unavailable' }], details: undefined, isError: true };
         try {
@@ -165,5 +171,5 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       }
     }
   };
-  return [createServiceTool(deps, gate), rootTool, tool, readTool, createRemoteFilePrepareTool(deps), createRemoteFileEditTool(deps, gate), writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+  return [createServiceTool(deps, gate), rootTool, tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files), createRemoteFileEditTool(deps, gate), writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
 }

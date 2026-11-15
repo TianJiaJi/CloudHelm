@@ -39,7 +39,7 @@ export class SafetyGate {
   constructor(private readonly deps: SafetyGateDependencies) {}
 
   async execute(proposed: ProposedOperation, signal?: AbortSignal, manualReview = false,
-    observer?: Pick<ExecutionOptions, 'onProcessStarted'>): Promise<GateOutcome> {
+    observer?: Pick<ExecutionOptions, 'onProcessStarted' | 'onFileInspection'>): Promise<GateOutcome> {
     if (this.inFlight.has(proposed.id)) throw new Error('Operation is already in progress');
     this.inFlight.add(proposed.id);
     try {
@@ -208,7 +208,7 @@ export class SafetyGate {
         return { decision: safety };
       }
       let result: OperationResult;
-      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), isAuthorized: stillCurrent, onProcessStarted: observer?.onProcessStarted }); }
+      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), isAuthorized: stillCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       }

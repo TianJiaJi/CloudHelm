@@ -10,6 +10,7 @@ export * from './command-semantics.js';
 export * from './ports.js';
 export * from './fingerprint.js';
 export * from './file-edit.js';
+export * from './file-transaction.js';
 export * from './safety.js';
 export * from './approval-lifecycle.js';
 export * from './review-lifecycle.js';

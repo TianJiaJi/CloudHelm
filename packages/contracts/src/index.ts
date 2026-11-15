@@ -174,6 +174,7 @@ export * from './read-audit.js';
 export * from './operation-impact.js';
 
 export interface OperationView {
+  fileRecovery?: import('./file-transaction.js').FileRecoveryView;
   /** Prompt guidance version in effect when the model proposed this operation; audit replay metadata only, never authorization. */
   promptVersion?: string;
   /** Optional versioned facts. Missing legacy facts remain unknown, never permissions. */
@@ -212,7 +213,7 @@ export interface OperationView {
   id: string;
   taskId: string;
   hostId: string;
-  kind: 'command' | 'write-file' | 'upload' | 'delete-path' | 'read-file';
+  kind: 'command' | 'write-file' | 'upload' | 'delete-path' | 'read-file' | 'inspect-file';
   preview: string;
   status: 'proposed' | 'approved' | 'running' | 'succeeded' | 'failed' | 'denied' | 'unknown';
   reason?: string;

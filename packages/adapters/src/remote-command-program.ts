@@ -246,7 +246,12 @@ try:
             elif kind == 'input':
                 data = base64.b64decode(message['data'])
                 if data == b'\x03': interrupt_child()
-                else: os.write(master, data)
+                else:
+                    view = memoryview(data)
+                    while view:
+                        count = os.write(master, view)
+                        if count <= 0: raise OSError('PTY input failed')
+                        view = view[count:]
             elif kind == 'resize':
                 rows, cols = int(message['rows']), int(message['cols'])
                 if 1 <= rows <= 1000 and 1 <= cols <= 1000:

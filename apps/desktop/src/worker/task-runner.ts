@@ -11,7 +11,8 @@ import { blockedOperationFeedback, operationToolResult } from './operation-feedb
 import { decideTaskCompletion } from './task-completion.js';
 import { VerificationRoundTracker } from './verification-round.js';
 import { verificationSource } from './verification-source.js';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { operationPreview } from './operation-preview.js';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { ConversationTerminalPool, ClarificationCoordinator, SafetyGate, type TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, createConversationSession } from '@cloudhelm/adapters';
@@ -79,8 +80,8 @@ export class TaskRunner {
   private resumeReason?: ResumeReason;
   /** One remote operation at a time: a queued call re-checks activity after the previous finishes. */
   private readonly runOperation = serialCall((gate: SafetyGate, operation: ProposedOperation,
-    signal: AbortSignal | undefined, hostLabel: string, manualReview: boolean = false) =>
-    this.background.run(operation, signal, () => this.performOperation(gate, operation, signal, hostLabel, manualReview)));
+    signal: AbortSignal | undefined, hostLabel: string, manualReview: boolean = false, onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']) =>
+    this.background.run(operation, signal, () => this.performOperation(gate, operation, signal, hostLabel, manualReview, onFileInspection)));
 
   constructor(
     readonly task: TaskView,
@@ -147,6 +148,7 @@ export class TaskRunner {
   private async initializeSession(thinkingLevel?: import('@cloudhelm/core').ThinkingLevel): Promise<void> {
     const gate = this.createGate();
     const remoteTools = createRemoteTools({ hosts: this.hosts, localFiles: this.localFiles,
+      taskId: this.task.id, controlledFiles: this.executor.supportsFileTransactions, fileBinding: () => this.requestGeneration(), fileOperations: () => this.operationViews(),
       background: (signal, run) => this.background.withLifetime(signal, run),
       ensureTerminal: async (id, sessionId) => {
         this.assertRemoteActive();
@@ -164,7 +166,7 @@ export class TaskRunner {
       }, scope: (host, id, cwd) => this.scope(host, id, cwd),
       readRemoteFile: createAuditedRemoteReader(this.task.id, this.hosts, this.readRemoteFile,
         this.signals, () => this.assertRemoteActive(), this.operations),
-      runOperation: (gate, operation, signal, label) => this.runOperation(gate, operation, signal, label) }, gate);
+      runOperation: (gate, operation, signal, label, onFileInspection) => this.runOperation(gate, operation, signal, label, false, onFileInspection) }, gate);
     const currentSystemPrompt = createTaskPrompt(this.task, this.hosts, () => this.operationViews(), () => this.verificationOperations(), this.privileged, () => this.journal.hasReport(), () => this.intent.snapshot(), () => this.journal.submissionClosed(), this.environment);
     this.agent = await createConversationSession({
       thinkingLevel, profile: this.profile, storage: this.storage,
@@ -455,7 +457,7 @@ export class TaskRunner {
   }
 
   private async performOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined,
-    hostLabel: string, manualReview = false) {
+    hostLabel: string, manualReview = false, onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']) {
     this.assertRemoteActive();
     const prepared = await taskOperationPreflight(operation, { privileged: this.privileged, analyzer: this.analyzer,
       operations: () => this.operationViews(), replayProtected: this.replayProtected,
@@ -464,7 +466,7 @@ export class TaskRunner {
     operation = prepared.operation;
     const outcome = await gate.execute(operation, signal, manualReview,
       operation.kind === 'command' && operation.executionMode === 'background'
-        ? { onProcessStarted: (event) => this.background.started(operation.id, event) } : undefined);
+        ? { onProcessStarted: (event) => this.background.started(operation.id, event) } : { onFileInspection });
     this.coordinateDecision(outcome.decision);
     if (!outcome.result) return blockedOperationFeedback(operation.id, outcome.decision.ruleId,
       `Executed: false; effects: none. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}`, undefined, outcome.readOnly);
@@ -500,13 +502,7 @@ export class TaskRunner {
     this.signals.diagnostic?.(safeDiagnostic({ ...event, taskId: this.task.id }));
   }
 
-  private preview(operation: ProposedOperation): string {
-    if (operation.kind === 'command') return operation.processControl
-      ? `请求停止后台任务 ${operation.processControl.jobId}（SIGINT，目标进程 ${operation.processControl.pid}；不是退出确认）` : redactOutput(operation.command);
-    if (operation.kind === 'write-file') return `写入文件 ${operation.path} · ${Buffer.byteLength(operation.content)} 字节 · SHA-256 ${createHash('sha256').update(operation.content).digest('hex')}`;
-    if (operation.kind === 'delete-path') return `删除文件 ${operation.path}`;
-    return `上传 ${operation.localPath} → ${operation.remotePath}`;
-  }
+  private preview(operation: ProposedOperation): string { return operationPreview(operation); }
 
   private assertRemoteActive(): void {
     if (this.remoteBlocked || !['running', 'waiting-review'].includes(this.status)) {

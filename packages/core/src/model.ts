@@ -31,6 +31,7 @@ export interface OperationScope {
 }
 
 export type ProposedOperation =
+  | { id: string; kind: 'inspect-file'; path: string; privilege?: 'root'; recoveryDirectoryId?: string; scope: OperationScope }
   | { id: string; kind: 'command'; command: string; serviceUnit?: string;
       /** Background lifetime is explicitly bound into review, never inferred from shell syntax. */
       executionMode?: 'background';
@@ -41,6 +42,7 @@ export type ProposedOperation =
       privilege?: 'root';
       outputExpectation?: { expectedOutput: string; expectedExitCode?: number }; scope: OperationScope }
   | { id: string; kind: 'write-file'; path: string; content: string; scope: OperationScope;
+      privilege?: 'root'; fileEdit?: import('./file-transaction.js').FileEditCommit;
       /** Compare-and-swap: the exact content hash the review was based on. Required when
        * replacing an existing file, so a truncated excerpt cannot become a full overwrite. */
       expectedSha256?: string;
@@ -136,6 +138,7 @@ export interface SafetySettings {
 }
 
 export interface OperationResult {
+  fileRecovery?: import('./file-transaction.js').FileRecovery;
   /** Delivery outcome only; never asserts that the target process exited. */
   processControl?: { kind: 'interrupt'; jobId: string; targetOperationId: string; delivery: 'sent' | 'already-exited' | 'unknown' };
   operationId: string;

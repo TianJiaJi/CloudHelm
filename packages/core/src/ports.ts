@@ -31,6 +31,8 @@ export interface ApprovalRequester {
 }
 
 export interface ExecutionOptions {
+  /** Private backend callback: never serialize file contents into ordinary logs. */
+  onFileInspection?: (snapshot: import('./file-transaction.js').FileInspection) => void;
   /** Minted only by SafetyGate's deterministic read-only classification. */
   readOnly?: boolean;
   /** Backend facts only, not a grant to bypass isAuthorized or host locks. */
@@ -42,6 +44,8 @@ export interface ExecutionOptions {
 }
 
 export interface OperationExecutor {
+  /** Driver availability only, not a grant or proof that a host supports metadata preservation. */
+  readonly supportsFileTransactions?: boolean;
   /** Control may target a live operation, never bypass a different/unknown host write lock. */
   canControlOperation?(hostId: string, operationId: string): boolean;
   reconcile?(hostId: string, operationId: string): boolean;

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { CommandAnalysis, ModelRequestAttempt, OperationImpact, ProposedOperation, RiskAssessment, RiskEvaluator, SafetyDecision } from '@cloudhelm/core';
 import { meterModelRequest } from './model-request-meter.js';
 
@@ -54,7 +55,14 @@ export class AiRiskEvaluator implements RiskEvaluator {
 function reviewState(operation: ProposedOperation, analysis: CommandAnalysis | undefined, history: string[] = [], context?: ReviewContext): Record<string, ReviewJson> {
   let summary: ReviewJson;
   if (operation.kind === 'command') summary = redactOutput(operation.command);
-  else if (operation.kind === 'write-file') summary = { kind: 'write-file', path: operation.path, bytes: Buffer.byteLength(operation.content) };
+  else if (operation.kind === 'inspect-file') summary = { kind: 'inspect-file', path: operation.path, privilege: operation.privilege ?? 'current' };
+  else if (operation.kind === 'write-file') summary = { kind: 'write-file', path: operation.path, bytes: Buffer.byteLength(operation.content),
+    ...(operation.fileEdit ? { privilege: operation.privilege ?? 'current', sourceSha256: operation.expectedSha256 ?? null,
+      targetSha256: createHash('sha256').update(operation.content).digest('hex'), transaction: { version: 1,
+        action: operation.fileEdit.action, transactionId: operation.fileEdit.transactionId, expectedMetadataDigest: operation.fileEdit.expectedMetadataDigest,
+        expectedAttributeDigest: operation.fileEdit.expectedAttributeDigest, expectedExecutionUid: operation.fileEdit.expectedExecutionUid,
+        backupTransactionId: operation.fileEdit.backupTransactionId ?? null, expectedBackupMetadataDigest: operation.fileEdit.expectedBackupMetadataDigest ?? null,
+        completeDiff: redactOutput(operation.fileEdit.diff) } } : {}) };
   else if (operation.kind === 'upload') summary = { kind: 'upload', path: operation.remotePath, bytes: operation.size, sha256: operation.contentSha256 };
   else summary = { kind: 'delete-path', path: operation.path };
   return {

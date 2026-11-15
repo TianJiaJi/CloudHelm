@@ -16,6 +16,7 @@ export class PermissionAwareExecutor implements OperationExecutor {
   private readonly denied = new Map<string, { operationId: string; expires: number }>();
   constructor(private readonly downstream: OperationExecutor, private readonly analyzer: CommandAnalyzer,
     private readonly now: () => number = Date.now) {}
+  get supportsFileTransactions(): boolean { return this.downstream.supportsFileTransactions === true; }
   async execute(operation: ProposedOperation, fingerprint: string, signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
     if (operation.kind !== 'command') return this.downstream.execute(operation, fingerprint, signal, options);
     const analysis = await this.analyzer.analyze(operation.command);

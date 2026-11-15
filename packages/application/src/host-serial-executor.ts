@@ -35,6 +35,7 @@ export class HostSerialExecutor implements OperationExecutor {
   private readonly unsettled = new Map<string, Map<string, Promise<'exited' | 'unknown'> | null>>();
 
   constructor(private readonly downstream: OperationExecutor) {}
+  get supportsFileTransactions(): boolean { return this.downstream.supportsFileTransactions === true; }
 
   bindRiskDomains(bindings: readonly HostRiskBinding[]): void {
     this.domains.bind(bindings, (hostId) => this.tails.has(hostId)

@@ -4,6 +4,7 @@ import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
 import { blockedOperationFeedback } from './operation-feedback.js';
 import { remoteFileEditParameters } from './remote-file-edit-schema.js';
+import type { FileEditService } from './file-edit-service.js';
 import { resolveRemoteReadTarget } from './remote-read-guard.js';
 
 const policy = (host?: RuntimeHost) => host && JSON.stringify([host.id, host.username, host.policyRevision,
@@ -11,13 +12,15 @@ const policy = (host?: RuntimeHost) => host && JSON.stringify([host.id, host.use
 
 /** Read-only transaction preparation. No editId/approval token is minted until a
  * supported commit backend exists; hashes and preview text never grant authority. */
-export function createRemoteFilePrepareTool(deps: RemoteToolDependencies): BusinessTool<Static<typeof remoteFileEditParameters>> {
+export function createRemoteFilePrepareTool(deps: RemoteToolDependencies, service?: FileEditService): BusinessTool<Static<typeof remoteFileEditParameters>> {
   return { name: 'prepare_remote_edit', label: 'Preview one version-bound remote text edit', replay: 'never',
-    access: 'query', deferred: true, available: () => !!deps.readRemoteFile,
+    access: 'query', deferred: true, available: () => !!service || !!deps.readRemoteFile,
     parameters: remoteFileEditParameters,
-    description: 'Read-only edit preview in the current SSH login; never elevates or writes. Requires a complete unredacted sha256 from read_remote_file and one unique literal oldText/newText replacement. Returns every changed line in a unified diff with 3 context lines, exact source/target hashes, and unverified metadata status. Inputs/results max 1 MiB, full diff max 64 KiB, work max 32768 lines; refuses rather than clips. No commit/editId capability or remote lock is created. Existing-file commit is unavailable until a metadata-preserving backend exists; do not use shell staging, delete/recreate or identity changes to bypass this limit.',
+    description: 'Prepare one exact edit, current identity or explicit privilege=root, using a complete safe sha256 and unique literal oldText/newText. Empty oldText is allowed only for an empty original. Full diff max 64 KiB, source/result max 1 MiB. Supported Linux metadata/atomic-exchange inspection yields a task/host/identity/version/metadata-bound expiring editId for apply_remote_edit; otherwise only a read-only preview, no commit token. No remote file is staged by preparation. Secrets, incomplete/stale data and changed authority are refused. Commit/restore needs new exact review and private authentication; never switch identity after a stop or replay unknown effects. Legacy SFTP is never an overwrite fallback.',
     execute: async (id, params, signal) => {
+      if (service) return service.prepare(id, params, signal);
       const blocked = (code: string, message: string) => blockedOperationFeedback(id, code, message, undefined, true);
+      if (params.privilege === 'root') return blocked('file-transactions-unavailable', 'Root inspection requires a controlled driver; no fallback or identity switch.');
       if (!deps.readRemoteFile) return blocked('remote-edit-unavailable', 'Audited remote reading unavailable; no preview or write.');
       const host = deps.hosts.find((item) => item.id === params.hostId), binding = policy(host);
       signal?.throwIfAborted();

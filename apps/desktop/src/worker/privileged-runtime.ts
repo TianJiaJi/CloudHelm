@@ -67,6 +67,7 @@ export class PrivilegedRuntime implements OperationExecutor {
   private readonly entries = new Map<string, Entry>();
   private readonly requesting = new Map<string, AbortController>();
   constructor(private readonly deps: Dependencies) {}
+  get supportsFileTransactions(): boolean { return this.deps.ordinary.supportsFileTransactions === true; }
 
   forTask(taskId: string): PrivilegedTaskAccess {
     return {
@@ -166,7 +167,7 @@ export class PrivilegedRuntime implements OperationExecutor {
       this.grants.get(entry.id, operation.scope.taskId, operation.scope.hostId);
     };
     check();
-    if (entry!.mode !== 'ssh' && operation.kind !== 'command') throw new Error('sudo/su do not elevate SFTP; no file operation sent. Use ordinary-account nonsecret staging and separately reviewed commands.');
+    if (entry!.mode !== 'ssh' && operation.kind !== 'command') throw new Error('sudo/su do not elevate SFTP; no file operation sent. Use the operation-level controlled file transaction; never stage/install to bypass metadata checks.');
     if (entry!.mode !== 'sudo' || operation.kind !== 'command') return operation;
     const command = sudoContextCommand(await new BashAnalyzer().analyze(operation.command));
     check();
@@ -187,7 +188,7 @@ export class PrivilegedRuntime implements OperationExecutor {
     const active = entry!;
     if (active.mode === 'sudo') {
       if (operation.kind !== 'command') return { operationId: operation.id, status: 'failed', failureKind: 'unsupported', effects: 'none',
-        stdoutTail: 'sudo contexts do not elevate SFTP. Stage nonsecret files as the login user, then submit a separately reviewed sudo install command.' };
+        stdoutTail: 'sudo contexts do not elevate SFTP. Use the operation-level controlled file transaction, not staging or identity fallback.' };
       try {
         if (sudoContextCommand(await new BashAnalyzer().analyze(operation.command)) !== operation.command) throw new Error('Unprepared');
       } catch { return { operationId: operation.id, status: 'failed', failureKind: 'unsupported', effects: 'none',
@@ -252,7 +253,7 @@ export class PrivilegedRuntime implements OperationExecutor {
       entry.executor = { execute: (operation, fingerprint, signal, options) => operation.kind === 'command'
         ? this.deps.terminal.execute(operation, fingerprint, signal, options)
         : Promise.resolve({ operationId: operation.id, status: 'failed', failureKind: 'unsupported', effects: 'none',
-          stdoutTail: 'su does not elevate SFTP. Stage nonsecret content with the ordinary account, then use a separately reviewed root install command.' }) };
+          stdoutTail: 'su does not elevate SFTP. Use the operation-level controlled file transaction, not staging or identity fallback.' }) };
     }
     current();
     entry.raw.attach(new SshCommandTerminal(transport, entry.host.id));

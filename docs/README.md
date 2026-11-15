@@ -23,6 +23,7 @@
 | --- | --- |
 | [验收 V3](VERIFICATION_V3.md) | 自动事实、输出预期、内容读回、显式轮次、历史与离线重整 |
 | [Agent 证据边界](agent-evidence-boundaries.md) | 观察／推断／未知、纠错和业务结论的判读规则 |
+| [受控文件编辑](CONTROLLED_FILE_EDITS.md) | 版本/diff、私密 root 认证、元数据保持、提交与显式恢复及限制 |
 | [受控提权](privilege-contexts.md) | prepared sudo、私密认证、root SSH／su 备选及验证限制 |
 | [Agent 提示词规范](AGENT_PROMPT.md) | 指令归属、后端授权、工具反馈和历史测量 |
 | [Pi 需求澄清](PI_ASK_USER.md) | 内置插件、问答生命周期、凭据底线与许可 |

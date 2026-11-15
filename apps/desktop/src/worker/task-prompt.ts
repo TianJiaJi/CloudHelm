@@ -30,6 +30,8 @@ export function createTaskPrompt(task: TaskView, hosts: RuntimeHost[], operation
       inspect_host_environment: remote, query_operation_history: remote && owned.length > 0,
       run_remote: remote, stop_remote_job: remote && owned.some((op) => op.executionJob?.status === 'running'), write_remote_file: remote, delete_remote_file: remote, manage_service: remote,
       prepare_remote_edit: remote ? 'conditional' : false, edit_remote_file: false,
+      apply_remote_edit: remote ? 'conditional' : false, restore_remote_edit: remote ? 'conditional' : false,
+      discard_remote_edit: remote ? 'conditional' : false, check_remote_edit: remote ? 'conditional' : false,
       upload_selected_file: remote && local.length > 0, request_root_session: remote && !!privileged ? 'conditional' : false,
       list_selected_directory: local.some((scope) => scope.kind === 'directory'), read_selected_text_file: local.length > 0,
       update_plan: 'conditional', ask_user: 'conditional', read_operation_log: owned.length > 0,

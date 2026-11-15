@@ -21,6 +21,7 @@ export function applyOperationObservation(operation: OperationView, result: Oper
   }
   const pendingStop = !!result.remoteCompletion && ['unknown', 'handed-over'].includes(result.status)
     && operation.executionJob?.status === 'stop-requested';
+  if (result.fileRecovery) operation.fileRecovery = structuredClone(result.fileRecovery);
   operation.status = pendingStop ? 'running' : result.status === 'succeeded' ? 'succeeded' : result.status === 'failed' ? 'failed' : 'unknown';
   if (result.processControl) operation.processControl = { ...operation.processControl, ...result.processControl };
   operation.exitCode = result.exitCode;

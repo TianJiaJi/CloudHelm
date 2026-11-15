@@ -1,5 +1,6 @@
 import { analyzeQueryImpact, isQuery, isBlockDevice, BAD_DISK_TOOLS, PROJECT_CODE_COMMANDS } from './command-query-impact.js';
 export { isReadOnlyQuery, isEffectFreeQuery } from './command-query-impact.js';
+import { validFileEditCommit, FILE_TRANSACTION_UUID } from './file-transaction.js';
 import { analyzeOperationImpact } from './operation-impact.js';
 import { commandTransfer } from './command-transfer.js';
 import path from 'node:path';
@@ -325,6 +326,10 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     && settings.reviewerRevision !== operation.scope.reviewerRevision) {
     return decision('error', 'reviewer-stale', 'Reviewer configuration changed after this operation was proposed');
   }
+  if (operation.kind === 'write-file' && operation.fileEdit && (!validFileEditCommit(operation.fileEdit) || !operation.expectedSha256 || operation.createOnly))
+    return decision('error', 'invalid-file-transaction', 'Invalid backend file transaction; nothing dispatched');
+  if (operation.kind === 'inspect-file' && operation.recoveryDirectoryId && !FILE_TRANSACTION_UUID.test(operation.recoveryDirectoryId))
+    return decision('error', 'invalid-file-transaction', 'Invalid recovery directory binding');
   if (operation.kind === 'upload') {
     const localRoot = path.resolve(operation.localRoot);
     const localTarget = path.resolve(operation.localPath);
@@ -334,13 +339,20 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
       return decision('deny', 'local-scope', 'Upload source is outside the user-selected local directory');
     }
   }
-  if (operation.kind !== 'command') {
+  if (operation.kind !== 'command' && operation.kind !== 'inspect-file') {
     const target = operation.kind === 'upload' ? operation.remotePath : operation.path;
     if (!literalPath(target, operation.scope.cwd)) return decision('error', 'path-opaque', 'Structured file target is not a literal path');
     const absolute = literalPath(target, operation.scope.cwd)!;
     if (isBlockDevice(absolute) || CRITICAL_FILES.has(absolute)) return decision('deny', 'system-resource', 'Changing disks or essential system files is forbidden');
   }
   if (impact.sensitiveRead === 'detected' && (operation.kind !== 'command' || analysis && !analysis.hasError)) return decision('deny', 'credential-resource', 'AI cannot read or transfer credential file contents');
+  if (operation.kind === 'inspect-file') {
+    const target = literalPath(operation.path, operation.scope.cwd);
+    if (!target) return decision('error', 'path-opaque', 'An absolute literal file path is required');
+    if (readPaths(operation).some((root) => isInside(target, root))) return decision('deny', 'protected-resource', 'Protected file read');
+    return operation.privilege === 'root' ? highImpactDecision('privileged-file-read', 'Read a bounded file using operation-bound root authentication', settings)
+      : decision('allow', 'structured-file-read', 'Bounded private inspection; no file mutation');
+  }
   if (protectedTarget(operation)) return decision('deny', 'protected-resource', 'Target belongs to a user-protected resource');
   if (operation.kind === 'delete-path') {
     const target = literalPath(operation.path, operation.scope.cwd);
@@ -378,6 +390,8 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     }
     if (ordinaryCommand(analysis)) return decision('allow', 'ordinary-command', 'Bounded ordinary command');
   }
+  if (operation.kind === 'write-file' && operation.fileEdit && operation.privilege === 'root')
+    return highImpactDecision('privileged-file-edit', 'Commit exact reviewed content and metadata using operation-bound root authentication', settings);
   if (highImpactFile(operation)) {
     return highImpactDecision('high-impact-file', 'Changes host access or security configuration', settings);
   }

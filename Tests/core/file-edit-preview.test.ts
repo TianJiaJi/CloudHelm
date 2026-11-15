@@ -13,6 +13,11 @@ it('binds the exact source and target bytes to a complete single-hunk preview', 
     diff: '--- before\n+++ after\n@@ -1,2 +1,2 @@\n-port=80\n+port=90\n name=app\n' });
 });
 
+it('supports an exact empty-file replacement but never an empty search in nonempty content', () => {
+  expect(prepare('', '', 'port=80\n')).toMatchObject({ kind: 'prepared', content: 'port=80\n', diff: '--- before\n+++ after\n@@ -0,0 +1,1 @@\n+port=80\n' });
+  expect(prepare('x', '', 'y').kind).toBe('refused'); expect(prepare('', '', '').kind).toBe('refused');
+});
+
 it('shows every changed line and only three surrounding context lines', () => {
   const source = 'a\nb\nc\nd\ne\nf\ng\nh\ni\n';
   expect(prepare(source, 'e\nf\n', 'E\nF\nG\n')).toMatchObject({ kind: 'prepared',

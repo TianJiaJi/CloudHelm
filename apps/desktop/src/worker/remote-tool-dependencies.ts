@@ -8,6 +8,10 @@ export interface RemoteFileSnapshot { content: string; bytes: number; truncated:
 
 export interface RemoteToolDependencies {
   hosts: RuntimeHost[];
+  controlledFiles?: boolean;
+  taskId?: string;
+  fileBinding?(): string;
+  fileOperations?(): readonly import('@cloudhelm/contracts').OperationView[];
   localFiles: LocalFileAccess;
   /** Bounded SFTP read for the edit loop; sha256 exists only for a complete read. */
   readRemoteFile?(hostId: string, path: string, cwd: string | undefined, signal?: AbortSignal, maxBytes?: number): Promise<RemoteFileSnapshot>;
@@ -15,5 +19,5 @@ export interface RemoteToolDependencies {
   ensureTerminal(hostId: string, sessionId?: string): Promise<string>;
   requestRoot?(host: RuntimeHost, command: string, cwd: string, reason: string, signal?: AbortSignal, method?: import('@cloudhelm/core').PrivilegeMethod): Promise<unknown>;
   scope(host: RuntimeHost, terminalId: string, cwd?: string): OperationScope;
-  runOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string): Promise<{ result?: import('@cloudhelm/core').OperationResult; readOnly?: boolean; content: Array<{ type: 'text'; text: string }>; details: unknown; structuredContent?: unknown; isError: boolean }>;
+  runOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string, onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']): Promise<{ result?: import('@cloudhelm/core').OperationResult; readOnly?: boolean; content: Array<{ type: 'text'; text: string }>; details: unknown; structuredContent?: unknown; isError: boolean }>;
 }
