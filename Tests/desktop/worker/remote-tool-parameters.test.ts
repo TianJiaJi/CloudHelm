@@ -26,6 +26,15 @@ it('publishes closed parameter objects and refuses unsupported fields before exe
   expect(f.dispatch).not.toHaveBeenCalled();
 });
 
+it('keeps preview input closed and refuses identity or approval claims', () => {
+  const f = fixture(), tool = f.tools.find((item) => item.name === 'prepare_remote_edit')!;
+  const args = { hostId: 'host', path: '/srv/config', expectedSha256: 'a'.repeat(64), oldText: '80', newText: '90' };
+  expect(() => assertStrictToolArguments(tool.parameters, args)).not.toThrow();
+  for (const field of ['privilege', 'sessionId', 'sudo', 'editId', 'approved'])
+    expect(() => assertStrictToolArguments(tool.parameters, { ...args, [field]: 'root' })).toThrow();
+  expect(f.dispatch).not.toHaveBeenCalled();
+});
+
 it('rejects identity conflicts and contradictory file conditions before allocating a terminal', async () => {
   const f = fixture();
   const command = f.tools.find((item) => item.name === 'run_remote')!;

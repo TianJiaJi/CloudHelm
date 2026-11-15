@@ -1,5 +1,6 @@
 import { createServiceTool } from './service-tool.js';
 import { createRemoteFileEditTool } from './remote-file-edit-tool.js';
+import { createRemoteFilePrepareTool } from './remote-file-prepare-tool.js';
 import { OperationPrivilege } from './operation-privilege.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { OutputRedactor, PrivilegeError, privilegeGuidance, redactOutput, type BusinessTool } from '@cloudhelm/core';
@@ -53,7 +54,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     const readTool: BusinessTool<Static<typeof readParameters>> = {
       access: 'query', deferred: true, available: () => !!deps.readRemoteFile,
       name: 'read_remote_file', label: 'Read a bounded remote file for editing',
-      description: 'Read one regular remote file over SFTP, at most 1 MiB (default 128 KiB). Returns redacted content plus sha256 only for a complete, unmodified text observation; truncated, oversized or redacted content has no edit hash. Symlinks/directories are refused. Reading never elevates privileges.',
+      description: 'Read one regular remote file over SFTP, at most 1 MiB (default 128 KiB). Returns redacted content plus sha256 only for a complete unmodified text observation; truncated, oversized or redacted content has no preview hash. Use prepare_remote_edit for a read-only diff; a hash never authorizes replacement. Symlinks/directories are refused. Reading never elevates privileges.',
       parameters: readParameters, replay: 'never',
       execute: async (_id, params, signal) => {
         // Authorization denials must reach the audited reader too, not vanish here.
@@ -82,16 +83,17 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       createOnly: Type.Optional(Type.Boolean()) }, { additionalProperties: false });
     const writeTool: BusinessTool<Static<typeof writeParameters>> = {
       name: 'write_remote_file', label: 'Write an audited remote file',
-      description: 'Write a UTF-8 file over SFTP on an authorized host. Maximum 1 MiB. Parent directory must exist. Replacing an existing regular file requires expectedSha256 from read_remote_file (rechecked before staging/commit; not atomic against external writers): a truncated read has no hash, so re-read the whole file first; a mismatch aborts without writing. New files use non-overwriting creation; createOnly=true explicitly forbids replacement. The result reports a read-back hash; the recovery copy restores only this file, not the service state. sessionId may select a root SSH session; sudo/su contexts do not elevate SFTP.',
+      description: 'Create new UTF-8 files only over SFTP, at most 1 MiB; parent directory must exist. Current backend refuses existing-file replacement because complete ACL/xattr preservation is unverified, even with a hash or root SSH. expectedSha256 is legacy and rejected before terminal allocation. New files use private exclusive staging and non-overwriting rename; createOnly=true is explicit. Verify the read-back hash. Use prepare_remote_edit only for a read-only diff, not a commit. Never bypass with identity changes, shell staging or delete/recreate. Sudo/su contexts do not elevate SFTP.',
       parameters: writeParameters, replay: 'never',
       execute: async (_id, params, signal) => {
         const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
         if (!host) return outOfScope();
         if (params.createOnly && params.expectedSha256) return blockedOperationFeedback(_id,
           'invalid-file-condition', 'Choose createOnly or expectedSha256, not both. No terminal was allocated.');
+        if (params.expectedSha256 !== undefined) return blockedOperationFeedback(_id,
+          'remote-edit-unsupported', 'Existing-file replacement is unavailable until ACL/xattr preservation can be verified. A hash is not an exception. Use prepare_remote_edit only to preview; do not bypass with another tool or identity. No terminal or review was started.');
         const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
         return deps.runOperation(gate, { id: randomUUID(), kind: 'write-file', path: params.path, content: params.content,
-          ...(params.expectedSha256 ? { expectedSha256: params.expectedSha256 } : {}),
           ...(params.createOnly ? { createOnly: true } : {}),
           scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
       }
@@ -99,7 +101,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     const deleteParameters = Type.Object({ hostId: Type.String(), path: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) }, { additionalProperties: false });
     const deleteTool: BusinessTool<Static<typeof deleteParameters>> = {
       name: 'delete_remote_file', label: 'Delete an audited remote file',
-      description: 'Delete only a regular file on an authorized host, retaining a private recovery copy. Directories and symlinks are refused.',
+      description: 'Delete only a regular file on an authorized host, retaining a private content-only recovery copy. It does not restore owner/group/mode, ACL/xattr or service state. Directories and symlinks are refused. Never use deletion to bypass an existing-file replacement refusal.',
       parameters: deleteParameters, replay: 'never',
       execute: async (_id, params, signal) => {
         const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
@@ -128,7 +130,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     const uploadParameters = Type.Object({ hostId: Type.String(), localPath: Type.String(), remotePath: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) }, { additionalProperties: false });
     const uploadTool: BusinessTool<Static<typeof uploadParameters>> = {
       name: 'upload_selected_file', label: 'Upload an audited selected file',
-      description: 'Upload a regular file of at most 1 MiB from a user-selected local source to an authorized SSH host. Changes require safety review.',
+      description: 'Upload a regular file of at most 1 MiB from a user-selected local source to a new file on an authorized SSH host. Existing targets are refused because ACL/xattr preservation is unverified. Changes require safety review; do not delete/recreate to evade the refusal.',
       parameters: uploadParameters, replay: 'never',
       execute: async (_id, params, signal) => {
         const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
@@ -163,5 +165,5 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       }
     }
   };
-  return [createServiceTool(deps, gate), rootTool, tool, readTool, createRemoteFileEditTool(deps, gate), writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+  return [createServiceTool(deps, gate), rootTool, tool, readTool, createRemoteFilePrepareTool(deps), createRemoteFileEditTool(deps, gate), writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
 }

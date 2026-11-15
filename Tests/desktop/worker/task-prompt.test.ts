@@ -16,14 +16,15 @@ function facts(prompt: string) {
   return JSON.parse(encoded) as { tools: Record<string, boolean | string>; reportCount: number; unresolvedCount: number;
     confirmedRootSessions: unknown[] | null; omittedRootSessions: number };
 }
-it('refreshes backend applicability without changing the stable fifteen declarations or using display text', () => {
+it('refreshes bounded backend applicability and file preview/commit hints without using display text', () => {
   const current = structuredClone(task);
   let operations = [operation('query', { readOnly: true, effects: 'none' }), operation('foreign', { taskId: 'other' })];
   let reported = false;
   const prompt = createTaskPrompt(current, [host], () => operations, () => operations, undefined, () => reported);
   const first = facts(prompt());
-  expect(Object.keys(first.tools)).toHaveLength(16);
-  expect(first.tools).toMatchObject({ inspect_host_environment: true, query_operation_history: true });
+  expect(Object.keys(first.tools)).toHaveLength(18);
+  expect(first.tools).toMatchObject({ inspect_host_environment: true, query_operation_history: true,
+    prepare_remote_edit: 'conditional', edit_remote_file: false });
   expect(first).toMatchObject({ tools: { read_selected_text_file: false, list_selected_directory: false, upload_selected_file: false,
     read_operation_log: true, submit_verification: false, record_reconciled_result: false, request_root_session: false }, reportCount: 0, unresolvedCount: 0 });
   expect(prompt().length).toBeLessThan(9000);

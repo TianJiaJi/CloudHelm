@@ -18,20 +18,19 @@ function fixture(source = 'port=8080\n') {
   return { tool, sha256, runOperation, ensureTerminal };
 }
 
-it('prepares an exact reviewed conditional write without a shell command', async () => {
+it('refuses the legacy commit without allocating a terminal or dispatching a write', async () => {
   const f = fixture();
-  await f.tool.execute('edit', { hostId: 'host', path: '/srv/config', expectedSha256: f.sha256, oldText: '8080', newText: '9090' });
-  expect(f.runOperation).toHaveBeenCalledOnce();
-  expect(f.runOperation.mock.calls[0]?.[1]).toMatchObject({ kind: 'write-file', path: '/srv/config',
-    content: 'port=9090\n', expectedSha256: f.sha256 });
+  expect(await f.tool.execute('edit', { hostId: 'host', path: '/srv/config', expectedSha256: f.sha256, oldText: '8080', newText: '9090' }))
+    .toMatchObject({ isError: true, details: { code: 'remote-edit-unsupported', execution: 'not-started' } });
+  expect(f.runOperation).not.toHaveBeenCalled(); expect(f.ensureTerminal).not.toHaveBeenCalled();
 });
 
-it('refuses stale versions and ambiguous matches before terminal allocation or review', async () => {
+it('does not let different hashes or fragments bypass the unsupported commit boundary', async () => {
   const f = fixture('aaa');
   const args = { hostId: 'host', path: '/srv/config', expectedSha256: f.sha256, oldText: 'aa', newText: 'b' };
-  expect(await f.tool.execute('ambiguous', args)).toMatchObject({ isError: true, details: { code: 'remote-edit-ambiguous' } });
+  expect(await f.tool.execute('ambiguous', args)).toMatchObject({ isError: true, details: { code: 'remote-edit-unsupported' } });
   expect(await f.tool.execute('stale', { ...args, expectedSha256: '0'.repeat(64) }))
-    .toMatchObject({ isError: true, details: { code: 'remote-edit-source-changed' } });
+    .toMatchObject({ isError: true, details: { code: 'remote-edit-unsupported' } });
   expect(f.ensureTerminal).not.toHaveBeenCalled();
   expect(f.runOperation).not.toHaveBeenCalled();
 });
@@ -40,7 +39,7 @@ it('never uses redacted source as an editable original and does not echo secrets
   const f = fixture('password="synthetic-hidden"\nport=8080\n');
   const result = await f.tool.execute('masked', { hostId: 'host', path: '/srv/config', expectedSha256: f.sha256,
     oldText: '8080', newText: '9090' });
-  expect(result).toMatchObject({ isError: true, details: { code: 'remote-edit-unavailable' } });
+  expect(result).toMatchObject({ isError: true, details: { code: 'remote-edit-unsupported' } });
   expect(JSON.stringify(result)).not.toContain('synthetic-hidden');
   expect(f.ensureTerminal).not.toHaveBeenCalled();
 });

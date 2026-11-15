@@ -3,7 +3,7 @@ import type { LocalScope } from '@cloudhelm/contracts';
 import { agentAuthorization } from './agent-authorization.js';
 
 /** Bump whenever guidance text changes; stamped into operation audit records for replay. */
-export const PROMPT_VERSION = '2026-11.1';
+export const PROMPT_VERSION = '2026-11.2';
 
 export function agentPrompt(hosts: RuntimeHost[], localScopes: LocalScope[], extensionPrompt: string,
   reviewModesByHost?: Record<string, RuntimeHost['defaultMode']>): string {
@@ -45,9 +45,11 @@ export const executionGuidelines = `# Choose the next step
 - Trust status, exit and authentication results; use read_operation_log for truncation, and never replay.
 
 # File changes
-- Before replacement, write_remote_file privately backs up regular files; otherwise use a separate reviewed, access-restricted timestamped backup, and never print it.
-- If backup is unavailable, stop and ask; never invent a rollback.
-- For NONSECRET root edits, read then stage the complete revised file in a writable location; separately review the sudo install and verify.
+- write_remote_file/upload_selected_file: NEW files only. ACL/xattr preservation is unverified; no existing-file commit, even with a hash/root SSH.
+- Use read_remote_file then prepare_remote_edit for a complete version-bound read-only diff. Preview hashes grant no approval, lock or commit capability.
+- For existing-file changes, stop: explain the limit; await explicit manual handling or a supported backend.
+- Never bypass this limit with shell staging, identity changes, delete/recreate or another tool.
+- Deletion copies hold bytes only, not owner/group/mode, ACL/xattr or service state. Never invent rollback.
 - Handle secrets privately or manually.
 
 # Credentials
