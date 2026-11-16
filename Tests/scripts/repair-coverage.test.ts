@@ -31,10 +31,34 @@ describe('complete remediation tracking (not proof of product acceptance)', () =
     expect([...statuses(overview, /^\| [A-H]\d{2} \|/u, 3)]).toEqual([...expected]);
     expect([...statuses(overview, /^\| U\d{2} \|/u, 3)])
       .toEqual([...statuses(ledger, /^\| U\d{2} \|/u, 3)]);
-    for (const status of ['已完成', '已实现待验收', '进行中', '待开始']) {
+    for (const status of ['已完成', '已实现待验收', '进行中', '待开始', '延期转新版']) {
       const count = [...expected.values()].filter((value) => value === status).length;
       expect(overview).toContain(`| ${status} | ${count} |`);
     }
+  });
+
+  it('excludes transferred scope from old-version remaining work without counting it as completed', () => {
+    const ledger = document('REPAIR_PROGRESS'), overview = document('REPAIR_STATUS_OVERVIEW');
+    const rows = ledger.split('\n').filter((row) => /^\| [A-H]\d{2} \|/u.test(row))
+      .map((row) => row.split('|').map((cell) => cell.trim()));
+    const transferred = rows.filter((row) => row[4] === '延期转新版');
+    expect(transferred.map((row) => row[1])).toEqual(['F05', 'G01', 'G02']);
+    const active = rows.filter((row) => row[4] !== '延期转新版');
+    expect(active).toHaveLength(39);
+    expect(active.filter((row) => row[4] === '已完成')).toHaveLength(4);
+    expect(active.filter((row) => row[4] === '已实现待验收')).toHaveLength(19);
+    const remaining = active.filter((row) => ['进行中', '待开始'].includes(row[4]!));
+    expect(remaining.map((row) => row[1])).toEqual([
+      'A01', 'A05', 'A06', 'A07', 'C03', 'C04', 'C05', 'D01', 'D02', 'F03', 'F06',
+      'H01', 'H02', 'H03', 'H04', 'H05'
+    ]);
+    expect(ids(overview, /^\| \d+ \| ([A-H]\d{2}) \|/gmu)).toEqual(remaining.map((row) => row[1]));
+    const uiRows = ledger.split('\n').filter((row) => /^\| U\d{2} \|/u.test(row))
+      .map((row) => row.split('|').map((cell) => cell.trim()));
+    expect(uiRows.filter((row) => row[3] === '延期转新版').map((row) => row[1])).toEqual(['U06']);
+    expect(uiRows.filter((row) => row[3] !== '延期转新版')).toHaveLength(11);
+    expect(overview).toContain('仍需推进16项');
+    expect(overview).toContain('不计旧版剩余，不算完成');
   });
 
   it('does not label unaccepted parent items or UI packages as completed', () => {
