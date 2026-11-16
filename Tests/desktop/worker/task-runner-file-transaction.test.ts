@@ -18,11 +18,12 @@ it('uses native discovery and the production task/gate/file executor chain for r
   let backup: FileInspection | undefined;
   const driver = vi.spyOn(FileTransactionRunner.prototype, 'run').mockImplementation(async (operation) => {
     if (operation.kind === 'inspect-file') return { status: 'inspected', snapshot: structuredClone(operation.recoveryDirectoryId ? backup! : state) };
-    expect(operation.fileEdit).toBeDefined(); expect(operation.expectedSha256).toBe(state.sha256);
+    if (operation.kind !== 'write-file' || !operation.fileEdit) return { status: 'refused', effects: 'none', code: 'unexpected-operation' };
+    expect(operation.expectedSha256).toBe(state.sha256);
     const previous = state;
-    state = { ...(operation.fileEdit!.action === 'restore' ? backup! : state), content: operation.content, sha256: hash(operation.content), metadataDigest: 'b'.repeat(64) };
+    state = { ...(operation.fileEdit.action === 'restore' ? backup! : state), content: operation.content, sha256: hash(operation.content), metadataDigest: 'b'.repeat(64) };
     backup = { ...previous, metadataDigest: 'c'.repeat(64) };
-    return { status: 'committed', snapshot: state, recovery: { version: 1, directoryId: operation.fileEdit!.backupTransactionId ?? operation.fileEdit!.transactionId,
+    return { status: 'committed', snapshot: state, recovery: { version: 1, directoryId: operation.fileEdit.backupTransactionId ?? operation.fileEdit.transactionId,
       path: state.path, beforeSha256: previous.sha256, beforeMetadataDigest: backup.metadataDigest, afterSha256: state.sha256, afterMetadataDigest: state.metadataDigest } };
   });
   let requests = 0;

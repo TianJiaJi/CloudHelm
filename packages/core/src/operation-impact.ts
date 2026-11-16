@@ -25,6 +25,8 @@ const MUTATORS = new Set(['mkdir', 'touch', 'cp', 'mv', 'install', 'tee', 'trunc
 export function analyzeOperationImpact(operation: ProposedOperation, analysis?: CommandAnalysis): OperationImpact {
   if (operation.kind === 'inspect-file') return { version: 1, mutation: 'none', evidence: 'structured-file',
     sensitiveRead: isSensitiveReadPath(operation.path) ? 'detected' : 'not-detected', externalTransfer: 'not-detected', codeExecution: 'not-detected', uncertaintyCodes: [] };
+  if (operation.kind === 'list-recovery') return { version: 1, mutation: 'none', evidence: 'structured-file',
+    sensitiveRead: 'not-detected', externalTransfer: 'not-detected', codeExecution: 'not-detected', uncertaintyCodes: [] };
   if (operation.kind !== 'command') return { version: 1, mutation: 'possible', evidence: 'structured-file',
     sensitiveRead: operation.kind === 'upload' && isSensitiveReadPath(operation.localPath.replace(/\\/gu, '/')) ? 'detected' : 'not-detected',
     externalTransfer: operation.kind === 'upload' ? 'detected' : 'not-detected', codeExecution: 'not-detected', uncertaintyCodes: [] };

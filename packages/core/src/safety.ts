@@ -1,6 +1,6 @@
 import { analyzeQueryImpact, isQuery, isBlockDevice, BAD_DISK_TOOLS, PROJECT_CODE_COMMANDS } from './command-query-impact.js';
 export { isReadOnlyQuery, isEffectFreeQuery } from './command-query-impact.js';
-import { validFileEditCommit, FILE_TRANSACTION_UUID } from './file-transaction.js';
+import { validFileEditCommit, validRecoveryEntryName, FILE_TRANSACTION_UUID } from './file-transaction.js';
 import { analyzeOperationImpact } from './operation-impact.js';
 import { commandTransfer } from './command-transfer.js';
 import path from 'node:path';
@@ -129,7 +129,7 @@ function writePaths(operation: ProposedOperation): string[] {
 
 function protectedTarget(operation: ProposedOperation): boolean {
   const { cwd } = operation.scope;
-  const raw = operation.kind === 'write-file' || operation.kind === 'delete-path' ? operation.path
+  const raw = operation.kind === 'write-file' || operation.kind === 'delete-path' || operation.kind === 'cleanup-recovery' ? operation.path
     : operation.kind === 'upload' ? operation.remotePath : null;
   if (!raw) return false;
   const target = literalPath(raw, cwd);
@@ -334,6 +334,9 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     return decision('error', 'invalid-file-transaction', 'Invalid backend file transaction; nothing dispatched');
   if (operation.kind === 'inspect-file' && operation.recoveryDirectoryId && !FILE_TRANSACTION_UUID.test(operation.recoveryDirectoryId))
     return decision('error', 'invalid-file-transaction', 'Invalid recovery directory binding');
+  if (operation.kind === 'cleanup-recovery' && (!Array.isArray(operation.names) || operation.names.length < 1 || operation.names.length > 16
+    || new Set(operation.names).size !== operation.names.length || operation.names.some((name) => !validRecoveryEntryName(name))))
+    return decision('error', 'invalid-recovery-cleanup', 'Invalid recovery material names; nothing dispatched');
   if (operation.kind === 'upload') {
     const localRoot = path.resolve(operation.localRoot);
     const localTarget = path.resolve(operation.localPath);
@@ -356,6 +359,13 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     if (readPaths(operation).some((root) => isInside(target, root))) return decision('deny', 'protected-resource', 'Protected file read');
     return operation.privilege === 'root' ? highImpactDecision('privileged-file-read', 'Read a bounded file using operation-bound root authentication', settings)
       : decision('allow', 'structured-file-read', 'Bounded private inspection; no file mutation');
+  }
+  if (operation.kind === 'list-recovery') {
+    const target = literalPath(operation.path, operation.scope.cwd);
+    if (!target) return decision('error', 'path-opaque', 'An absolute literal directory path is required');
+    if (readPaths(operation).some((root) => isInside(target, root))) return decision('deny', 'protected-resource', 'Protected resource listing');
+    return operation.privilege === 'root' ? highImpactDecision('privileged-recovery-listing', 'List private recovery material using operation-bound root authentication', settings)
+      : decision('allow', 'structured-file-read', 'Bounded private recovery listing; names and sizes only, no content read');
   }
   if (protectedTarget(operation)) return decision('deny', 'protected-resource', 'Target belongs to a user-protected resource');
   if (operation.kind === 'delete-path') {
@@ -398,6 +408,13 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     return highImpactDecision('privileged-file-edit', 'Commit exact reviewed content and metadata using operation-bound root authentication', settings);
   if (highImpactFile(operation)) {
     return highImpactDecision('high-impact-file', 'Changes host access or security configuration', settings);
+  }
+  // Recovery material removal is always reviewed regardless of identity or mode:
+  // an explicit, bounded, per-name decision; never a silent automatic cleanup.
+  if (operation.kind === 'cleanup-recovery') {
+    return highImpactDecision('recovery-cleanup', operation.privilege === 'root'
+      ? 'Remove named private recovery material using operation-bound root authentication'
+      : 'Remove named private recovery material in the target directory', settings);
   }
   if (operation.kind !== 'command') return decision('allow', 'structured-file', 'Bounded file operation with a literal target');
   const reason = describeCommandReview(analysis ? analyzeQueryImpact(analysis).reviewReasons ?? ['unrecognized-operation'] : ['parse-incomplete']);

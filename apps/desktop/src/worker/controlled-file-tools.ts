@@ -8,7 +8,20 @@ const recoveryParameters = Type.Object({ recoveryId: identifier }, { additionalP
 const checkParameters = Type.Object({ recoveryId: identifier, validator: Type.Union([
   Type.Literal('nginx'), Type.Literal('sshd'), Type.Literal('systemd-unit')]) }, { additionalProperties: false });
 const unavailable = (id: string) => blockedOperationFeedback(id, 'file-transactions-unavailable', 'Controlled file transaction driver unavailable. No fallback to SFTP overwrite or Shell staging.');
+const recoveryListParameters = Type.Object({ hostId: Type.String(), path: Type.String(),
+  privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])) }, { additionalProperties: false });
+const recoveryCleanupParameters = Type.Object({ hostId: Type.String(), path: Type.String(),
+  names: Type.Array(Type.String({ minLength: 1, maxLength: 255 }), { minItems: 1, maxItems: 16, uniqueItems: true }),
+  privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])) }, { additionalProperties: false });
 export function controlledFileTools(service?: FileEditService): BusinessTool<any>[] {
+  const listRecovery: BusinessTool<Static<typeof recoveryListParameters>> = { name: 'list_remote_recovery', label: 'List private file recovery material',
+    access: 'query', deferred: true, replay: 'never', available: () => !!service, parameters: recoveryListParameters,
+    description: 'Read-only metadata listing (name/kind/size/mtime) of the private recovery container directory of one remote path: staged edit directories and backup files. Never reads entry content. Root listing is a high-impact review. Use it before any cleanup; do not enumerate via Shell.',
+    execute: async (id, args, signal) => service ? service.listRecovery(id, args, signal) : unavailable(id) };
+  const cleanupRecovery: BusinessTool<Static<typeof recoveryCleanupParameters>> = { name: 'cleanup_remote_recovery', label: 'Clean named file recovery material',
+    replay: 'never', available: () => !!service, parameters: recoveryCleanupParameters,
+    description: 'Explicitly remove only the named recovery entries (from list_remote_recovery) inside one container directory. Every name is reviewed; unknown names are refused per item without stopping others. No live file is touched, and refused/missing names are settled outcomes. Never delete recovery material that an unverified operation may still need.',
+    execute: async (id, args, signal) => service ? service.cleanupRecovery(id, args, signal) : unavailable(id) };
   const apply: BusinessTool<Static<typeof editParameters>> = { name: 'apply_remote_edit', label: 'Commit an exact prepared file edit',
     replay: 'never', available: () => !!service, parameters: editParameters,
     description: 'Consume a backend editId from prepare_remote_edit exactly once. SafetyGate reviews exact path/content/diff/identity/metadata and current policy; authentication is private. Supported Linux metadata is preserved and read back, with an owner-private recovery entry. Changes/unsupported metadata fail closed. Unknown results must be inspected, never retried with a new token or identity.',
@@ -25,5 +38,5 @@ export function controlledFileTools(service?: FileEditService): BusinessTool<any
     replay: 'never', available: () => !!service, parameters: checkParameters,
     description: 'Use a successful file operation ID and a supported validator. Recheck exact current file version, then separately review fixed nginx -t, sshd -t or systemd-analyze verify for that bound path/identity. No arbitrary validator args, package installation or service restart. Exit 0 proves syntax only, not application health.',
     execute: async (id, args, signal) => service ? service.check(id, args.recoveryId, args.validator, signal) : unavailable(id) };
-  return [apply, discard, restore, check];
+  return [apply, discard, restore, check, listRecovery, cleanupRecovery];
 }

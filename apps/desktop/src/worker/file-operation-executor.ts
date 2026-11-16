@@ -31,7 +31,8 @@ export class FileOperationExecutor implements OperationExecutor {
     const notDispatched = (message: string): OperationResult => ({ operationId: operation.id,
       status: 'failed', effects: 'none', failureKind: 'not-dispatched', stdoutTail: message });
     if (!authorized()) return notDispatched('Authorization expired before any remote call; nothing was written. Propose the operation again.');
-    if (operation.kind === 'inspect-file' || operation.kind === 'write-file' && operation.fileEdit)
+    if (operation.kind === 'inspect-file' || operation.kind === 'list-recovery' || operation.kind === 'cleanup-recovery'
+      || operation.kind === 'write-file' && operation.fileEdit)
       return executeControlledFile(this.driver(), operation, authorized, signal, options);
     const remotePath = path.posix.resolve(operation.scope.cwd,
       operation.kind === 'upload' ? operation.remotePath : operation.path);

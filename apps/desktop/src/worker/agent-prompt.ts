@@ -3,7 +3,7 @@ import type { LocalScope } from '@cloudhelm/contracts';
 import { agentAuthorization } from './agent-authorization.js';
 
 /** Bump whenever guidance text changes; stamped into operation audit records for replay. */
-export const PROMPT_VERSION = '2026-11.3';
+export const PROMPT_VERSION = '2026-11.4';
 
 export function agentPrompt(hosts: RuntimeHost[], localScopes: LocalScope[], extensionPrompt: string,
   reviewModesByHost?: Record<string, RuntimeHost['defaultMode']>): string {
@@ -48,6 +48,7 @@ export const executionGuidelines = `# Choose the next step
 - Preview hashes grant no approval or lock; read_remote_file/prepare_remote_edit (privilege=root if required) then apply_remote_edit with its backend editId; review binds source, metadata, identity and generations.
 - No editId: stop; never bypass with Shell staging, identity changes or delete/recreate.
 - Verify the receipt; check_remote_edit proves syntax only. restore_remote_edit needs an unchanged confirmed target and new review; unknown effects require inspection, not auto replay.
+- Recovery material is never removed automatically: list_remote_recovery first, then cleanup_remote_recovery for explicitly chosen names under review; never clean entries an unverified operation may still need, and never use Shell rm as a fallback.
 - Deletion copies hold bytes only; never invent metadata or service rollback.
 - Handle secrets privately or manually.
 

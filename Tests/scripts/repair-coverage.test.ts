@@ -46,10 +46,10 @@ describe('complete remediation tracking (not proof of product acceptance)', () =
     const active = rows.filter((row) => row[4] !== '延期转新版');
     expect(active).toHaveLength(39);
     expect(active.filter((row) => row[4] === '已完成')).toHaveLength(4);
-    expect(active.filter((row) => row[4] === '已实现待验收')).toHaveLength(19);
+    expect(active.filter((row) => row[4] === '已实现待验收')).toHaveLength(22);
     const remaining = active.filter((row) => ['进行中', '待开始'].includes(row[4]!));
     expect(remaining.map((row) => row[1])).toEqual([
-      'A01', 'A05', 'A06', 'A07', 'C03', 'C04', 'C05', 'D01', 'D02', 'F03', 'F06',
+      'A01', 'A05', 'A06', 'A07', 'D01', 'D02', 'F03', 'F06',
       'H01', 'H02', 'H03', 'H04', 'H05'
     ]);
     expect(ids(overview, /^\| \d+ \| ([A-H]\d{2}) \|/gmu)).toEqual(remaining.map((row) => row[1]));
@@ -57,7 +57,7 @@ describe('complete remediation tracking (not proof of product acceptance)', () =
       .map((row) => row.split('|').map((cell) => cell.trim()));
     expect(uiRows.filter((row) => row[3] === '延期转新版').map((row) => row[1])).toEqual(['U06']);
     expect(uiRows.filter((row) => row[3] !== '延期转新版')).toHaveLength(11);
-    expect(overview).toContain('仍需推进16项');
+    expect(overview).toContain('仍需推进13项');
     expect(overview).toContain('不计旧版剩余，不算完成');
   });
 

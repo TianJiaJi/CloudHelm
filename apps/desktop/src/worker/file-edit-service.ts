@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { OutputRedactor, prepareFileEdit, type BusinessTool, type FileInspection, type FileRecovery, type OperationScope,
+import { OutputRedactor, prepareFileEdit, validRecoveryEntryName, type BusinessTool, type FileInspection, type FileRecovery, type OperationScope,
   type ProposedOperation } from '@cloudhelm/core';
 import { validFileRecovery } from '@cloudhelm/adapters';
 import type { SafetyGate } from '@cloudhelm/application';
@@ -129,14 +129,51 @@ export class FileEditService {
     this.plans.delete(editId);
     return { content: [{ type: 'text', text: 'Local prepared edit discarded; no remote staging or file change was made.' }], details: { discarded: true } };
   }
+  /** Recovery material lives in the private container directory; the same host,
+   * read guard and generation bindings as an inspection apply, but no content
+   * is ever delivered and the container itself is never opened through Shell. */
+  private async recoveryScope(hostId: string, path: string, privilege: Privilege, signal?: AbortSignal) {
+    this.clean(); signal?.throwIfAborted();
+    const host = this.deps.hosts.find((item) => item.id === hostId && !item.archived);
+    if (!host) throw new Error('File host is outside current task authorization');
+    const target = resolveRemoteReadTarget(path, '/');
+    assertRemoteReadAllowed(target, host.protectedReadPaths ?? host.protectedPaths ?? []);
+    const terminal = await this.deps.ensureTerminal(host.id);
+    const base = this.deps.scope(host, terminal, '/');
+    if (base.sessionId) throw new Error('Use operation-level file privilege, not a legacy session');
+    const scope = { ...base, runAs: privilege === 'root' ? 'root' : host.username, loginAs: host.username };
+    return { host, target, scope };
+  }
+  /** Read-only metadata listing of one container; never includes entry content. */
+  async listRecovery(id: string, args: { hostId: string; path: string; privilege?: Privilege }, signal?: AbortSignal): Promise<Reply> {
+    try {
+      const privilege = args.privilege ?? 'current';
+      const { host, target, scope } = await this.recoveryScope(args.hostId, args.path, privilege, signal);
+      const operation: ProposedOperation = { id: randomUUID(), kind: 'list-recovery', path: target, scope,
+        ...(privilege === 'root' ? { privilege: 'root' as const } : {}) };
+      return this.deps.runOperation(this.gate, operation, signal, host.label);
+    } catch { return blockedOperationFeedback(id, 'recovery-listing-unavailable', 'Recovery listing unavailable or refused. No fallback to Shell enumeration; wait for explicit user direction.', undefined, true); }
+  }
+  /** Explicit, per-name cleanup of recovery material; every name needs its own review. */
+  async cleanupRecovery(id: string, args: { hostId: string; path: string; names: string[]; privilege?: Privilege }, signal?: AbortSignal): Promise<Reply> {
+    try {
+      const privilege = args.privilege ?? 'current';
+      const names = args.names;
+      if (!Array.isArray(names) || names.length < 1 || names.length > 16 || names.some((name) => !validRecoveryEntryName(name)))
+        throw new Error('Invalid recovery entry names');
+      const { host, target, scope } = await this.recoveryScope(args.hostId, args.path, privilege, signal);
+      const operation: ProposedOperation = { id: randomUUID(), kind: 'cleanup-recovery', path: target, names, scope,
+        ...(privilege === 'root' ? { privilege: 'root' as const } : {}) };
+      return this.deps.runOperation(this.gate, operation, signal, host.label);
+    } catch { return blockedOperationFeedback(id, 'recovery-cleanup-unavailable', 'Recovery cleanup unavailable, refused or invalid. Nothing deleted; no fallback to Shell rm.'); }
+  }
   private recovery(id: string) {
     const operation = this.deps.fileOperations?.().find((item) => item.id === id);
     if (!operation || !this.deps.hosts.some((host) => host.id === operation.hostId) || operation.status !== 'succeeded' || !validFileRecovery(operation.fileRecovery) || this.consumedRecoveries.has(id))
       throw new Error('Recovery receipt unavailable or outcome not confirmed');
     return { operation, receipt: operation.fileRecovery as FileRecovery };
   }
-  async restore(id: string, recoveryId: string, signal?: AbortSignal): Promise<Reply> {
-    try {
+  async restore(id: string, recoveryId: string, signal?: AbortSignal): Promise<Reply> {    try {
       const { operation: prior, receipt } = this.recovery(recoveryId), privilege = prior.runAs === 'root' ? 'root' : 'current';
       const live = await this.inspect(prior.hostId, receipt.path, privilege, signal);
       if (live.snapshot.sha256 !== receipt.afterSha256 || live.snapshot.metadataDigest !== receipt.afterMetadataDigest)

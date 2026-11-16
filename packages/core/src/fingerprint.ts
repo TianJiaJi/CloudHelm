@@ -19,13 +19,17 @@ export function operationFingerprint(operation: ProposedOperation): string {
     protectedReadPaths: scope.protectedReadPaths,
     protectedWritePaths: scope.protectedWritePaths,
     kind: operation.kind,
-    privilege: operation.kind === 'command' || operation.kind === 'write-file' || operation.kind === 'inspect-file' ? operation.privilege : undefined,
+    privilege: operation.kind === 'command' || operation.kind === 'write-file' || operation.kind === 'inspect-file'
+      || operation.kind === 'list-recovery' || operation.kind === 'cleanup-recovery' ? operation.privilege : undefined,
     executionMode: operation.kind === 'command' ? operation.executionMode : undefined,
     processControl: operation.kind === 'command' ? operation.processControl : undefined,
     payload: operation.kind === 'command' ? [operation.command, operation.probe]
       : operation.kind === 'write-file' ? [operation.path, operation.content, operation.expectedSha256, operation.createOnly, operation.fileEdit]
       : operation.kind === 'upload' ? [operation.localPath, operation.remotePath, operation.localRoot, operation.contentSha256, operation.size]
-      : operation.kind === 'inspect-file' ? [operation.path, operation.recoveryDirectoryId] : operation.path
+      : operation.kind === 'inspect-file' ? [operation.path, operation.recoveryDirectoryId]
+      : operation.kind === 'cleanup-recovery' ? [operation.path, operation.names]
+      : operation.kind === 'list-recovery' ? [operation.path]
+      : operation.path
   };
   return createHash('sha256').update(JSON.stringify(bound)).digest('hex');
 }

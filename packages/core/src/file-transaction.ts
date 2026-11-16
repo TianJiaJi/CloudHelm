@@ -16,6 +16,18 @@ export interface FileRecovery {
 }
 export const FILE_TRANSACTION_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
 export const FILE_TRANSACTION_HASH = /^[a-f0-9]{64}$/u;
+/** Private recovery material names: exactly the staged edit directory or the
+ * delete-time content backup. Anything else is never removal candidate. */
+export const RECOVERY_DIRECTORY_NAME = /^\.cloudhelm-edit-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
+export const RECOVERY_BACKUP_NAME = /^[^\u0000-\u001f\u007f/]{1,201}\.cloudhelm-backup-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
+export function validRecoveryEntryName(name: string): boolean {
+  return typeof name === 'string' && name.length <= 255
+    && (RECOVERY_DIRECTORY_NAME.test(name) || RECOVERY_BACKUP_NAME.test(name));
+}
+/** One bounded listing row; metadata only, never content or an approval. */
+export interface RecoveryEntry { name: string; kind: 'edit-directory' | 'backup-file'; size: number; mtimeMs: number }
+/** Per-name cleanup receipt; refused/missing are definitive outcomes, not unknowns. */
+export interface RecoveryCleanupResult { name: string; result: 'removed' | 'missing' | 'refused'; code?: string }
 export function validFileEditCommit(edit: FileEditCommit): boolean {
   return edit?.version === 1 && ['apply', 'restore'].includes(edit.action)
     && FILE_TRANSACTION_UUID.test(edit.transactionId) && FILE_TRANSACTION_HASH.test(edit.expectedMetadataDigest)

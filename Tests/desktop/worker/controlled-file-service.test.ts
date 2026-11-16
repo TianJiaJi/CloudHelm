@@ -27,7 +27,7 @@ function fixture() {
   const driver = vi.spyOn(FileTransactionRunner.prototype, 'run').mockImplementation(async (operation) => {
     dispatched.push(structuredClone(operation));
     if (operation.kind === 'inspect-file') return { status: 'inspected', snapshot: structuredClone(operation.recoveryDirectoryId ? backup! : state) };
-    if (!operation.fileEdit || operation.expectedSha256 !== state.sha256 || operation.fileEdit.expectedMetadataDigest !== state.metadataDigest)
+    if (operation.kind !== 'write-file' || !operation.fileEdit || operation.expectedSha256 !== state.sha256 || operation.fileEdit.expectedMetadataDigest !== state.metadataDigest)
       return { status: 'refused', effects: 'none', code: 'source-version-or-metadata-changed' };
     if (unknown) return { status: 'unknown', effects: 'possible', code: 'private-channel-interrupted' };
     const before = structuredClone(state);

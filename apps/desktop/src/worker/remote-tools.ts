@@ -171,7 +171,9 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       }
     }
   };
-  const tools = [createServiceTool(deps, gate), rootTool, tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files), createRemoteFileEditTool(deps, gate), writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+  const tools = [createServiceTool(deps, gate), ...(deps.legacyRootSessions === true ? [rootTool] : []),
+    tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files), createRemoteFileEditTool(deps, gate),
+    writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
   // Pre-dispatch refusals create no operation record, so surface a fixed reason code
   // for diagnosis. The code is allowlisted; arguments and content never reach the log.
   return deps.refused ? (tools as BusinessTool<any>[]).map((item) => ({ ...item,

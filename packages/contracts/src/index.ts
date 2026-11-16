@@ -215,7 +215,7 @@ export interface OperationView {
   id: string;
   taskId: string;
   hostId: string;
-  kind: 'command' | 'write-file' | 'upload' | 'delete-path' | 'read-file' | 'inspect-file';
+  kind: 'command' | 'write-file' | 'upload' | 'delete-path' | 'read-file' | 'inspect-file' | 'list-recovery' | 'cleanup-recovery';
   preview: string;
   status: 'proposed' | 'approved' | 'running' | 'succeeded' | 'failed' | 'denied' | 'unknown';
   reason?: string;

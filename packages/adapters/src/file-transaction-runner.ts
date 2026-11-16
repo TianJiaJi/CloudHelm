@@ -1,15 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { FILE_TRANSACTION_HASH, FILE_TRANSACTION_UUID, type FileInspection, type FileRecovery, type ProposedOperation } from '@cloudhelm/core';
+import { FILE_TRANSACTION_HASH, FILE_TRANSACTION_UUID, validRecoveryEntryName,
+  type FileInspection, type FileRecovery, type ProposedOperation, type RecoveryCleanupResult, type RecoveryEntry } from '@cloudhelm/core';
 import { SshCommandTerminal } from './ssh-command-terminal.js';
 import type { SshTransport } from './ssh-transport.js';
 import { remoteFileProgram } from './remote-file-program.js';
 
-type FileOperation = Extract<ProposedOperation, { kind: 'write-file' | 'inspect-file' }>;
+type FileOperation = Extract<ProposedOperation, { kind: 'write-file' | 'inspect-file' | 'list-recovery' | 'cleanup-recovery' }>;
 export type FileSecretInput = (operation: FileOperation, signal: AbortSignal, attempt: number) => Promise<string | null>;
-export interface FileDriverReply { status: 'inspected' | 'committed' | 'refused' | 'unknown';
-  snapshot?: FileInspection; recovery?: FileRecovery; code?: string; effects?: 'none' | 'possible'; authenticationFailed?: boolean }
+export interface FileDriverReply { status: 'inspected' | 'committed' | 'listed' | 'cleaned' | 'refused' | 'unknown';
+  snapshot?: FileInspection; recovery?: FileRecovery; entries?: RecoveryEntry[]; truncated?: boolean; items?: RecoveryCleanupResult[];
+  code?: string; effects?: 'none' | 'possible'; authenticationFailed?: boolean }
 const quote = (text: string) => `'${text.replace(/'/gu, `'"'"'`)}'`;
 const hash = (value: Buffer) => createHash('sha256').update(value).digest('hex');
+const REPLY_CODE = /^[a-z0-9-]{1,120}$/u;
 
 function inspection(raw: any, path: string, root: boolean): FileInspection {
   if (!raw || raw.version !== 1 || raw.path !== path || !FILE_TRANSACTION_HASH.test(raw.sha256)
@@ -36,6 +39,28 @@ export function validFileRecovery(value: any, path?: string): value is FileRecov
     && value.path.startsWith('/') && value.path.length <= 4096 && !/[\u0000-\u001f\u007f]/u.test(value.path)
     && (!path || value.path === path) && fields.slice(3).every((key) => typeof value[key] === 'string' && FILE_TRANSACTION_HASH.test(value[key]));
 }
+/** Bounded listing receipt; metadata rows only, content is never included. */
+function recoveryEntries(raw: any): RecoveryEntry[] {
+  if (!Array.isArray(raw) || raw.length > 128) throw new Error('Invalid recovery listing');
+  return raw.map((item: any) => {
+    if (!item || typeof item !== 'object' || typeof item.name !== 'string' || !validRecoveryEntryName(item.name)
+      || (item.kind !== 'edit-directory' && item.kind !== 'backup-file')
+      || !Number.isSafeInteger(item.size) || item.size < 0 || item.size > 1_048_576
+      || !Number.isSafeInteger(item.mtimeMs) || item.mtimeMs < 0) throw new Error('Invalid recovery listing');
+    return { name: item.name, kind: item.kind, size: item.size, mtimeMs: item.mtimeMs };
+  });
+}
+/** Per-name cleanup receipt; every requested name must have exactly one definitive row. */
+function recoveryItems(raw: any): RecoveryCleanupResult[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 16) throw new Error('Invalid cleanup receipt');
+  return raw.map((item: any) => {
+    if (!item || typeof item !== 'object' || typeof item.name !== 'string' || !validRecoveryEntryName(item.name)
+      || !['removed', 'missing', 'refused'].includes(item.result)
+      || (item.result !== 'refused' && item.code !== undefined)
+      || (typeof item.code === 'string' && !REPLY_CODE.test(item.code))) throw new Error('Invalid cleanup receipt');
+    return { name: item.name, result: item.result, ...(typeof item.code === 'string' ? { code: item.code } : {}) };
+  });
+}
 
 /** Private supervised process: stdout and launch argv never enter terminal/audit
  * logs. Only the SDK's trusted sudo challenge reaches the operation-bound UI. */
@@ -44,12 +69,15 @@ export class FileTransactionRunner {
     private readonly factory = (host: string) => new SshCommandTerminal(ssh, host)) {}
   async run(operation: FileOperation, current: () => boolean, signal?: AbortSignal): Promise<FileDriverReply> {
     const edit = operation.kind === 'write-file' ? operation.fileEdit : undefined;
-    const action = operation.kind === 'inspect-file' ? operation.recoveryDirectoryId ? 'inspect-backup' : 'inspect' : edit?.action;
+    const action = operation.kind === 'inspect-file' ? operation.recoveryDirectoryId ? 'inspect-backup' : 'inspect'
+      : operation.kind === 'list-recovery' ? 'list-recovery'
+      : operation.kind === 'cleanup-recovery' ? 'cleanup-recovery' : edit?.action;
     if (!action || !current()) return { status: 'refused', effects: 'none', code: 'authorization-expired' };
     const root = operation.privilege === 'root', nonce = randomUUID().replaceAll('-', '');
     const transactionId = edit?.transactionId ?? randomUUID();
     const request = { version: 1, nonce, action, path: operation.path, root, transactionId,
-      ...(operation.kind === 'inspect-file' ? { backupTransactionId: operation.recoveryDirectoryId } : {
+      ...(operation.kind === 'inspect-file' ? { backupTransactionId: operation.recoveryDirectoryId }
+        : operation.kind === 'list-recovery' ? {} : operation.kind === 'cleanup-recovery' ? { names: operation.names } : {
         expectedSha256: operation.expectedSha256, expectedMetadataDigest: edit!.expectedMetadataDigest,
         expectedExecutionUid: edit!.expectedExecutionUid, backupTransactionId: edit!.backupTransactionId,
         expectedBackupMetadataDigest: edit!.expectedBackupMetadataDigest, contentBase64: Buffer.from(operation.content).toString('base64') }) };
@@ -63,8 +91,8 @@ export class FileTransactionRunner {
     let failure: { effects?: 'none' | 'possible'; failureKind?: string } | undefined;
     let finish!: (value: FileDriverReply) => void;
     const done = new Promise<FileDriverReply>((resolve) => { finish = (value) => { if (!active) return; active = false; resolve(value); }; });
-    const unknown = (): FileDriverReply => ({ status: sent && action !== 'inspect' && action !== 'inspect-backup' ? 'unknown' : 'refused',
-      effects: sent && action !== 'inspect' && action !== 'inspect-backup' ? 'possible' : 'none', code: 'private-channel-interrupted', ...(!sent && (sudo && attempts > 0 || failure?.failureKind === 'authentication-failed') ? { authenticationFailed: true } : {}) });
+    const unknown = (): FileDriverReply => ({ status: sent && !['inspect', 'inspect-backup', 'list-recovery'].includes(action) ? 'unknown' : 'refused',
+      effects: sent && !['inspect', 'inspect-backup', 'list-recovery'].includes(action) ? 'possible' : 'none', code: 'private-channel-interrupted', ...(!sent && (sudo && attempts > 0 || failure?.failureKind === 'authentication-failed') ? { authenticationFailed: true } : {}) });
     const stop = () => { controller.abort(); finish(unknown()); raw.close(); };
     signal?.addEventListener('abort', stop, { once: true });
     const timer = setTimeout(stop, 180_000);
@@ -101,7 +129,7 @@ export class FileTransactionRunner {
             if (!current()) { stop(); return; }
             sent = true;
             for (let i = 0; i < payload.length; i += 1024) raw.write(payload.slice(i, i + 1024));
-          } else if (value.nonce === nonce && sent && ['inspected', 'committed', 'refused', 'unknown'].includes(value.status)) {
+          } else if (value.nonce === nonce && sent && ['inspected', 'committed', 'listed', 'cleaned', 'refused', 'unknown'].includes(value.status)) {
             if (reply) throw new Error('Duplicate receipt');
             if (value.status === 'inspected' || value.status === 'committed') {
               const snapshot = inspection(value.snapshot, operation.path, root);
@@ -111,8 +139,15 @@ export class FileTransactionRunner {
                 || value.recovery.afterMetadataDigest !== snapshot.metadataDigest
                 || value.recovery.directoryId !== (edit!.backupTransactionId ?? edit!.transactionId))) throw new Error('Commit receipt does not match approved content');
               reply = { status: value.status, snapshot, ...(value.recovery ? { recovery: value.recovery } : {}) };
+            } else if (value.status === 'listed') {
+              reply = { status: 'listed', entries: recoveryEntries(value.entries), ...(value.truncated === true ? { truncated: true } : {}) };
+            } else if (value.status === 'cleaned') {
+              const items = recoveryItems(value.items);
+              if (operation.kind !== 'cleanup-recovery' || items.length !== operation.names.length
+                || !operation.names.every((name) => items.some((item) => item.name === name))) throw new Error('Cleanup receipt does not match approved names');
+              reply = { status: 'cleaned', items };
             } else reply = { status: value.status, effects: value.status === 'refused' && value.effects === 'none' ? 'none' : 'possible',
-              code: typeof value.code === 'string' && /^[a-z0-9-]{1,120}$/u.test(value.code) ? value.code : 'file-operation-refused' };
+              code: typeof value.code === 'string' && REPLY_CODE.test(value.code) ? value.code : 'file-operation-refused' };
           } else throw new Error('Invalid private file protocol');
         } catch { stop(); }
       }

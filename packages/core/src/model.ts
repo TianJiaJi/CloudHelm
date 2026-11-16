@@ -51,7 +51,11 @@ export type ProposedOperation =
       /** Only valid when the target must not exist yet. */
       createOnly?: boolean }
   | { id: string; kind: 'upload'; localPath: string; remotePath: string; localRoot: string; contentSha256: string; size: number; scope: OperationScope }
-  | { id: string; kind: 'delete-path'; path: string; scope: OperationScope };
+  | { id: string; kind: 'delete-path'; path: string; scope: OperationScope }
+  /** Container directory of private recovery material; read-only bounded listing. */
+  | { id: string; kind: 'list-recovery'; path: string; scope: OperationScope; privilege?: 'root' }
+  /** Explicit reviewed removal of named private recovery material; never automatic. */
+  | { id: string; kind: 'cleanup-recovery'; path: string; names: string[]; scope: OperationScope; privilege?: 'root' };
 
 /** Lexical cwd relative to the operation entry directory, not remote realpath evidence. */
 export type CommandDirectory = { state: 'known'; changes: string[] } | { state: 'unknown' };

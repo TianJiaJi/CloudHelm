@@ -1,10 +1,17 @@
 /** Fixed, non-model-authored Linux file driver. Payload/output use a private channel. */
-export const remoteFileProgram = String.raw`import os, sys, json, base64, hashlib, stat, uuid, ctypes, errno
+export const remoteFileProgram = String.raw`import os, sys, json, base64, hashlib, stat, uuid, ctypes, errno, re
 MAX = 1048576
 HASH = lambda value: hashlib.sha256(value).hexdigest()
 def canonical(value): return json.dumps(value, sort_keys=True, separators=(',', ':')).encode('ascii')
 class Refused(Exception):
     def __init__(self, code): self.code = code
+
+RECOVERY_EDIT_RE = re.compile(r'^\.cloudhelm-edit-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z')
+RECOVERY_BACKUP_RE = re.compile(r'^[^\x00-\x1f\x7f/]{1,201}\.cloudhelm-backup-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z')
+def recovery_kind(name):
+    if RECOVERY_EDIT_RE.match(name): return 'edit-directory'
+    if RECOVERY_BACKUP_RE.match(name): return 'backup-file'
+    return None
 
 def checked_uuid(value):
     if not isinstance(value, str) or str(uuid.UUID(value)) != value: raise Refused('invalid-binding')
@@ -25,6 +32,7 @@ class LinuxFiles:
         self.fcntl, self.struct = fcntl, struct
         self.request, self.parent, self.backup = request, None, None
         self.created, self.exchanged, self.staged_identity = False, False, None
+        self.removed_any = False
         path = request['path']
         if not isinstance(path, str) or not path.startswith('/') or path.startswith('//') or '\x00' in path or os.path.normpath(path) != path:
             raise Refused('invalid-path')
@@ -166,10 +174,87 @@ class LinuxFiles:
         for name in ('backup', 'parent'):
             fd = getattr(self, name, None)
             if fd is not None: os.close(fd); setattr(self, name, None)
+    def recovery_entry_size(self, name, directory):
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            try:
+                info = os.stat('entry', dir_fd=fd, follow_symlinks=False)
+                return info.st_size if stat.S_ISREG(info.st_mode) else 0
+            finally: os.close(fd)
+        except OSError: return 0
+    def list_recovery(self):
+        directory = os.open(self.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=self.parent)
+        try:
+            found = []
+            for name in sorted(os.listdir(directory)):
+                kind = recovery_kind(name)
+                if kind is None: continue
+                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if info.st_uid != self.uid: continue
+                if kind == 'edit-directory':
+                    if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700: continue
+                    size = self.recovery_entry_size(name, directory)
+                else:
+                    if not stat.S_ISREG(info.st_mode): continue
+                    size = info.st_size
+                found.append({'name': name, 'kind': kind, 'size': size, 'mtimeMs': info.st_mtime_ns // 1000000})
+            return found[:128], len(found) > 128
+        finally: os.close(directory)
+    def cleanup_recovery(self, names):
+        if not isinstance(names, list) or not 1 <= len(names) <= 16: raise Refused('invalid-cleanup-request')
+        seen = set()
+        for name in names:
+            if not isinstance(name, str) or name in seen or recovery_kind(name) is None: raise Refused('invalid-cleanup-request')
+            seen.add(name)
+        items = []
+        directory = os.open(self.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=self.parent)
+        try:
+            container = os.fstat(directory)
+            for name in names: items.append(self.remove_recovery_item(name, directory, container))
+            return items
+        finally: os.close(directory)
+    def remove_recovery_item(self, name, directory, container):
+        kind = recovery_kind(name)
+        try:
+            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if info.st_uid != self.uid: raise Refused('unsafe-recovery-file')
+            if kind == 'edit-directory':
+                inner_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                try:
+                    entry = os.fstat(inner_fd)
+                    if entry.st_uid != self.uid or not stat.S_ISDIR(entry.st_mode) or stat.S_IMODE(entry.st_mode) != 0o700 \
+                        or entry.st_dev != container.st_dev: raise Refused('unsafe-recovery-directory')
+                    inner = os.listdir(inner_fd)
+                    if len(inner) > 64 or any(item != 'entry' for item in inner): raise Refused('unsafe-recovery-directory')
+                    for item in inner:
+                        detail = os.stat(item, dir_fd=inner_fd, follow_symlinks=False)
+                        if not stat.S_ISREG(detail.st_mode) or detail.st_nlink != 1: raise Refused('unsafe-recovery-directory')
+                    self.removed_any = True
+                    for item in inner: os.unlink(item, dir_fd=inner_fd)
+                finally: os.close(inner_fd)
+                os.rmdir(name, dir_fd=directory)
+            else:
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_dev != container.st_dev:
+                    raise Refused('unsafe-recovery-file')
+                self.removed_any = True
+                os.unlink(name, dir_fd=directory)
+            return {'name': name, 'result': 'removed'}
+        except FileNotFoundError:
+            return {'name': name, 'result': 'missing'}
+        except Refused as error:
+            return {'name': name, 'result': 'refused', 'code': error.code}
+        except OSError as error:
+            return {'name': name, 'result': 'refused',
+                'code': ('rmdir-failed-' if kind == 'edit-directory' else 'unlink-failed-') + str(error.errno)}
 
 def transaction(request, files):
     published = False
     try:
+        if request['action'] == 'list-recovery':
+            entries, truncated = files.list_recovery()
+            return {'status': 'listed', 'entries': entries, 'truncated': truncated}
+        if request['action'] == 'cleanup-recovery':
+            return {'status': 'cleaned', 'items': files.cleanup_recovery(request.get('names'))}
         original = files.snapshot()
         if request['action'] == 'inspect': return {'status': 'inspected', 'snapshot': public_snapshot(original)}
         if request['action'] == 'inspect-backup': return {'status': 'inspected', 'snapshot': public_snapshot(files.snapshot(True))}
@@ -198,7 +283,7 @@ def transaction(request, files):
             'beforeSha256': displaced['sha256'], 'beforeMetadataDigest': displaced['metadataDigest'],
             'afterSha256': current['sha256'], 'afterMetadataDigest': current['metadataDigest']}}
     except Exception as error:
-        published = published or getattr(files, 'exchanged', False)
+        published = published or getattr(files, 'exchanged', False) or getattr(files, 'removed_any', False)
         clean = False
         if not published:
             try: files.cleanup(); clean = True
@@ -221,7 +306,7 @@ def main():
         if request.get('nonce') != nonce or request.get('version') != 1: raise Refused('invalid-binding')
         checked_uuid(request['transactionId'])
         if request.get('backupTransactionId'): checked_uuid(request['backupTransactionId'])
-        if request.get('action') not in ('inspect', 'inspect-backup', 'apply', 'restore'): raise Refused('invalid-action')
+        if request.get('action') not in ('inspect', 'inspect-backup', 'apply', 'restore', 'list-recovery', 'cleanup-recovery'): raise Refused('invalid-action')
         result = transaction(request, LinuxFiles(request))
         print(json.dumps({'nonce': nonce, **result}, ensure_ascii=True, separators=(',', ':')), flush=True)
     except Exception as error:
