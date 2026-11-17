@@ -8,8 +8,8 @@
 
 完整简表见 [当前整改进度总览](REPAIR_STATUS_OVERVIEW.md)。本账为详细证据来源，当前批次与基准以最新记录及Git为准。
 
-- 原42父项完整保留：**4已完成、23已实现待验收、6进行中、6待开始、3延期转新版（F05/G01/G02）**；延期未完成，但不计旧版剩余或完成。
-- **旧版统计范围39项：已完成或已实现27项，仍需推进12项（6进行中、6待开始）**。严格最终验收仍有23项待验收加12项推进，共35项未收口；不把待验收冒充最终完成。
+- 原42父项完整保留：**4已完成、24已实现待验收、7进行中、4待开始、3延期转新版（F05/G01/G02）**；延期未完成，但不计旧版剩余或完成。
+- **旧版统计范围39项：已完成或已实现28项，仍需推进11项（7进行中、4待开始）**。严格最终验收仍有24项待验收加11项推进，共35项未收口；不把待验收冒充最终完成。
 - 用户已确认NV01–NV06所列旧路线/交互子项暂不做，转新版承接，范围与13项剩余表见[当前总览](REPAIR_STATUS_OVERVIEW.md)。A06/A07等部分移交的父项仍按其旧版保留范围计数；U06整包延期，其他11个UI包按保留范围跟进，UI不另计父项。
 - C02按用户选择先安全封口：SFTP不能核验ACL/xattr时拒绝覆盖已有文件，新建只用非覆盖rename，删除副本仅承诺正文。禁止策略已实现、待验收；不等于支持元数据保持或真实平台已验收。
 
@@ -40,7 +40,7 @@
 ## 下一轮起点（交接）
 
 - 当前HEAD业务基准及已保存能力以Git为准；本轮有设计和统计文档修改，工作区以`git status`为准，保留未跟踪`nul`与无关文件，不据历史“应干净”描述重置。
-- 当前用户确认按[旧版12项清单](REPAIR_STATUS_OVERVIEW.md#旧版仍需推进总表12项)推进：A05–A07、D01–D02、F03/F06、H01–H05；A06/A07等只做保留的安全范围，NV01–NV06承接子项暂停旧版实施。F05/G01/G02/U06不排入旧版后续开发；U05/U07只做保留部分。A05–A07前三批已有局部证据、C03/C05已有事务闭环，不能重复从零建设或把历史子包当父项完成。
+- 当前用户确认按[旧版11项清单](REPAIR_STATUS_OVERVIEW.md#旧版仍需推进总表11项)推进：A05–A07、D02、F03/F06、H01–H05；A06/A07等只做保留的安全范围，NV01–NV06承接子项暂停旧版实施。F05/G01/G02/U06不排入旧版后续开发；U05/U07只做保留部分。A05–A07前三批已有局部证据、C03/C05已有事务闭环、D01已实现待验收，不能重复从零建设或把历史子包当父项完成。
 - 最新用户要求：各批只做改动相关局部测试、类型/语法检查和构建运行验证；全量及最终验收留到全部整改完成后，每批完成后只做一次中文本地Git提交，不自动推送。
 - 未完成边界：真实 SSH/VM 业务链（H03，需用户确认主机指纹）、Linux/macOS 与安装包验收、付费 6 次/1024 tokens 硬限制仍未实现（禁止实际模型付费调用）。
 
@@ -70,8 +70,8 @@
 | C05 | 优先补齐远端 read/diff/条件写入、服务日志与配置检查等高价值能力；复用 manage_service 的预检→动作→观察方向，统一派发/权限/结果/下一步反馈。 | 3 工具/文件/环境 | 已实现待验收 | 受控提交、`check_remote_edit`固定nginx -t/sshd -t/systemd-analyze verify和显式恢复已接入同一反馈/审核/审计路径，配置检查明确只证明语法、不重启服务也不证明健康；原生Pi发现→apply→新审核restore闭环，恢复与语法检查均经独立审核。仍待真实主机与跨平台验收，且不能把预览/提交/恢复任一子包当作父项完成。本批随C03补齐恢复材料枚举/清理，list/cleanup与read/prepare/apply/restore/check共用派发/审核/审计/反馈路径，无独立新开发点；C05转已实现待验收 |  已有read与条件新建/服务阶段能力；本子批增加可发现的prepare_remote_edit只读差异工具，经过既有持久确认读取审计。原生Pi/生产TaskRunner＋本地模型/读取替身完成发现→预览→自然回答，只有read-file审计，零执行终端、零审批、零变更派发。纠正工具及提示词中已有文件可覆盖/临时提权安装的过期指引，promptVersion升2026-11.2。现不提供apply_remote_edit或editId，不能声称已完成受控提交；root事务、配置校验与完整高价值能力闭环仍待。 |
 | C06 | 区分健康运行的已知后台任务、未知结果和资源冲突。仅在后端能证明影响边界时细化资源锁。 | 2 执行与审核 | 已实现待验收 | 【范围调整】后台存活、风险锁与精确停止保留；自主核验/续跑交互移交NV03。  主机写锁阻塞原因按后端事实分类：仍存活的后台任务报“仍在后台运行，退出前结果未知”，仅有未决结果时报“未决远端结果”，两者同时存在时分别列出；标记 background 本身绝不释放写锁，只读诊断在两种情况下都继续可用。绑定的停止请求（processControl）不再因同主机运行中任务被预检拒绝，否则运行中的操作无法停止。Tests/application/host-serial-executor.test.ts 11项、后台任务相关5项与预检 5项通过；真实后台进程与停止链待 H03 |
 | C07 | 拆分空闲释放、显式人工接管及单任务/终端/会话停止；避免暂停自动开启人工 Shell、遗留条目耗尽池；用户局部控制复用精确 job 控制。 | 4 终端与生命周期 | 已实现待验收 | 暂停/完成不再隐式把 Agent 终端转成人工 Shell（不再逐次 releaseIdle/takeOver），通道保持 Agent 空闲以便复用；只有用户实际输入或显式接管才转移所有权。终端级 Ctrl+C 先走精确 job 控制（仅中断该终端当前命令），无对应命令且整轮运行中才回落到整轮停止。关闭/停止仍以 unknown + handover 结算，不冒充进程退出。新增 Tests/desktop/worker/task-runner-terminals.test.ts 2项，相关 49项与工程检查通过；整会话停止 UI 与真实 PTY 待 H03 |
-| D01 | 保留现有探测→缓存→模型投影链，统一探测与实际执行的 PATH、身份、目录；架构保留原始值并归一，区分内核、发行版用户空间和按需确认的 ABI。 | 3 工具/文件/环境 | 待开始 | 未验收 |
-| D02 | 环境事实分层：基础系统/架构、执行上下文、按需业务能力；拆开程序存在、运行就绪、当前身份可调用与近期状态，并按事实类型刷新/失效。 | 3 工具/文件/环境 | 待开始 | 未验收 |
+| D01 | 保留现有探测→缓存→模型投影链，统一探测与实际执行的 PATH、身份、目录；架构保留原始值并归一，区分内核、发行版用户空间和按需确认的 ABI。 | 3 工具/文件/环境 | 已实现待验收 | 探测与命令执行统一单一固定`EXECUTION_PATH`：Python与shell探测的tools均按执行PATH解析（`shutil.which(name, path=…)`与`PATH=… command -v`），`remote-command-program`引用同一常量；环境数据`directory`→`loginDirectory`、`tools`→`toolPresence`重命名，新增`path`（解析范围）与`architectureFamily`（固定别名表归一，未知保持null），内核架构保留raw、发行版用户空间ABI按需确认不预探测；`inspect_host_environment`描述明确presence≠run-ready、登录目录≠操作cwd、root另有事实。Tests/adapters/host-environment-probe.test.ts、Tests/core/host-environment.test.ts、Tests/application/host-environment-registry.test.ts、Tests/desktop/worker/server-environment.test.ts及workspace-context等6文件35项（含PATH一致性断言与归一反例）、repair-coverage 5项、类型/三入口构建及内嵌Python`py_compile`通过。真实主机探测/执行一致性与用户空间ABI样本待验收 |
+| D02 | 环境事实分层：基础系统/架构、执行上下文、按需业务能力；拆开程序存在、运行就绪、当前身份可调用与近期状态，并按事实类型刷新/失效。 | 3 工具/文件/环境 | 进行中 | 【本批切片】字段语义分层已落地：`toolPresence`（固定PATH存在性，presence≠run-ready）、`loginDirectory`（登录起点，不冒充操作cwd）、`path`（解析范围）、`architectureFamily`（归一别名）与既有source/loginAs/connectionId/observedAt新鲜度组合；shell探测逐个报告工具、未知不写false，未知架构归一为null。按事实类型刷新/失效与daemon就绪回填未实现，现保留单一5秒刷新去重与连接代次失效，后续按需最小化补齐、不预建万能环境状态。验证同D01批；刷新分层与真实回填链仍待 |
 | D03 | 基础系统/架构探测不再把 Python 作为唯一引导依赖；短预算先提供基础事实，扩展能力按需探测；区分 SSH 已连接、元数据就绪和执行通道就绪，保留有界失败原因。 | 3 工具与权限 | 已实现待验收 | 新增 POSIX shell 降级探测（不安装、不提权、不 source）：Python 不可用时仍取得 os/内核/架构/身份/目录/工具可用性，并标记 source=shell；观察新增 readiness（ssh/metadata/execution 三分），失败原因细分为 python-missing/timeout/unsupported/unavailable/invalid/too-large/cancelled 且不含服务器原文。adapters/application 共 36 项通过（含 5 项新增反例），工程检查通过；真实无 Python 主机与超时链待 H03。 |
 | E01 | 对话删除采用数据库原子处理和跨会话文件目录的可恢复阶段；内存跟随已提交状态。 | 1 安全与数据 | 已完成 | Tests/desktop/main/conversation-deletion.test.ts、conversation-cleanup.test.ts、conversation-ipc.test.ts及structured-message-ipc.test.ts；Tests/smoke/conversation-deletion-smoke.mjs真实Windows桌面删除/失败/重启恢复通过 |
 | E02 | 为原终端引用、发送副本、草稿和共享正文建立归属及回收策略。 | 1 安全与数据 | 已实现待验收 | 前两批`56b9280`/`8428788`完成副本归属与独占启动恢复；第三批schema14原件/草稿lease、接收方撤权、撤销历史、跨草稿复制、共享延迟回收已接入。Tests/adapters/reference-drafts.test.ts、Tests/desktop/main/reference-draft-ipc.test.ts及Tests/smoke/reference-recovery-smoke.mjs等通过；最终252文件2338项及隐藏Windows桌面/剪贴板/UI通过，25项条件跳过。真实SSH终端捕获链仍待H03；旧无来源正文保守保留，不猜测回收，捕获字节预算另属E04 |
@@ -122,6 +122,8 @@
 ## 最新记录
 
 以下保留历史事实和当时统计；当前范围与数量以前述总览为准，不用历史的“23完成/19剩余”覆盖本轮移交结果。
+
+- 环境事实切片（D01/D02，一次中文本地提交，不推送）：探测与命令执行统一单一固定`EXECUTION_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'`（adapters导出常量，`remote-command-program.ts`与探测共用）：此前探测按登录PATH解析`which`而执行环境用固定PATH，“探测存在”不等于“执行可用”。Python探测改`shutil.which(name, path=EXECUTION_PATH)`，shell降级探测改`PATH='<fixed>' command -v "$tool"`。环境数据字段分层重命名：`directory`→`loginDirectory`（登录起点目录，不冒充当前操作cwd）、`tools`→`toolPresence`（固定PATH上该登录身份的存在性，presence≠run-ready，docker存在≠daemon可用）；新增`path`（存在性解析范围，与执行一致）与`architectureFamily`（core固定别名表归一：amd64→x86_64、arm64→aarch64等，未知保持null不猜），内核架构保留raw值、发行版用户空间ABI按需确认不预探测。`inspect_host_environment`工具描述同步：登录元数据≠root能力、root另有事实、缓存至多5秒。D02按事实类型刷新/失效与daemon就绪回填明确留待（现保留单一5秒刷新去重与连接代次失效，不预建万能环境状态）。验证：Tests/adapters/host-environment-probe.test.ts（含新增PATH一致性断言）、Tests/core/host-environment.test.ts（归一别名/未知反例，新增2项）、Tests/application/host-environment-registry.test.ts、Tests/desktop/worker/server-environment.test.ts与workspace-context两文件共6文件35项、repair-coverage 5项、全仓类型检查、三入口生产构建及内嵌Python提取`py_compile`语法校验通过。D01转已实现待验收（待验收23→24、待开始6→4），D02转进行中（待开始→进行中）；真实主机探测/执行一致性、用户空间ABI样本与刷新分层留H03及最终收口。
 
 - 正式回归切片（H02，一次中文本地提交，不推送）：修复自`9047660`起失败的task-runner-background三测试（“正常回答+存活后台授权”、“stop决定未确认不派发”、“模型暂停不撤销已启动操作”）。根因：任务完成/暂停时`setStatus`经`reviews.invalidate('canceled')`撤销审核代次，而SafetyGate把`!reviewSignal.aborted`并入`stillCurrent`同一闭包并作为执行器`isAuthorized`下发，已派发后台操作的通道授权随任务收口被连带撤销，与“存活后台保留写锁、暂停不假装进程退出”的设计矛盾（后台租约`hasOperationLease`本就为跨收口存续而设，`isOperationActive`第二分支形同虚设）。修复：拆分`dispatchCurrent`（操作绑定域：终端归属与代次、`isOperationActive`、策略/对话/审核者修订、指纹、操作信号未中止）与`stillCurrent`（绑定域上追加审核代次未撤销）；派发前门禁（AI审核、人工审批、脚本复核、派发前后复核）继续要求完整`stillCurrent`，执行器`isAuthorized`改用`dispatchCurrent`。逐点核对`reviews.invalidate`全部调用位：stop/pause伴随操作信号中止（agent.abort传播至后台controller，绑定域signal子句捕获）、策略/对话/审核者修订由绑定域自身修订子句捕获、任务完成收口即本缺陷场景；`9047660`的审核取消测试全部只钉派发前行为（executor未调用），不受影响；background三测试中的stop路径经interrupt对controller的abort仍由signal子句正确撤销授权。验证：background三测试5项恢复通过，Tests/application与审核取消链29文件210项、Tests/desktop全量169文件1197项零失败（历史负载抖动的input-queue两项本次负载下通过，未复现不做猜测性加固，继续观察归H02）、全仓类型检查与三入口生产构建通过。H02整体进行中不变。
 

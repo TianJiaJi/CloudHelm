@@ -1,5 +1,9 @@
 import type { Client, ClientChannel } from 'ssh2';
-import { redactOutput, type HostEnvironmentData, type HostProbeFailure } from '@cloudhelm/core';
+import { architectureFamilyOf, redactOutput, type HostEnvironmentData, type HostProbeFailure } from '@cloudhelm/core';
+
+/** The one fixed PATH used by command execution and presence resolution alike.
+ * Probing against any other PATH makes "present" stop meaning "runnable". */
+export const EXECUTION_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 /** Bounded cause without server text: stderr may carry private output. */
 export class HostEnvironmentProbeError extends Error {
@@ -32,7 +36,7 @@ try:
 except OSError:
     directory = None
 tools = ("sh", "bash", "python3", "curl", "wget", "apt-get", "dnf", "yum", "apk", "pacman", "systemctl", "docker", "git", "tar")
-print(json.dumps(dict(os=platform.system(), distribution=release.get("ID"), version=release.get("VERSION_ID"), architecture=platform.machine(), kernel=platform.release(), username=username, uid=os.getuid(), directory=directory, tools={name: shutil.which(name) is not None for name in tools})))
+print(json.dumps(dict(os=platform.system(), distribution=release.get("ID"), version=release.get("VERSION_ID"), architecture=platform.machine(), kernel=platform.release(), username=username, uid=os.getuid(), directory=directory, tools={name: shutil.which(name, path='${EXECUTION_PATH}') is not None for name in tools})))
 `;
 export const HOST_ENVIRONMENT_PROBE = `python3 -I -S -B -c '${program.replaceAll("'", "'\\''")}'`;
 const toolNames = ['sh', 'bash', 'python3', 'curl', 'wget', 'apt-get', 'dnf', 'yum', 'apk', 'pacman', 'systemctl', 'docker', 'git', 'tar'];
@@ -46,13 +50,15 @@ export function parseHostEnvironment(output: string, source: HostEnvironmentData
     return typeof item === 'string' && item.length > 0 && item.length <= max
       && !/[\u0000-\u001f\u007f]/u.test(item) && redactOutput(item) === item ? item : null;
   };
-  const directory = text('directory', 4096);
-  const tools = raw.tools && typeof raw.tools === 'object' && !Array.isArray(raw.tools) ? raw.tools as Record<string, unknown> : {};
+  const loginDirectory = text('directory', 4096);
+  const toolRaw = raw.tools && typeof raw.tools === 'object' && !Array.isArray(raw.tools) ? raw.tools as Record<string, unknown> : {};
+  const architecture = text('architecture');
   return { os: text('os'), distribution: text('distribution'), version: text('version'),
-    architecture: text('architecture'), kernel: text('kernel'), username: text('username'),
+    architecture, architectureFamily: architectureFamilyOf(architecture), kernel: text('kernel'), username: text('username'),
     uid: typeof raw.uid === 'number' && Number.isSafeInteger(raw.uid) && raw.uid >= 0 ? raw.uid : null,
-    directory: directory?.startsWith('/') ? directory : null,
-    tools: Object.fromEntries(toolNames.filter((name) => typeof tools[name] === 'boolean').map((name) => [name, tools[name] as boolean])), source };
+    loginDirectory: loginDirectory?.startsWith('/') ? loginDirectory : null,
+    path: EXECUTION_PATH,
+    toolPresence: Object.fromEntries(toolNames.filter((name) => typeof toolRaw[name] === 'boolean').map((name) => [name, toolRaw[name] as boolean])), source };
 }
 
 /** POSIX shell facts only: no Python, no sudo, no sourcing of untrusted files,
@@ -73,7 +79,7 @@ if [ -f /etc/os-release ] && [ -r /etc/os-release ]; then
   done < /etc/os-release
 fi
 for tool in ${toolNames.join(' ')}; do
-  if command -v "$tool" >/dev/null 2>&1; then echo "tool.$tool=1"; else echo "tool.$tool=0"; fi
+  if PATH='${EXECUTION_PATH}' command -v "$tool" >/dev/null 2>&1; then echo "tool.$tool=1"; else echo "tool.$tool=0"; fi
 done`;
 
 function safeField(item: string | undefined, max = 128): string | null {
@@ -93,19 +99,21 @@ export function parseShellHostEnvironment(output: string): HostEnvironmentData {
     if (!/^[a-z][a-z0-9.-]{0,32}$/u.test(key) || value.length > 4096) continue;
     fields.set(key, value);
   }
-  const directory = safeField(fields.get('directory'), 4096);
+  const loginDirectory = safeField(fields.get('directory'), 4096);
   const uidText = fields.get('uid');
-  const tools: Record<string, boolean> = {};
+  const toolPresence: Record<string, boolean> = {};
   for (const name of toolNames) {
     const value = fields.get(`tool.${name}`);
-    if (value === '1' || value === '0') tools[name] = value === '1';
+    if (value === '1' || value === '0') toolPresence[name] = value === '1';
   }
+  const architecture = safeField(fields.get('architecture'));
   return { os: safeField(fields.get('os')), distribution: safeField(fields.get('distribution')),
-    version: safeField(fields.get('version')), architecture: safeField(fields.get('architecture')),
+    version: safeField(fields.get('version')), architecture, architectureFamily: architectureFamilyOf(architecture),
     kernel: safeField(fields.get('kernel')), username: safeField(fields.get('username')),
     // `id -u` is the real observed uid; anything else is explicitly unknown.
     uid: uidText && /^\d{1,10}$/u.test(uidText) ? Number(uidText) : null,
-    directory: directory?.startsWith('/') ? directory : null, tools, source: 'shell' };
+    loginDirectory: loginDirectory?.startsWith('/') ? loginDirectory : null,
+    path: EXECUTION_PATH, toolPresence, source: 'shell' };
 }
 
 /** Deadline starts before SSH channel allocation; late channels are closed.

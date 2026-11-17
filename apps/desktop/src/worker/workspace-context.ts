@@ -108,7 +108,7 @@ export function createWorkspaceContextTools(taskId: string, hosts: RuntimeHost[]
   const environment: BusinessTool<Static<typeof parameters>> = {
     access: 'query', available: () => hosts.length > 0,
     name: 'inspect_host_environment', label: 'Observe connected host environment', replay: 'never', parameters,
-    description: 'Bounded read-only OS/version/architecture/login/directory/tool-presence observation on an already connected host. No connection, privilege escalation or secret environment reads. Unknown on failure; cache may be up to five seconds old. Login metadata is not root capability.',
+    description: 'Bounded read-only OS/version/architecture/login-directory/tool-presence observation on an already connected host, resolved against the same fixed PATH that command execution uses. No connection, privilege escalation or secret environment reads. toolPresence is existence on that PATH for the probed identity only: docker present does not mean the daemon is usable and systemctl present does not mean systemd is operable; verify by running the actual command. loginDirectory is the login start directory, not the current operation cwd. Unknown on failure; cache may be up to five seconds old. Login metadata is not root capability and root execution has separate facts.',
     execute: async (_id, { hostId }, signal) => {
       const host = hostFor(hostId); signal?.throwIfAborted();
       const observation = access ? await access.refresh(host.id, host.username, signal) : hostEnvironmentSnapshot(host);

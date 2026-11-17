@@ -1,8 +1,10 @@
 import { expect, it, vi } from 'vitest';
 import { HostEnvironmentRegistry } from '@cloudhelm/application';
 import type { HostEnvironmentData } from '@cloudhelm/core';
-const data: HostEnvironmentData = { os: 'Linux', distribution: 'debian', version: '12', architecture: 'aarch64', kernel: '6.1',
-  username: 'fixture', uid: 1000, directory: '/home/fixture', tools: { python3: true }, source: 'python' };
+const data: HostEnvironmentData = { os: 'Linux', distribution: 'debian', version: '12', architecture: 'aarch64',
+  architectureFamily: 'aarch64', kernel: '6.1',
+  username: 'fixture', uid: 1000, loginDirectory: '/home/fixture',
+  path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: { python3: true }, source: 'python' };
 it('does not probe or connect for snapshots, disconnected hosts or recovery', async () => {
   const read = vi.fn(async () => data);
   const registry = new HostEnvironmentRegistry({ connectionId: () => null, read });
@@ -15,7 +17,7 @@ it('coalesces concurrent reads, bounds refresh frequency and returns detached va
   const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read }, () => now);
   const [first, second] = await Promise.all([registry.refresh('host', 'fixture'), registry.refresh('host', 'fixture')]);
   expect(first).toEqual(second); expect(read).toHaveBeenCalledOnce();
-  first.data!.tools.python3 = false; expect(registry.snapshot('host', 'fixture').data?.tools.python3).toBe(true);
+  first.data!.toolPresence.python3 = false; expect(registry.snapshot('host', 'fixture').data?.toolPresence.python3).toBe(true);
   await registry.refresh('host', 'fixture'); expect(read).toHaveBeenCalledOnce();
   now += 5000; await registry.refresh('host', 'fixture'); expect(read).toHaveBeenCalledTimes(2);
 });

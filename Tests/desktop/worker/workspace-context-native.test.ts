@@ -34,7 +34,8 @@ it('recovers an older operation through actual Pi tool calls without probing on 
     runAs: 'fixture', readOnly: true, createdAt: 2 + i }))];
   const metadata: HostEnvironmentObservation = { version: 1, hostId: 'host', loginAs: 'fixture', connectionId: 'new-worker:1',
     status: 'observed', observedAt: Date.now(), data: { os: 'fixture-linux', distribution: 'fixture-os', version: '1',
-      kernel: '1', architecture: 'aarch64', username: 'fixture', uid: 1000, directory: '/home/fixture', tools: {}, source: 'python' },
+      kernel: '1', architecture: 'aarch64', architectureFamily: 'aarch64', username: 'fixture', uid: 1000,
+      loginDirectory: '/home/fixture', path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: {}, source: 'python' },
     readiness: { ssh: 'connected', metadata: 'ready', execution: 'ready' } };
   const refresh = vi.fn(async () => { throw new Error('Restore/context/history must not probe'); });
   const terminal = new TerminalManager({ data: () => {}, state: () => {} });

@@ -6,7 +6,8 @@ import { WorkerServer } from '../../../apps/desktop/src/worker/server.js';
 const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', port: 22, username: 'fixture', auth: 'password',
   status: 'disconnected', defaultMode: 'ask', protectedPaths: [], policyRevision: 1 };
 const data: HostEnvironmentData = { os: 'Linux', distribution: 'debian', version: '12', kernel: '6', architecture: 'x86_64',
-  uid: 1000, username: 'fixture', directory: '/home/fixture', tools: {}, source: 'python' };
+  architectureFamily: 'x86_64', uid: 1000, username: 'fixture', loginDirectory: '/home/fixture',
+  path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: {}, source: 'python' };
 afterEach(() => vi.restoreAllMocks());
 it('collects login metadata after a successful explicit connection, never before authentication', async () => {
   let connected = false;

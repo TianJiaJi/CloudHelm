@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
 import type { Client, ClientChannel } from 'ssh2';
 import { afterEach, expect, it, vi } from 'vitest';
-import { HOST_ENVIRONMENT_PROBE, HOST_ENVIRONMENT_SHELL_PROBE, HostEnvironmentProbeError, parseHostEnvironment, probeHostEnvironment, readHostEnvironment } from '../../packages/adapters/src/host-environment-probe.js';
+import { EXECUTION_PATH, HOST_ENVIRONMENT_PROBE, HOST_ENVIRONMENT_SHELL_PROBE, HostEnvironmentProbeError, parseHostEnvironment, probeHostEnvironment, readHostEnvironment } from '../../packages/adapters/src/host-environment-probe.js';
+import { remoteCommandProgram } from '../../packages/adapters/src/remote-command-program.js';
 
 const metadata = { os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64', kernel: '6.1',
   username: 'fixture', uid: 1000, directory: '/home/fixture', tools: { python3: true, docker: false } };
@@ -20,10 +21,20 @@ afterEach(() => { vi.useRealTimers(); });
 it('projects only bounded public fields, without arbitrary environment, cookies, tokens or error output', () => {
   const facts = parseHostEnvironment(JSON.stringify({ ...metadata, secret: 'private-password', environment: { API_KEY: 'secret-key' },
     tools: { ...metadata.tools, secretTool: true }, username: 'password=fixture-secret', kernel: 'bad\nvalue' }));
-  expect(facts).toMatchObject({ os: 'Linux', uid: 1000, username: null, kernel: null, tools: metadata.tools });
+  expect(facts).toMatchObject({ os: 'Linux', uid: 1000, username: null, kernel: null, toolPresence: metadata.tools,
+    architectureFamily: 'x86_64', path: EXECUTION_PATH });
   expect(JSON.stringify(facts)).not.toMatch(/private-password|secret-key|secretTool|fixture-secret/u);
-  expect(parseHostEnvironment(JSON.stringify({ ...metadata, uid: -1, directory: 'relative' }))).toMatchObject({ uid: null, directory: null });
+  expect(parseHostEnvironment(JSON.stringify({ ...metadata, uid: -1, directory: 'relative' }))).toMatchObject({ uid: null, loginDirectory: null });
   expect(() => parseHostEnvironment('x'.repeat(16385))).toThrow('limit');
+});
+it('resolves tool presence against the same fixed PATH that command execution uses', () => {
+  expect(EXECUTION_PATH).toBe('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+  expect(HOST_ENVIRONMENT_PROBE).toContain('shutil.which(name, path=');
+  expect(HOST_ENVIRONMENT_PROBE).toContain(EXECUTION_PATH);
+  expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain('PATH=');
+  expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain(EXECUTION_PATH);
+  expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain('command -v "$tool"');
+  expect(remoteCommandProgram).toContain(`PATH='${EXECUTION_PATH}'`);
 });
 it('uses a fixed, isolated Python probe with no sudo, source or whole-environment access', () => {
   expect(HOST_ENVIRONMENT_PROBE).toMatch(/^python3 -I -S -B -c /u);
@@ -40,7 +51,9 @@ it('collects split UTF-8 only after a confirmed zero exit, ignoring stderr', asy
   for (const byte of bytes) stream.emit('data', Buffer.from([byte]));
   stream.stderr.emit('data', Buffer.from('password=private-stderr'));
   stream.emit('exit', 0); stream.emit('close');
-  expect(await result).toMatchObject({ ...metadata, directory: '/home/测试' });
+  expect(await result).toMatchObject({ os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64',
+    architectureFamily: 'x86_64', kernel: '6.1', username: 'fixture', uid: 1000,
+    loginDirectory: '/home/测试', path: EXECUTION_PATH, toolPresence: { python3: true, docker: false } });
 });
 it('starts the deadline before channel allocation and closes a late channel', async () => {
   vi.useFakeTimers();
@@ -93,10 +106,11 @@ it('works without Python by degrading to a POSIX shell probe instead of failing'
   shell.emit('data', Buffer.from(['os=Linux', 'architecture=x86_64', 'kernel=6.1', 'username=fixture', 'uid=1000',
     'directory=/home/fixture', 'distribution=debian', 'version=12', 'tool.python3=0', 'tool.systemctl=1'].join('\n')));
   shell.emit('exit', 0); shell.emit('close');
-  expect(await result).toEqual({ os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64', kernel: '6.1',
-    username: 'fixture', uid: 1000, directory: '/home/fixture',
+  expect(await result).toEqual({ os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64',
+    architectureFamily: 'x86_64', kernel: '6.1',
+    username: 'fixture', uid: 1000, loginDirectory: '/home/fixture', path: EXECUTION_PATH,
     // Only explicitly reported tools appear; python3=0 is reported as false, not omitted.
-    tools: { python3: false, systemctl: true }, source: 'shell' });
+    toolPresence: { python3: false, systemctl: true }, source: 'shell' });
 });
 
 it('reports why basic facts failed, never one undifferentiated reason', async () => {

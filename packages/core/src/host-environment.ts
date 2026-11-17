@@ -1,12 +1,38 @@
 /** A time-scoped observation, never a privilege grant or permanent host truth. */
 export interface HostEnvironmentData {
   os: string | null; distribution: string | null; version: string | null;
+  /** Raw kernel architecture (uname -m). Userspace/distribution ABI is a separate
+   * on-demand fact and is never inferred from this value. */
   architecture: string | null; kernel: string | null;
-  username: string | null; uid: number | null; directory: string | null;
-  tools: Record<string, boolean>;
+  /** Normalized family of `architecture` via a fixed alias table; unknown stays unknown. */
+  architectureFamily: string | null;
+  username: string | null; uid: number | null;
+  /** Login shell start directory. Not the current operation cwd. */
+  loginDirectory: string | null;
+  /** Fixed PATH the presence facts were resolved against; identical to command execution. */
+  path: string | null;
+  /** Executable presence under `path` for the probed identity. Presence is not
+   * run-readiness: docker present does not mean the daemon is usable. */
+  toolPresence: Record<string, boolean>;
   /** Which bootstrap produced these facts. A shell fallback is real evidence,
    * not a guess: it simply observes fewer fields than the Python probe. */
   source: 'python' | 'shell';
+}
+
+const ARCHITECTURE_FAMILIES = new Map<string, string>([
+  ['x86_64', 'x86_64'], ['amd64', 'x86_64'],
+  ['aarch64', 'aarch64'], ['arm64', 'aarch64'],
+  ['armv8l', 'arm32'], ['armv7l', 'arm32'], ['armv6l', 'arm32'], ['armv5tel', 'arm32'],
+  ['armhf', 'arm32'], ['arm', 'arm32'],
+  ['i386', 'x86'], ['i486', 'x86'], ['i586', 'x86'], ['i686', 'x86'], ['x86', 'x86'],
+  ['riscv64', 'riscv64'], ['ppc64le', 'ppc64le'], ['s390x', 's390x'],
+  ['loongarch64', 'loongarch64'], ['loong64', 'loongarch64'],
+  ['mips64el', 'mips64el'], ['mipsel', 'mipsel'],
+]);
+
+/** Fixed alias table only. Unknown raw values map to null instead of being guessed. */
+export function architectureFamilyOf(raw: string | null): string | null {
+  return raw === null ? null : ARCHITECTURE_FAMILIES.get(raw) ?? null;
 }
 
 /** Why basic facts are unavailable. Distinct causes produce distinct decisions;
