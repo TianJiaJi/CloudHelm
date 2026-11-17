@@ -86,7 +86,7 @@
 | G01 | 沿用已有后端 facts，清晰区分执行结果、当前观察、业务目标判断、模型解释及风险接受。 | 新版NV05 | 延期转新版 | 用户确认随新版任务结果与交接包统一实施，不计旧版剩余；现有后端事实、证据与风险区分继续保留，未验收。 |
 | G02 | 以正常回答/结论为主，证据按需展开；对真实异常使用明确提示，核对用户黄色警告的具体来源后再改。 | 新版NV05 | 延期转新版 | 用户确认随新版结果/证据展示统一实施，不计旧版剩余；现有必要风险提示不隐藏，未验收。 |
 | H01 | 为共享事实、决策与投影建立明确领域契约及跨模块不变量，沿现有 core/application/adapters/contracts 分层演进。 | 0 基线/贯穿 | 进行中 | 【旧版范围】现用安全事实契约继续；新版运行/诊断状态契约与旧方案重复定版移交NV06。  未验收 |
-| H02 | 将缓存审计复现转成正式 Tests 回归；修复时断言目标行为，增加故障注入、任意分块和边界组合测试。 | 0 基线/贯穿 | 进行中 | Tests/scripts/pre-commit-index-isolation.test.mjs、version-hook-commit.test.mjs：`fd0dfea`；版本钩子索引隔离子项已完成：48项相关回归、真实普通/部分提交、237文件2262项全量及工程检查通过；既有审计反例继续随各包转为正式回归，H02整体继续进行 |
+| H02 | 将缓存审计复现转成正式 Tests 回归；修复时断言目标行为，增加故障注入、任意分块和边界组合测试。 | 0 基线/贯穿 | 进行中 | Tests/scripts/pre-commit-index-isolation.test.mjs、version-hook-commit.test.mjs：`fd0dfea`；版本钩子索引隔离子项已完成：48项相关回归、真实普通/部分提交、237文件2262项全量及工程检查通过；background三测试授权撤销已修复：`stillCurrent`拆出`dispatchCurrent`操作绑定域供执行器`isAuthorized`，审核代次撤销仅约束派发前门禁，任务完成/暂停不再连带撤销已派发后台操作的通道授权，三测试5项恢复、Tests/desktop全量169文件1197项通过（input-queue两项负载下通过，历史抖动未复现、继续观察）；既有审计反例继续随各包转为正式回归，H02整体继续进行 |
 | H03 | 在隔离主机上验收三条完整业务链：诊断；配置修改→校验→服务重启；后台启动→观察→单任务停止。 | 6 真实验收 | 进行中 | 【旧版范围】真实SSH/权限/断线/停止与跨平台验收保留；被替代模式3专属场景移交NV06。  Windows隔离桌面专项已过；授权VM实际TCP/SSH握手1次，停在未知主机指纹核验；未认证、未执行远端命令、0付费调用。VM及跨平台矩阵仍未验收 |
 | H04 | 新旧策略影子判定、分批切换、可回退；旧持久记录使用版本化迁移和可解释的保守恢复。 | 0–7 迁移/收口 | 待开始 | 【旧版范围】必要版本化迁移、回退及保守恢复保留；新版策略/状态迁移随NV06实施。  未验收 |
 | H05 | 增加预检/审核/等待/派发/恢复的耗时、质量与费用指标；区分模型能力上限和单次输出/任务预算，实际出站限制与额外审核/重试同计。 | 0–7 指标/预算 | 待开始 | 未验收 |
@@ -122,6 +122,8 @@
 ## 最新记录
 
 以下保留历史事实和当时统计；当前范围与数量以前述总览为准，不用历史的“23完成/19剩余”覆盖本轮移交结果。
+
+- 正式回归切片（H02，一次中文本地提交，不推送）：修复自`9047660`起失败的task-runner-background三测试（“正常回答+存活后台授权”、“stop决定未确认不派发”、“模型暂停不撤销已启动操作”）。根因：任务完成/暂停时`setStatus`经`reviews.invalidate('canceled')`撤销审核代次，而SafetyGate把`!reviewSignal.aborted`并入`stillCurrent`同一闭包并作为执行器`isAuthorized`下发，已派发后台操作的通道授权随任务收口被连带撤销，与“存活后台保留写锁、暂停不假装进程退出”的设计矛盾（后台租约`hasOperationLease`本就为跨收口存续而设，`isOperationActive`第二分支形同虚设）。修复：拆分`dispatchCurrent`（操作绑定域：终端归属与代次、`isOperationActive`、策略/对话/审核者修订、指纹、操作信号未中止）与`stillCurrent`（绑定域上追加审核代次未撤销）；派发前门禁（AI审核、人工审批、脚本复核、派发前后复核）继续要求完整`stillCurrent`，执行器`isAuthorized`改用`dispatchCurrent`。逐点核对`reviews.invalidate`全部调用位：stop/pause伴随操作信号中止（agent.abort传播至后台controller，绑定域signal子句捕获）、策略/对话/审核者修订由绑定域自身修订子句捕获、任务完成收口即本缺陷场景；`9047660`的审核取消测试全部只钉派发前行为（executor未调用），不受影响；background三测试中的stop路径经interrupt对controller的abort仍由signal子句正确撤销授权。验证：background三测试5项恢复通过，Tests/application与审核取消链29文件210项、Tests/desktop全量169文件1197项零失败（历史负载抖动的input-queue两项本次负载下通过，未复现不做猜测性加固，继续观察归H02）、全仓类型检查与三入口生产构建通过。H02整体进行中不变。
 
 - 重复配置目标关联批（A01收口，一次中文本地提交，不推送）：重复目标配置（address/port/username精确匹配，active优先archived、同类取最新）在新建时由后端显式记录`riskPeerHostId`并入既有记录的风险域，公网HostDraft不可伪造该字段；域走查改为谱系优先（previousHostId先于riskPeerHostId），修订恒沿谱系、编辑不继承也不重算关联，终态记录无任何链接即为稳定根，缺失记录仍以durable id保守锚定，10000深度/环守卫保留；终态与锚点满足HostRiskDomains.bind稳定根校验，peer在首次连接绑定前写入，不可替换约束天然满足，目标变更且无新关联的修订保守留在原域。补齐connect分发缺口：worker侧仅见已连接记录，从未连接的谱系中间记录会被当作缺失锚点导致修订版绕过旧未决锁（host-settings-risk-domain回归复现），connect现在与restore-operations同模式携带主进程全量riskBindings，同值重绑为no-op、调用未携带时保留worker本地回退解析。附带修复批次1遗留回归4项：legacy开关从模块加载时常量改为构造时读取（生产语义不变，vitest forks池按文件隔离进程、测试env注入安全），sudo-context三测试显式启用`CLOUDHELM_LEGACY_ROOT_SESSIONS=1`；恢复材料指引行压缩、任务提示预算上调至9400（C03/C05安全指引的合理代价），PROMPT_VERSION升2026-11.5。验证：全仓类型检查、风险域7文件46项（Tests/core/host-risk-peer.test.ts新增6项、host-settings-risk-domain扩展4项）、Tests/desktop+Tests/application全量对比基线（8失败→4失败，净修复4项；剩余background三测试与input-queue负载抖动均为基线已有，归H01/H02）、三入口生产构建通过。A01转已实现待验收（待验收22→23、进行中7→6）；未知别名不合并为固定边界、不按IP或指纹简单合并，完整链和真实SSH验收留H03及最终收口。
 

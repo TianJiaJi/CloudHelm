@@ -109,7 +109,12 @@ export class SafetyGate {
           }
         }
       }
-      const stillCurrent = () => {
+      /** Binding after dispatch: content, host, terminal, policy version and
+       * identity revisions. The worker review lifetime is deliberately absent:
+       * revoking it ends not-yet-started review work, but a routine revoke on
+       * task completion must not deauthorize an already-started background
+       * process, which keeps its write lock until its exit is observed. */
+      const dispatchCurrent = () => {
         try {
           const current = this.deps.settings(operation.scope.hostId);
           return this.deps.lease.isAgentOwner(operation.scope.terminalId)
@@ -118,9 +123,10 @@ export class SafetyGate {
             && current.revision === operation.scope.policyRevision
             && (operation.scope.conversationRevision === undefined || current.conversationRevision === operation.scope.conversationRevision)
             && (operation.scope.reviewerRevision === undefined || current.reviewerRevision === operation.scope.reviewerRevision)
-            && operationFingerprint(operation) === fingerprint && !signal?.aborted && !reviewSignal?.aborted;
+            && operationFingerprint(operation) === fingerprint && !signal?.aborted;
         } catch { return false; }
       };
+      const stillCurrent = () => dispatchCurrent() && !reviewSignal?.aborted;
       if (manualReview && safety.verdict !== 'deny' && safety.verdict !== 'error') safety = {
         verdict: 'ask', ruleId: 'ai-denial-manual-review', reason: `User requested a one-time review of this exact denied operation；静态依据：${safeReviewBasis(safety.reason)}`
       };
@@ -208,7 +214,7 @@ export class SafetyGate {
         return { decision: safety };
       }
       let result: OperationResult;
-      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), isAuthorized: stillCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
+      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), isAuthorized: dispatchCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       }
