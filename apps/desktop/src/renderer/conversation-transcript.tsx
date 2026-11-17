@@ -74,7 +74,7 @@ export function ConversationTranscript({ snapshot, conversation, report }: {
   const execution = snapshot.execution?.[conversation.id];
   const turns = conversationTurns(entries, { status: conversation.status, execution,
     pendingInteraction: [...snapshot.approvals, ...snapshot.inputs].some((request) => request.taskId === conversation.id),
-    liveReasoning: !!snapshot.reasoningProgress?.[conversation.id] });
+    liveReasoning: !!(snapshot.reasoningProgress?.[conversation.id] || snapshot.textProgress?.[conversation.id]) });
   const showInactivePlan = !(execution?.canStop ?? ['running', 'waiting-review', 'waiting-user', 'recovering'].includes(conversation.status));
   return <>{turns.map((turn) => <Turn key={`${conversation.id}:${turn.key}`} turn={turn} conversation={conversation}
     report={report} showInactivePlan={showInactivePlan} />)}</>;

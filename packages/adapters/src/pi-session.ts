@@ -6,6 +6,7 @@ import { PiInputQueue, queuedInputType } from './pi-input-queue.js';
 import type { IdleCompactionLease, MessageDocument, ModelRequestAttempt, QueuedSessionInput } from '@cloudhelm/core';
 import { sessionContextSnapshot } from './pi-context-budget.js';
 import { PiReasoningStream, reasoningView } from './pi-reasoning.js';
+import { PiTextStream } from './pi-text-stream.js';
 import { modelCapacity, modelThinking } from './model-catalog.js';
 import { conversationOutputTokens } from './model-capacity.js';
 import { meterModelRequest } from './model-request-meter.js';
@@ -94,6 +95,7 @@ export async function createConversationSession(options: SessionOptions): Promis
 
 class PiConversationSession implements ConversationSession {
   private readonly reasoningStream: PiReasoningStream;
+  private readonly textStream: PiTextStream;
   private readonly lifecycle: PiLifecycle;
   private preferred: ThinkingLevel;
   private selected: SessionProfile;
@@ -120,6 +122,7 @@ class PiConversationSession implements ConversationSession {
     this.lifecycle = new PiLifecycle((value) => options.event({ type: 'lifecycle', value }),
       new Set([...options.tools.map((tool) => tool.name), 'ask_user', 'codemode', 'tool_search']));
     this.reasoningStream = new PiReasoningStream((value) => options.event({ type: 'reasoning-progress', value }));
+    this.textStream = new PiTextStream((value) => options.event({ type: 'text-progress', value }));
     this.active = { ...options.profile };
     this.selected = this.active;
     for (const entry of session.sessionManager.getBranch()) {
@@ -248,6 +251,7 @@ class PiConversationSession implements ConversationSession {
       }
       if ((event.type === 'message_start' || event.type === 'message_update') && event.message.role === 'assistant') {
         this.reasoningStream.update(event.message, this.session.thinkingLevel !== 'off');
+        this.textStream.update(event.message);
       }
       if (event.type === 'tool_execution_start' && !('parentToolCallId' in event && typeof event.parentToolCallId === 'string')) options.event({ type: 'tool-start', id: event.toolCallId, name: event.toolName, args: event.args });
       if (event.type === 'tool_execution_end' && !('parentToolCallId' in event && typeof event.parentToolCallId === 'string')) options.event({ type: 'tool-end', id: event.toolCallId, name: event.toolName, isError: event.isError, durationMs: event.durationMs });
@@ -264,7 +268,7 @@ class PiConversationSession implements ConversationSession {
           if (attempt) options.event({ type: 'response', attempt, status: message.stopReason });
         }
         this.project();
-        if (event.message.role === 'assistant') this.reasoningStream.clear();
+        if (event.message.role === 'assistant') { this.reasoningStream.clear(); this.textStream.clear(); }
       }
       if (event.type === 'agent_end' && !this.failure) await this.prepareModel();
       if (event.type === 'turn_end') { options.event({ type: 'turn-end' }); this.publishUsage(); }
@@ -403,6 +407,7 @@ class PiConversationSession implements ConversationSession {
     const run = this.executeTurn(start).finally(() => {
       if (this.running === run) this.running = undefined;
       this.reasoningStream.clear();
+      this.textStream.clear();
       this.options.event({ type: 'activity' });
     });
     this.running = run;
@@ -459,6 +464,7 @@ class PiConversationSession implements ConversationSession {
     try {
       this.invalidateCompaction();
       this.reasoningStream.clear();
+      this.textStream.clear();
       this.session.dispose();
     } finally { void this.cleanupDirectory(); }
   }

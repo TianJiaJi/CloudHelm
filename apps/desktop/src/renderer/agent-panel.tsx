@@ -5,6 +5,7 @@ import { MessageEditor } from './message-editor.js';
 import { draftFor, finishDraftRequest, useMessageDrafts } from './message-drafts.js';
 import { holdDraftReferences } from './reference-drafts.js';
 import { ReasoningContent } from './reasoning-content.js';
+import { MarkdownMessage } from './markdown-message.js';
 import { ThinkingPicker } from './thinking-picker.js';
 import { useEffect, useRef, useState } from 'react';
 import { operationNeedsVerification, type AppSnapshot, type HostView, type LocalScope, type ModelChoice, type TaskView } from '@cloudhelm/contracts';
@@ -40,6 +41,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
 }): React.JSX.Element {
   const [models, setModels] = useState<ModelOption[]>([]);
   const reasoning = conversation ? snapshot.reasoningProgress?.[conversation.id] : undefined;
+  const liveText = conversation ? snapshot.textProgress?.[conversation.id] : undefined;
   const scroll = useRef<HTMLDivElement>(null);
   const scrollPinned = useRef(true);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
@@ -60,7 +62,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
     : conversation?.status === 'waiting-review' ? '正在准备操作审批…'
       : inputs.length ? '等待你提供当前操作所需的信息'
         : hasRunningOperation ? '远端命令正在执行；可打开 AI 终端查看输出'
-          : running && currentRequest ? `模型正在生成${reasoning ? '思考内容' : '回复'} · ${elapsed} 秒${elapsed >= 90 ? '；如需中止可点击停止' : ''}`
+          : running && currentRequest ? `模型正在生成${liveText ? '回复' : reasoning ? '思考内容' : '回复'} · ${elapsed} 秒${elapsed >= 90 ? '；如需中止可点击停止' : ''}`
             : running ? 'AI 正在准备下一步…' : '';
   useEffect(() => { void window.cloudhelm.availableModels().then(setModels).catch((error: unknown) => report(String(error))); }, [snapshot.profile.provider, snapshot.profile.modelId, snapshot.profile.hasKey, report]);
   useEffect(() => {
@@ -124,6 +126,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       {conversation && <ConversationTranscript snapshot={snapshot} conversation={conversation} report={report} />}
       {host && <RecoveryCard snapshot={snapshot} hostId={host.id} conversation={conversation} report={report} />}
       {reasoning && <article className={panelStyles.message} key={reasoning.id}><AssistantIdentity /><ReasoningContent value={reasoning.reasoning} startedAt={reasoning.createdAt} now={now} /></article>}
+      {liveText && <article className={panelStyles.message} key={liveText.id}><AssistantIdentity />{!!liveText.text.trim() && <MarkdownMessage text={liveText.text} />}</article>}
       {approvals.map((approval) => <ApprovalCard key={approval.id} approval={approval} host={hostName(approval.hostId)} report={report} />)}
       {inputs.filter((input) => input.kind !== 'secret' && input.kind !== 'otp').map((input) => <InputCard key={input.id} input={input} host={hostName(input.hostId)} report={report} />)}
       {inputs.filter((input) => (input.kind === 'secret' || input.kind === 'otp') && hiddenInputs.includes(input.id)).map((input) => <button className={styles.pendingInput} key={input.id} onClick={() => openInput(input.id)}><Icon name="shield" />{input.title} · 填写</button>)}

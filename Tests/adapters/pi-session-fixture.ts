@@ -14,7 +14,7 @@ export interface FixtureRequest {
   stream: boolean;
   tools?: Array<{ function: { name: string; description?: string } }>;
 }
-export type FixtureResponse = ({ text: string } | { calls: Array<{ id: string; name: string; arguments: unknown; rawArguments?: string }> } | { error: string; status: number }) & { reasoning?: string[]; finishReason?: 'stop' | 'length'; afterReasoning?: () => Promise<void>; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens: number } } };
+export type FixtureResponse = ({ text: string; textParts?: string[] } | { calls: Array<{ id: string; name: string; arguments: unknown; rawArguments?: string }> } | { error: string; status: number }) & { reasoning?: string[]; finishReason?: 'stop' | 'length'; afterReasoning?: () => Promise<void>; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens: number } } };
 
 export function fixtureMessageText(message: FixtureMessage): string {
   return typeof message.content === 'string' ? message.content
@@ -57,7 +57,7 @@ export async function openAiFixture(reply: (request: FixtureRequest) => Promise<
     send(chunk({ role: 'assistant', content: '' }));
     for (const reasoning_content of result.reasoning ?? []) send(chunk({ reasoning_content }));
     await result.afterReasoning?.();
-    if ('text' in result) send(chunk({ content: result.text }));
+    if ('text' in result) for (const part of result.textParts ?? [result.text]) send(chunk({ content: part }));
     else for (const [index, call] of result.calls.entries()) {
       send(chunk({ tool_calls: [{ index, id: call.id, type: 'function', function: { name: call.name, arguments: '' } }] }));
       const argumentsJson = call.rawArguments ?? JSON.stringify(call.arguments);

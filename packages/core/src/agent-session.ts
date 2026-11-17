@@ -28,6 +28,7 @@ export interface ReasoningView {
   kind: 'thinking' | 'summary'; redacted?: boolean;
 }
 export interface ReasoningProgress { id: string; createdAt: number; model: { provider: string; modelId: string }; reasoning: ReasoningView }
+export interface TextProgress { id: string; createdAt: number; model: { provider: string; modelId: string }; text: string }
 
 export interface SessionText {
   /** Provenance from the native entry, not inferred from its displayed text. */
@@ -49,6 +50,7 @@ export interface SessionUsage {
 export type SessionEvent =
   | { type: 'lifecycle'; value: import('./agent-lifecycle.js').AgentLifecycleObservation }
   | { type: 'reasoning-progress'; value: ReasoningProgress | null }
+  | { type: 'text-progress'; value: TextProgress | null }
   | { type: 'activity' }
   | { type: 'thinking'; value: ThinkingView }
   | { type: 'text'; value: SessionText }

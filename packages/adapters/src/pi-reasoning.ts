@@ -29,7 +29,10 @@ export class PiReasoningStream {
     }, 60);
   }
   clear(): void {
+    const unflushed = this.timer !== undefined;
     clearTimeout(this.timer); this.timer = undefined;
-    if (this.current) { this.current = undefined; this.emit(null); }
+    const current = this.current; this.current = undefined;
+    if (unflushed && current) this.emit(current);
+    if (current) this.emit(null);
   }
 }

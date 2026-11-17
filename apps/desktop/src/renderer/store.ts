@@ -121,13 +121,32 @@ export const useUi = create<UiState>((set) => ({
     }
     if (event.type === 'clarification' && state.snapshot) return { snapshot: { ...state.snapshot, clarifications: [...(state.snapshot.clarifications ?? []).filter((request) => request.id !== event.value.id), event.value] } };
     if (event.type === 'model-request') return { currentRequests: { ...state.currentRequests, [event.taskId]: { model: event.model, request: event.request, createdAt: event.createdAt } } };
+    if (event.type === 'reasoning-progress' && state.snapshot) {
+      const reasoningProgress = { ...state.snapshot.reasoningProgress };
+      if (event.value) reasoningProgress[event.taskId] = event.value;
+      else delete reasoningProgress[event.taskId];
+      return { snapshot: { ...state.snapshot, reasoningProgress } };
+    }
+    if (event.type === 'text-progress' && state.snapshot) {
+      const textProgress = { ...state.snapshot.textProgress };
+      if (event.value) textProgress[event.taskId] = event.value;
+      else delete textProgress[event.taskId];
+      return { snapshot: { ...state.snapshot, textProgress } };
+    }
+    if (event.type === 'context-usage' && state.snapshot)
+      return { snapshot: { ...state.snapshot, contextUsage: { ...state.snapshot.contextUsage, [event.taskId]: event.value } } };
     if (event.type === 'work-progress') return updateConversation(state, event.taskId, { plan: event.plan });
     if (event.type === 'work-report') return updateConversation(state, event.taskId, { report: event.report });
     if (event.type === 'verification-state') return updateConversation(state, event.taskId, { verificationState: event.value });
     if (event.type === 'verification-round') return updateConversation(state, event.taskId, { verificationRound: event.value });
     if (event.type === 'task-message' && state.snapshot) {
-      const duplicate = state.snapshot.messages.some((message) => message.taskId === event.taskId && message.createdAt === event.createdAt && message.role === event.role && message.text === event.text);
-      return duplicate ? {} : { snapshot: { ...state.snapshot, messages: [...state.snapshot.messages, event] } };
+      // Mirrors the authoritative main-process merge: same entry updates in place, new entries append once.
+      const messages = [...state.snapshot.messages];
+      const index = event.entryId ? messages.findIndex((message) => message.taskId === event.taskId && message.entryId === event.entryId) : -1;
+      if (index >= 0) messages[index] = { ...messages[index]!, ...event };
+      else if (messages.some((message) => message.taskId === event.taskId && message.createdAt === event.createdAt && message.role === event.role && message.text === event.text)) return {};
+      else messages.push(event);
+      return { snapshot: { ...state.snapshot, messages } };
     }
     return {};
   }),

@@ -108,3 +108,32 @@ describe('SSH workspace projection', () => {
     expect(useUi.getState().selectedConversationId).not.toBe('a-old');
   });
 });
+
+describe('incremental progress application', () => {
+  it('applies streaming reasoning and text without waiting for snapshots', () => {
+    const reasoning = { id: 'r1', createdAt: 1, model: { provider: 'test', modelId: 'test-model' },
+      reasoning: { text: '思考中', status: 'streaming' as const, kind: 'thinking' as const } };
+    useUi.getState().applyEvent({ type: 'reasoning-progress', taskId: 'a-new', value: reasoning });
+    expect(useUi.getState().snapshot?.reasoningProgress?.['a-new']).toEqual(reasoning);
+    const text = { id: 't1', createdAt: 2, model: { provider: 'test', modelId: 'test-model' }, text: '部分答案' };
+    useUi.getState().applyEvent({ type: 'text-progress', taskId: 'a-new', value: text });
+    expect(useUi.getState().snapshot?.textProgress?.['a-new']).toEqual(text);
+    useUi.getState().applyEvent({ type: 'reasoning-progress', taskId: 'a-new', value: null });
+    useUi.getState().applyEvent({ type: 'text-progress', taskId: 'a-new', value: null });
+    expect(useUi.getState().snapshot?.reasoningProgress).toEqual({});
+    expect(useUi.getState().snapshot?.textProgress).toEqual({});
+  });
+  it('applies context usage incrementally', () => {
+    const usage = { model: { provider: 'test', modelId: 'test-model' }, request: 1,
+      usedTokens: 10, contextWindow: 1000, source: 'provider' as const, updatedAt: 3 };
+    useUi.getState().applyEvent({ type: 'context-usage', taskId: 'a-new', value: usage });
+    expect(useUi.getState().snapshot?.contextUsage?.['a-new']).toEqual(usage);
+  });
+  it('updates a streamed message in place by entry id instead of duplicating it', () => {
+    useUi.getState().applyEvent({ type: 'task-message', taskId: 'a-new', entryId: 'entry-1', role: 'agent', text: '部分', createdAt: 5 });
+    useUi.getState().applyEvent({ type: 'task-message', taskId: 'a-new', entryId: 'entry-1', role: 'agent', text: '完整答案', createdAt: 5 });
+    const messages = useUi.getState().snapshot?.messages ?? [];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.text).toBe('完整答案');
+  });
+});

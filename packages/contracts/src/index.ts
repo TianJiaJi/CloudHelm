@@ -103,6 +103,7 @@ export interface ReasoningView {
   kind: 'thinking' | 'summary'; redacted?: boolean;
 }
 export interface ReasoningProgress { id: string; createdAt: number; model: { provider: string; modelId: string }; reasoning: ReasoningView }
+export interface TextProgress { id: string; createdAt: number; model: { provider: string; modelId: string }; text: string }
 
 export interface ConversationMessage {
   source?: 'input' | 'clarification' | 'assistant';
@@ -315,6 +316,7 @@ export interface AppSnapshot {
   agentActivity?: Record<string, import('./agent-lifecycle.js').AgentActivityView>;
   queuedInputs?: import('./conversation-input.js').ConversationInputView[];
   reasoningProgress?: Record<string, ReasoningProgress>;
+  textProgress?: Record<string, TextProgress>;
   execution?: Record<string, ExecutionView>;
   contextUsage?: Record<string, ContextUsageView>;
   contextCompaction?: Record<string, 'running' | 'complete' | 'failed'>;
@@ -350,6 +352,7 @@ export type AppEvent =
   | { type: 'terminal-command'; terminalId: string; generation: number; phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }
   | { type: 'message-preparation'; requestId: string; referenceId?: string; status: 'checking' | 'compressing' | 'ready'; context?: ContextUsageView; summaryRequests?: { used: number; limit: 32 } }
   | { type: 'reasoning-progress'; taskId: string; value: ReasoningProgress | null }
+  | { type: 'text-progress'; taskId: string; value: TextProgress | null }
   | { type: 'thinking'; taskId: string; value: ThinkingView }
   | { type: 'execution'; taskId: string; value: ExecutionView }
   | { type: 'context-usage'; taskId: string; value: ContextUsageView }

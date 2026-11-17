@@ -8,8 +8,8 @@
 
 完整简表见 [当前整改进度总览](REPAIR_STATUS_OVERVIEW.md)。本账为详细证据来源，当前批次与基准以最新记录及Git为准。
 
-- 原42父项完整保留：**4已完成、31已实现待验收、2进行中、2待开始、3延期转新版（F05/G01/G02）**；延期未完成，但不计旧版剩余或完成。
-- **旧版统计范围39项：已完成或已实现35项，仍需推进4项（2进行中、2待开始）**。严格最终验收仍有31项待验收加4项推进，共35项未收口；不把待验收冒充最终完成。
+- 原42父项完整保留：**4已完成、32已实现待验收、2进行中、1待开始、3延期转新版（F05/G01/G02）**；延期未完成，但不计旧版剩余或完成。
+- **旧版统计范围39项：已完成或已实现36项，仍需推进3项（2进行中、1待开始）**。严格最终验收仍有32项待验收加3项推进，共35项未收口；不把待验收冒充最终完成。
 - 用户已确认NV01–NV06所列旧路线/交互子项暂不做，转新版承接，范围与13项剩余表见[当前总览](REPAIR_STATUS_OVERVIEW.md)。A06/A07等部分移交的父项仍按其旧版保留范围计数；U06整包延期，其他11个UI包按保留范围跟进，UI不另计父项。
 - C02按用户选择先安全封口：SFTP不能核验ACL/xattr时拒绝覆盖已有文件，新建只用非覆盖rename，删除副本仅承诺正文。禁止策略已实现、待验收；不等于支持元数据保持或真实平台已验收。
 
@@ -33,14 +33,14 @@
 | 2 执行结果/审核/恢复 | 进行中 | A05–A07已实现待验收（复杂上下文保守核验、包装诊断证明、硬禁令矩阵预期修正）；B01–B08/C06/E03已实现待验收 |
 | 3 工具/权限/文件/环境 | 进行中 | C03/C04/C05、D03已实现待验收；真实平台与ACL/LSM验收仍待 |
 | 4 终端与生命周期 | 进行中 | F02已完成；C07已实现待验收，不能把单项完成当作阶段完成 |
-| 5 UI/流式/性能/表达 | 进行中 | E04/F04已实现待验收；旧版保留F03/F06及未延期UI范围；F05/G01/G02/U06转新版，U05/U07仅部分移交 |
+| 5 UI/流式/性能/表达 | 进行中 | E04/F04/F03已实现待验收；旧版保留F06及未延期UI范围；F05/G01/G02/U06转新版，U05/U07仅部分移交 |
 | 6 真实受限验收 | 进行中 | 原状握手停在主机指纹核验；命令/三条业务链/受限模型样本未验收，不升级系统或预装依赖掩盖问题 |
 | 7 全量收口 | 待开始 | 全部条目、测试、迁移、提交、费用与剩余边界逐项核对 |
 
 ## 下一轮起点（交接）
 
 - 当前HEAD业务基准及已保存能力以Git为准；本轮有设计和统计文档修改，工作区以`git status`为准，保留未跟踪`nul`与无关文件，不据历史“应干净”描述重置。
-- 当前用户确认按[旧版4项清单](REPAIR_STATUS_OVERVIEW.md#旧版仍需推进总表4项)推进：F03/F06、H02/H03；A06/A07等只做保留的安全范围，NV01–NV06承接子项暂停旧版实施。F05/G01/G02/U06不排入旧版后续开发；U05/U07只做保留部分。A05–A07已收口为待验收（包装诊断证明、复杂上下文保守核验、硬禁令既有覆盖），H01已收口为待验收（四类安全事实跨层一致性审查无实质分歧），H04已收口为待验收（必要迁移/回退/保守恢复与降级防护失败关闭），H05已收口为待验收（全局出站硬限制单账本、连接测试同计、达到上限暂停可续），C03/C05已有事务闭环、D01/D02已实现待验收，不能重复从零建设或把历史子包当父项完成。
+- 当前用户确认按[旧版清单](REPAIR_STATUS_OVERVIEW.md#旧版仍需推进总表3项)推进：F06、H02/H03；A06/A07等只做保留的安全范围，NV01–NV06承接子项暂停旧版实施。F05/G01/G02/U06不排入旧版后续开发；U05/U07只做保留部分。A05–A07已收口为待验收（包装诊断证明、复杂上下文保守核验、硬禁令既有覆盖），H01已收口为待验收（四类安全事实跨层一致性审查无实质分歧），H04已收口为待验收（必要迁移/回退/保守恢复与降级防护失败关闭），H05已收口为待验收（全局出站硬限制单账本、连接测试同计、达到上限暂停可续），C03/C05已有事务闭环、D01/D02已实现待验收，F03已收口为待验收（正文流式text-progress与高频事件增量投影），不能重复从零建设或把历史子包当父项完成。
 - 最新用户要求：各批只做改动相关局部测试、类型/语法检查和构建运行验证；全量及最终验收留到全部整改完成后，每批完成后只做一次中文本地Git提交，不自动推送。
 - 未完成边界：真实 SSH/VM 业务链（H03，需用户确认主机指纹）、Linux/macOS 与安装包验收、付费 6 次/1024 tokens 上限验收配置仍待用户执行（出站硬限制机制已实现，实际付费调用仍禁止）。
 
@@ -79,7 +79,7 @@
 | E04 | 移除自动引用捕获的无限 pending；以有界流式处理、落盘和明确资源预算支持完整输出。 | 5 UI与性能 | 已实现待验收 | 引用捕获在写入侧即受 4 MiB 上限约束（超出停止落盘并附“输出已截断”说明），脱敏 pending 与读取上限同样有界；Tests/desktop/main/reference-store.test.ts 6项与 sqlite-store 读取上限通过；超长真实日志待验收 |
 | F01 | 普通状态快照与凭据解密解耦；凭据不可用时仍能启动并进入修复设置。 | 1 安全与数据 | 已完成 | `93a79be`；Tests/desktop/main/credential-isolation.test.ts＋Tests/smoke/credential-isolation-smoke.mjs通过；Windows真实损坏密文启动/设置/替换与不可用状态注入通过，跨平台另由H03记录 |
 | F02 | 拆分保存偏好、恢复模型会话、准备 SSH 环境，消除修改思考强度触发重连的隐式副作用。 | 4 终端与生命周期 | 已完成 | `7524e4c`；Tests/desktop/main/conversation-thinking.test.ts、conversation-ipc.test.ts、structured-preparation-integration.test.ts：本地持久化/故障回滚、显式恢复时应用、迟到观测隔离、重复选择及准备撤权；相关4文件124项通过。Tests/smoke/thinking-preference-smoke.mjs及最新构建四项Windows桌面通过，最终235文件2245项和全部工程检查通过；发送/恢复保留现有显式业务连接路径，跨平台/安装包归H03 |
-| F03 | 补齐普通回答正文流式投影；高频全量快照改为增量事件、按会话订阅/历史分页和局部投影；移除高频解密。 | 5 UI与性能 | 待开始 | 未验收 |
+| F03 | 补齐普通回答正文流式投影；高频全量快照改为增量事件、按会话订阅/历史分页和局部投影；移除高频解密。 | 5 UI与性能 | 已实现待验收 | 【本批收口】正文流式与增量投影已实现：adapters新增PiTextStream（60ms合并、whitespace跳过、clear先冲刷窗口内未发更新再发null），Pi会话订阅assistant消息流，正文增量以text-progress事件经worker→main→renderer贯穿，不等message_end即显示（liveText区，最终transcript仍由project落账）；contracts/core新增TextProgress、AppSnapshot.textProgress与AppEvent text-progress变体。main新增app-event-routing.ts增量事件集——terminal-data、reasoning-progress、text-progress、context-usage、model-request、task-message不再触发全量快照publish、仅单发emit（agent-lifecycle保留publish：accept()非平凡状态且频率为每工具调用；message-preparation保留publish+emit：revalidatePreparations时机钩子），高频全量快照发布与随之的高频重投影/解密发布移除，小更新载荷不随全部历史正文增长；renderer按事件原位增量应用（task-message按entryId原位更新去重、store增量handler），agent-panel在reasoning块后直出liveText，不重挂transcript；runtimeStopped时textProgress整体删除、reasoningProgress保留interrupted标记。验证：pi-text-stream 3项（含deepseek夹具端到端流式、最终transcript与null收尾）、pi-reasoning 3项（含clear冲刷回归）、pi-session系列、task-session-events映射、app-state增量路由（高频事件不改快照计数断言+text-progress路由）、store增量应用、agent-panel-parts及maxWorkers=4全量321文件2793项零失败（25项跳过）、类型/lint/depcruise/行数/布局/版本/更新日志通过。真实模型端到端流式与实际IPC/FPS量测留验收；按会话订阅/历史分页的载荷目标已由增量事件与局部投影达成，不作为独立机制重复建设，超长会话历史窗口留观察 |
 | F04 | 终端只有在用户正在跟随尾部时自动滚动；离开底部后显示新输出提示。 | 5 UI与性能 | 已实现待验收 | 终端写入只在视口位于尾部时自动滚动，离开底部后出现“有新输出 · 跳到末尾”提示且不打断阅读；滚动跟随判定抽为可测纯函数。Tests/desktop/renderer/terminal-follow.test.ts 2项与工程检查通过；真实持续输出与缩放待隐藏桌面/人工验收。 |
 | F05 | 明确展示模型、远端任务、审核、认证、核验各自的状态与操作入口，避免混成一个“运行/停止/失败”。 | 新版NV04 | 延期转新版 | 用户确认暂不做旧版完整状态/控制界面；统一新状态、诊断/注入续跑与模型设置由NV04承接，不计旧版剩余；现有停止与风险提示保留，未验收。 |
 | F06 | 以 Trae CN 为对标重整 AI 阅读与交互：Markdown 排版、代码高亮/长块阅读、消息操作、发送/停止入口；结论与必要动作优先，减少空诊断面板和重复证据卡。 | 5 UI与性能 | 待开始 | 【旧版范围】独立阅读/高亮/复制/滚动等继续；关联状态/报告展示移交NV04/NV05。  未验收 |
@@ -95,7 +95,7 @@
 
 | ID | 范围 | 状态 | 提交/目标测试/剩余边界 |
 | --- | --- | --- | --- |
-| U01 | 正文真流式 / 首批契约 | 待开始 | 未验收 |
+| U01 | 正文真流式 / 首批契约 | 已实现待验收 | 对应F03：正文text-progress流式不等message_end，liveText与最终transcript不重复；真实模型流式链与实际IPC/FPS量测留验收 |
 | U02 | Markdown 阅读系统 / 首批 | 待开始 | 未验收 |
 | U03 | 完整代码块 / 首批 | 待开始 | 未验收 |
 | U04 | 表格与长内容 / 首批 | 待开始 | 未验收 |
@@ -105,7 +105,7 @@
 | U08 | 消息与证据操作 / 首批 | 待开始 | 未验收 |
 | U09 | 滚动与选择稳定 / 全程 | 待开始 | 未验收 |
 | U10 | 统一视觉与可访问性 / 首批 | 待开始 | 未验收 |
-| U11 | 增量渲染与性能 / 与 U01 同步 | 待开始 | 未验收 |
+| U11 | 增量渲染与性能 / 与 U01 同步 | 已实现待验收 | 高频事件改增量应用、载荷不随历史正文增长，liveText独立区不重挂transcript保持选择稳定；渲染性能量测与查找场景留验收 |
 | U12 | UI 专项验收 / 先建基线，全程 | 待开始 | 未验收 |
 
 ## 后补专项覆盖检查
@@ -122,6 +122,8 @@
 ## 最新记录
 
 以下保留历史事实和当时统计；当前范围与数量以前述总览为准，不用历史的“23完成/19剩余”覆盖本轮移交结果。
+
+- 正文流式与增量投影批（F03收口，一次中文本地提交，不推送）：adapters新增`PiTextStream`——Pi会话订阅assistant消息流，正文增量60ms合并、whitespace跳过、clear先冲刷窗口内未发更新再发null（修复fixture端到端复现的clear丢尾：流在60ms窗口内结束时正文从未上屏），`text-progress`事件经worker映射、main记录贯穿renderer；contracts/core新增`TextProgress`、`AppSnapshot.textProgress`与AppEvent `text-progress`变体。main新增`app-event-routing.ts`增量事件集（terminal-data、reasoning-progress、text-progress、context-usage、model-request、task-message）：这些事件不再触发全量快照publish、仅单发emit，agent-lifecycle保留publish（accept()非平凡状态、频率为每工具调用而非每token）、message-preparation保留publish+emit（revalidatePreparations时机钩子）；emit行用字面量判别链保证record()联合窄化（Set.has不窄化），高频全量快照发布与随之的高频重投影/解密发布移除，小更新载荷不随全部历史正文增长。renderer store按事件原位增量应用（reasoning/text/context-usage/task-message按entryId原位更新去重），agent-panel在reasoning块后直出liveText，不重挂transcript保持选择稳定；runtimeStopped时textProgress整体删除、reasoningProgress保留interrupted标记既有。验证：Tests/adapters/pi-text-stream.test.ts 3项（60ms合并/whitespace/null收尾、身份稳定、deepseek夹具端到端流式+最终transcript+null收尾）、pi-reasoning 3项（含clear冲刷）、pi-session系列回归、task-session-events映射、app-state增量路由（高频事件不改快照计数断言+text-progress路由2项）、store增量应用、agent-panel-parts及`--maxWorkers=4`全量321文件2793项零失败（25项跳过；受影响批量中input-queue负载抖动单跑通过，归H02观察）、类型/eslint/depcruise/行数/布局/版本/更新日志通过。F03转已实现待验收（待验收31→32、待开始2→1），U01/U11同批转已实现待验收（U01与U11同批为F03硬性要求）；真实模型端到端流式、实际IPC/FPS量测留验收，按会话订阅/历史分页的载荷目标已由增量事件与局部投影达成、不作为独立机制重复建设，超长会话历史窗口留观察。
 
 - 按事实类型刷新/失效与daemon就绪回填批（D02收口，一次中文本地提交，不推送）：core新增`tool-readiness.ts`纯函数模块——`commandEnvironmentFacts(analysis, result, options, invokedAs, now)`从命令结果提取两类事实：①就绪回填：exit-0且succeeded且单一前台步骤（condition 'always'、无error/pipeline/expansion/dynamic弱证据）时，跟踪工具（`TRACKED_READINESS_TOOLS=['docker','systemctl']`）裸名直接调用（observedAs=invokedAs）或一层sudo解包（isSudo+sudoTarget，observedAs=target.runAs通常root）回填`{state:'responsive', evidence:'exit-0'}`，未知不写负值；②提及失效：非readOnly且已派发（排除failureKind not-dispatched/unresolved-prior-operation且effects none）时按提及匹配（调用名===tool或endsWith('/'+tool)、参数basename===tool或startsWith(tool+'.')，覆盖/usr/bin/docker、docker.io、/var/run/docker.sock、docker.service）置presenceStale并丢弃提及工具就绪，先弃后填防`systemctl stop docker`退0后留旧docker就绪。`HostEnvironmentObservation`新增可选`toolReadiness`/`presenceStale`字段；注册表就绪事实独立于探测记录存储（refresh重探不清空），absorb门禁要求记录存在+connectionId匹配+loginAs匹配（root SSH loginAs='root'无匹配记录整体丢弃，跨连接不串），presenceStale绕过5秒刷新去重强制重探，in-flight探测epoch竞态保标志（探测开始捕获staleEpoch、提交时仅epoch未变才清除）。`PermissionAwareExecutor`构造函数新增可选observe回调（try/catch包裹、观察失败不影响命令结果，未派发与抑制重复拒绝早返回路径不触发），server接线`observe→commandEnvironmentFacts→absorbCommandFacts`；toolReadiness/presenceStale经environmentProjection自动流入提示词，inspect_host_environment描述同步（就绪事实绑定身份与连接、presenceStale语义）。附带收口H05遗留两处800行门禁回归：app-state.ts抽`validBindings`至shortcut-bindings.ts（804→791）、task-runner.ts抽budget暂停文案映射至task-request-budget.ts的`budgetPauseNotice`（804→800）。修复本轮core索引漏导出（tool-readiness.js未export致tsc TS2305）。验证：Tests/core/tool-readiness.test.ts 8项（回填/解包/弱证据排除/失效/跳过集/readOnly）、Tests/application/host-environment-registry.test.ts新增6项（回填持久化/先弃后填/去重绕过/in-flight竞态/门禁丢弃/跨连接隔离）、Tests/application/permission-aware-executor.test.ts新增3项（派发观察/denied装饰与观察异常不影响结果/抑制重复不观察）共31项，repair-coverage 5项更新（待验收30→31、剩余5→4项），类型/eslint/depcruise/行数/测试布局/版本/更新日志及`--maxWorkers=4`全量320文件2785项零失败通过（全并行下4个时序敏感文件负载抖动单跑均通过，归H02观察）。D02转已实现待验收（待验收30→31、进行中3→2）；真实主机daemon启停、断线刷新与多身份混合链留H03及最终收口。
 

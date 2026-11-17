@@ -11,6 +11,7 @@ import { customModelLimits, modelThinking } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import { CredentialUnavailableError, decryptSecret, encryptSecret, secretConfigured } from './credential-storage.js';
 import { validBindings } from './shortcut-bindings.js';
+import { incrementalOnlyEvents } from './app-event-routing.js';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
 import { OutputRedactor, resolveHostRiskDomain, resolveHostRiskBindings, type CommandAnalyzer, type OutboundLimitState } from '@cloudhelm/core';
@@ -43,6 +44,7 @@ export class AppState {
   private readonly clarifications = new Map<string, ClarificationRequest>();
   private readonly agentActivity = new AgentActivityStore();
   private readonly reasoningProgress: NonNullable<AppSnapshot['reasoningProgress']> = {};
+  private readonly textProgress: NonNullable<AppSnapshot['textProgress']> = {};
   private readonly execution: NonNullable<AppSnapshot['execution']> = {};
   private readonly contextUsage: NonNullable<AppSnapshot['contextUsage']> = {};
   private readonly contextCompaction: NonNullable<AppSnapshot['contextCompaction']> = {};
@@ -134,7 +136,7 @@ export class AppState {
   snapshot(): AppSnapshot {
     return {
       queuedInputs: this.inputStore.snapshot(), agentActivity: this.agentActivity.snapshot(),
-      reasoningProgress: { ...this.reasoningProgress }, execution: { ...this.execution }, contextUsage: { ...this.contextUsage }, contextCompaction: { ...this.contextCompaction },
+      reasoningProgress: { ...this.reasoningProgress }, textProgress: { ...this.textProgress }, execution: { ...this.execution }, contextUsage: { ...this.contextUsage }, contextCompaction: { ...this.contextCompaction },
       hostRiskBindings: this.hostRiskBindings(), hosts: [...this.hosts.values()], terminals: [...this.terminals.values()], conversations: [...this.tasks.values()], operations: [...this.operations.values()],
       clarifications: [...this.clarifications.values()],
       approvals: [...this.approvals.values()], inputs: [...this.inputs.values()], messages: [...this.messages],
@@ -265,6 +267,7 @@ export class AppState {
       this.logBuffer.delete(key);
     }
     delete this.reasoningProgress[id];
+    delete this.textProgress[id];
     delete this.execution[id];
     delete this.contextUsage[id];
     delete this.contextCompaction[id];
@@ -650,7 +653,7 @@ export class AppState {
           role: event.role, source, clarificationToolCallId, text: event.text, reasoning: event.reasoning ?? existing?.reasoning,
           createdAt: event.createdAt, model: event.model, interruption: event.interruption };
         if (existing) Object.assign(existing, message); else this.messages.push(message);
-        if (event.role === 'agent') delete this.reasoningProgress[event.taskId];
+        if (event.role === 'agent') { delete this.reasoningProgress[event.taskId]; delete this.textProgress[event.taskId]; }
         this.store.put('messages', event.entryId ? `${event.taskId}:${event.entryId}` : `${event.createdAt}:${randomUUID()}`, message);
         break;
       }
@@ -702,6 +705,11 @@ export class AppState {
         if (event.value) this.reasoningProgress[event.taskId] = event.value;
         else delete this.reasoningProgress[event.taskId];
         break;
+      case 'text-progress':
+        if (!this.tasks.has(event.taskId)) return;
+        if (event.value) this.textProgress[event.taskId] = event.value;
+        else delete this.textProgress[event.taskId];
+        break;
       case 'thinking': this.thinkingPreferences.observe(event.taskId, event.value); break;
       case 'execution':
         if (this.tasks.has(event.taskId)) this.execution[event.taskId] = event.value;
@@ -726,8 +734,8 @@ export class AppState {
       }
       case 'snapshot': break;
     }
-    if (event.type !== 'terminal-data') this.publish();
-    if (event.type === 'message-preparation' || event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'terminal-replaced' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
+    if (!incrementalOnlyEvents.has(event.type)) this.publish();
+    if (event.type === 'message-preparation' || event.type === 'terminal-data' || event.type === 'terminal-state' || event.type === 'terminal-replaced' || event.type === 'reasoning-progress' || event.type === 'text-progress' || event.type === 'context-usage' || event.type === 'task-message' || event.type === 'model-request') this.emit(event);
   }
 
   publish(): void {
@@ -743,6 +751,8 @@ export class AppState {
     this.agentActivity.runtimeStopped();
     if (!this.closed) this.inputStore.invalidate();
     for (const value of Object.values(this.reasoningProgress)) value.reasoning = { ...value.reasoning, status: 'interrupted' };
+    // Partial streamed text has no interrupted state; only persisted transcript text survives a stop.
+    for (const id of Object.keys(this.textProgress)) delete this.textProgress[id];
     for (const [id, value] of Object.entries(this.execution)) this.execution[id] = {
       model: 'idle', remote: value.remote === 'idle' ? 'idle' : 'unknown', stopping: false, canStop: false
     };

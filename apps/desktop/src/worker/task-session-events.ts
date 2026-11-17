@@ -16,6 +16,7 @@ export function taskSessionEvents(taskId: string, hooks: {
         status: event.value.aborted ? 'aborted' : 'settled', durationMs: event.value.durationMs });
     }
     if (event.type === 'reasoning-progress') hooks.event({ type: 'reasoning-progress', taskId, value: event.value });
+    if (event.type === 'text-progress') hooks.event({ type: 'text-progress', taskId, value: event.value });
     if (event.type === 'thinking') hooks.event({ type: 'thinking', taskId, value: event.value });
     if (event.type === 'activity') hooks.activity();
     if (event.type === 'text') hooks.event({ type: 'task-message', taskId, ...event.value });

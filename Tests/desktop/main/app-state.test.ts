@@ -495,15 +495,18 @@ describe('shortcut settings persistence', () => {
 });
 
 describe('runtime context usage snapshots', () => {
-  it('publishes usage without persisting it and clears it on model change, restart and runtime exit', () => {
+  it('emits usage incrementally without persisting it and clears it on model change, restart and runtime exit', () => {
     const { state, store, events } = setup();
     state.saveProfile(customProfile());
     const task = conversation(state);
     const value = { model: { provider: task.provider!, modelId: task.modelId }, request: 1,
       usedTokens: 100, contextWindow: 32000, source: 'provider' as const, updatedAt: 10 };
+    const snapshotsBefore = events.filter((event) => event.type === 'snapshot').length;
     state.record({ type: 'context-usage', taskId: task.id, value });
     expect(state.snapshot().contextUsage?.[task.id]).toEqual(value);
-    expect(events.at(-1)).toMatchObject({ type: 'snapshot', value: { contextUsage: { [task.id]: value } } });
+    // High-frequency usage bypasses the full snapshot and is forwarded as-is for incremental application.
+    expect(events.at(-1)).toEqual({ type: 'context-usage', taskId: task.id, value });
+    expect(events.filter((event) => event.type === 'snapshot')).toHaveLength(snapshotsBefore);
     expect(store.get<TaskView>('tasks', task.id)).not.toHaveProperty('contextUsage');
     expect(setup(store).state.snapshot().contextUsage).toEqual({});
     state.setTaskModel(task.id, state.runtimeProfile());
@@ -699,4 +702,23 @@ it('projects live reasoning without database writes, enriches existing native me
   expect(state.snapshot().messages).toHaveLength(1);
   expect(setup(store).state.snapshot().messages[0]?.reasoning).toEqual(reasoning);
   expect(setup(store).state.snapshot().reasoningProgress).toEqual({});
+});
+
+it('streams live text incrementally without snapshots and clears it on agent message, removal and runtime exit', () => {
+  const { state, events } = setup(); state.saveProfile(customProfile()); const task = conversation(state);
+  const progress = { id: 'stream', createdAt: 1, model: { provider: task.provider!, modelId: task.modelId }, text: '部分' };
+  const snapshotsBefore = events.filter((event) => event.type === 'snapshot').length;
+  state.record({ type: 'text-progress', taskId: task.id, value: progress });
+  expect(state.snapshot().textProgress?.[task.id]).toEqual(progress);
+  // Streaming text bypasses full snapshots and is forwarded as-is for incremental application.
+  expect(events.at(-1)).toEqual({ type: 'text-progress', taskId: task.id, value: progress });
+  expect(events.filter((event) => event.type === 'snapshot')).toHaveLength(snapshotsBefore);
+  state.record({ type: 'task-message', taskId: task.id, entryId: 'entry', role: 'agent', text: '完整答案', createdAt: 2, model: progress.model });
+  expect(state.snapshot().textProgress).toEqual({});
+  state.record({ type: 'text-progress', taskId: task.id, value: progress });
+  state.runtimeStopped();
+  expect(state.snapshot().textProgress).toEqual({});
+  state.record({ type: 'text-progress', taskId: task.id, value: progress });
+  state.deleteTask(task.id);
+  expect(state.snapshot().textProgress).toEqual({});
 });
