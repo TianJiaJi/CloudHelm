@@ -1,5 +1,11 @@
 import { assertRequestBudget, remainingRequests, RequestBudgetError, type ModelRequestAttempt, type RequestBudgetState } from '@cloudhelm/core';
-import type { BudgetCommand, BudgetValue } from '@cloudhelm/contracts';
+import type { BudgetCommand, BudgetValue, ResumeReason } from '@cloudhelm/contracts';
+
+export function budgetPauseNotice(error: RequestBudgetError): { reason: ResumeReason; message: string } | undefined {
+  if (error.code === 'budget-exhausted') return { reason: 'budget-exhausted', message: '本轮请求预算已用尽，请显式追加100次后继续。' };
+  if (error.code === 'outbound-limit-exhausted') return { reason: 'outbound-limit-exhausted', message: '模型出站请求已达上限，请在模型设置的出站限制中提高上限后继续。' };
+  return undefined;
+}
 
 export type BudgetPort = (command: BudgetCommand, signal?: AbortSignal) => Promise<BudgetValue>;
 

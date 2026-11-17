@@ -21,7 +21,7 @@ import { TaskReviewLifetime } from './task-review-lifetime.js';
 import { taskSessionEvents } from './task-session-events.js';
 import type { TaskSignals } from './task-signals.js';
 export type { TaskSignals } from './task-signals.js';
-import { TaskRequestBudget } from './task-request-budget.js';
+import { TaskRequestBudget, budgetPauseNotice } from './task-request-budget.js';
 import { taskPreparation, assertPreparedInput, type PreparationSnapshot } from './task-preparation.js';
 import { authorizeTaskInput } from './task-input-authorization.js';
 import { interruptionContext } from './task-input-context.js';
@@ -199,12 +199,8 @@ export class TaskRunner {
         let roundId: string;
         try { const budget = await this.budget.reserve(attempt, signal); this.requestCount = budget.totalUsed; roundId = budget.roundId; }
         catch (error) {
-          if (error instanceof RequestBudgetError && this.status === 'running') {
-            if (error.code === 'budget-exhausted')
-              this.setStatus('paused', '本轮请求预算已用尽，请显式追加100次后继续。', 'budget-exhausted');
-            else if (error.code === 'outbound-limit-exhausted')
-              this.setStatus('paused', '模型出站请求已达上限，请在模型设置的出站限制中提高上限后继续。', 'outbound-limit-exhausted');
-          }
+          const pause = error instanceof RequestBudgetError ? budgetPauseNotice(error) : undefined;
+          if (pause && this.status === 'running') this.setStatus('paused', pause.message, pause.reason);
           throw error;
         }
         this.assertRemoteActive(); signal?.throwIfAborted();

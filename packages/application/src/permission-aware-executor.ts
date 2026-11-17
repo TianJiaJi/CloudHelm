@@ -15,7 +15,10 @@ function defaultDockerDaemon(analysis: CommandAnalysis): boolean {
 export class PermissionAwareExecutor implements OperationExecutor {
   private readonly denied = new Map<string, { operationId: string; expires: number }>();
   constructor(private readonly downstream: OperationExecutor, private readonly analyzer: CommandAnalyzer,
-    private readonly now: () => number = Date.now) {}
+    private readonly now: () => number = Date.now,
+    /** Observation-only hook for command environment facts; its failure never affects a result. */
+    private readonly observe?: (operation: ProposedOperation & { kind: 'command' }, analysis: CommandAnalysis,
+      result: OperationResult, options?: ExecutionOptions) => void) {}
   get supportsFileTransactions(): boolean { return this.downstream.supportsFileTransactions === true; }
   async execute(operation: ProposedOperation, fingerprint: string, signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
     if (operation.kind !== 'command') return this.downstream.execute(operation, fingerprint, signal, options);
@@ -28,11 +31,12 @@ export class PermissionAwareExecutor implements OperationExecutor {
     if (docker && previous) return { operationId: operation.id, status: 'failed', failureKind: 'permission-denied', effects: 'none',
       stdoutTail: `Not executed: operation ${previous.operationId} already established permission denial for the default Docker socket with this identity. Submit the necessary bounded sudo command through normal review, or use an already confirmed root session. Do not repeat unprivileged Docker queries. This does not override any approval denial or authentication stop.` };
     const result = await this.downstream.execute(operation, fingerprint, signal, options);
-    if (docker && result.status === 'failed' && /permission denied/iu.test(result.stdoutTail)
-      && /(?:Docker daemon socket|\/var\/run\/docker\.sock)/iu.test(result.stdoutTail)) {
-      this.denied.set(key, { operationId: operation.id, expires: this.now() + 60_000 });
-      return { ...result, failureKind: result.failureKind ?? 'permission-denied' };
-    }
-    return result;
+    const denied = docker && result.status === 'failed' && /permission denied/iu.test(result.stdoutTail)
+      && /(?:Docker daemon socket|\/var\/run\/docker\.sock)/iu.test(result.stdoutTail);
+    if (denied) this.denied.set(key, { operationId: operation.id, expires: this.now() + 60_000 });
+    const outcome = denied ? { ...result, failureKind: result.failureKind ?? 'permission-denied' as const } : result;
+    try { this.observe?.(operation, analysis, outcome, options); }
+    catch { /* Environment observation is best-effort and never fails the command. */ }
+    return outcome;
   }
 }

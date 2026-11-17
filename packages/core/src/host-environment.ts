@@ -1,3 +1,5 @@
+import type { ToolReadinessFact } from './tool-readiness.js';
+
 /** A time-scoped observation, never a privilege grant or permanent host truth. */
 export interface HostEnvironmentData {
   os: string | null; distribution: string | null; version: string | null;
@@ -51,6 +53,10 @@ export interface HostEnvironmentObservation {
     /** Evidence that one command channel actually opened and completed. */
     execution: 'ready' | 'unknown';
   };
+  /** Command-backfilled run-readiness for tracked tools; positive evidence only. */
+  toolReadiness?: ToolReadinessFact[];
+  /** A dispatched mutation invalidated the cached presence facts; next refresh re-probes. */
+  presenceStale?: boolean;
   data?: HostEnvironmentData;
 }
 export interface HostEnvironmentReader {

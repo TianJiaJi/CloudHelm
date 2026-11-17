@@ -77,3 +77,87 @@ it('keeps a bounded cause instead of one undifferentiated probe failure', async 
     read: async () => { throw Object.assign(new Error('private-detail'), { reason: 'not-a-real-reason' }); } }, () => 41);
   expect(await unrelated.refresh('host', 'fixture')).toMatchObject({ reason: 'unavailable' });
 });
+
+it('backfills command-observed readiness and keeps it across re-probes', async () => {
+  let now = 100; const read = vi.fn(async () => data);
+  const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read }, () => now);
+  await registry.refresh('host', 'fixture');
+  registry.absorbCommandFacts('host', 'fixture', { readiness: [{ tool: 'docker', state: 'responsive',
+    observedAs: 'fixture', observedAt: now, evidence: 'exit-0' }], staleReadiness: [], presenceStale: false });
+  expect(registry.snapshot('host', 'fixture').toolReadiness)
+    .toEqual([{ tool: 'docker', state: 'responsive', observedAs: 'fixture', observedAt: 100, evidence: 'exit-0' }]);
+  now += 10_000;
+  expect((await registry.refresh('host', 'fixture')).toolReadiness).toHaveLength(1);
+  expect(registry.snapshot('host', 'fixture').toolReadiness).toHaveLength(1);
+  expect(registry.snapshot('host', 'fixture').presenceStale).toBeUndefined();
+});
+
+it('drops first and backfills second so a stop cannot keep stale daemon readiness', async () => {
+  const now = 200; const read = vi.fn(async () => data);
+  const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read }, () => now);
+  await registry.refresh('host', 'fixture');
+  registry.absorbCommandFacts('host', 'fixture', { readiness: [{ tool: 'docker', state: 'responsive',
+    observedAs: 'fixture', observedAt: now, evidence: 'exit-0' }], staleReadiness: [], presenceStale: false });
+  registry.absorbCommandFacts('host', 'fixture', { readiness: [{ tool: 'systemctl', state: 'responsive',
+    observedAs: 'root', observedAt: now, evidence: 'exit-0' }], staleReadiness: ['docker', 'systemctl'], presenceStale: true });
+  expect(registry.snapshot('host', 'fixture').toolReadiness)
+    .toEqual([{ tool: 'systemctl', state: 'responsive', observedAs: 'root', observedAt: 200, evidence: 'exit-0' }]);
+  expect(registry.snapshot('host', 'fixture').presenceStale).toBe(true);
+});
+
+it('re-probes presence after a mutation instead of serving the deduped cache', async () => {
+  const now = 300; const read = vi.fn(async () => data);
+  const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read }, () => now);
+  await registry.refresh('host', 'fixture');
+  registry.absorbCommandFacts('host', 'fixture', { readiness: [], staleReadiness: [], presenceStale: true });
+  expect(registry.snapshot('host', 'fixture').presenceStale).toBe(true);
+  await registry.refresh('host', 'fixture');
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(registry.snapshot('host', 'fixture').presenceStale).toBeUndefined();
+});
+
+it('keeps the invalidation when a mutation lands during an in-flight probe', async () => {
+  let now = 400, release!: (value: HostEnvironmentData) => void;
+  const read = vi.fn(async () => data)
+    .mockImplementationOnce(async () => data)
+    .mockImplementationOnce(() => new Promise<HostEnvironmentData>((resolve) => { release = resolve; }));
+  const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read }, () => now);
+  await registry.refresh('host', 'fixture');
+  now += 5000;
+  const pending = registry.refresh('host', 'fixture');
+  registry.absorbCommandFacts('host', 'fixture', { readiness: [], staleReadiness: [], presenceStale: true });
+  release(data);
+  await pending;
+  expect(registry.snapshot('host', 'fixture').presenceStale).toBe(true);
+  await registry.refresh('host', 'fixture');
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(registry.snapshot('host', 'fixture').presenceStale).toBeUndefined();
+});
+
+it('drops facts without a matching record, identity or connection and never probes for them', async () => {
+  const now = 500; const read = vi.fn(async () => data);
+  const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read }, () => now);
+  registry.absorbCommandFacts('host', 'fixture', { readiness: [{ tool: 'docker', state: 'responsive',
+    observedAs: 'fixture', observedAt: now, evidence: 'exit-0' }], staleReadiness: [], presenceStale: true });
+  await registry.refresh('host', 'fixture');
+  expect(registry.snapshot('host', 'fixture').toolReadiness).toBeUndefined();
+  expect(registry.snapshot('host', 'fixture').presenceStale).toBeUndefined();
+  registry.absorbCommandFacts('host', 'root', { readiness: [{ tool: 'docker', state: 'responsive',
+    observedAs: 'root', observedAt: now, evidence: 'exit-0' }], staleReadiness: [], presenceStale: true });
+  expect(registry.snapshot('host', 'fixture').toolReadiness).toBeUndefined();
+  expect(read).toHaveBeenCalledOnce();
+});
+
+it('never serves readiness facts from an earlier connection', async () => {
+  let connectionId: string | null = 'worker:1';
+  const read = vi.fn(async () => data);
+  const registry = new HostEnvironmentRegistry({ connectionId: () => connectionId, read }, () => 600);
+  await registry.refresh('host', 'fixture');
+  registry.absorbCommandFacts('host', 'fixture', { readiness: [{ tool: 'docker', state: 'responsive',
+    observedAs: 'fixture', observedAt: 600, evidence: 'exit-0' }], staleReadiness: [], presenceStale: false });
+  expect(registry.snapshot('host', 'fixture').toolReadiness).toHaveLength(1);
+  connectionId = 'worker:2';
+  expect(registry.snapshot('host', 'fixture').status).toBe('unknown');
+  await registry.refresh('host', 'fixture');
+  expect(registry.snapshot('host', 'fixture').toolReadiness).toBeUndefined();
+});

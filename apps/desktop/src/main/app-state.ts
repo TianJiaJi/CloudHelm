@@ -10,6 +10,7 @@ import type { HostCredentialsPatch } from '@cloudhelm/contracts';
 import { customModelLimits, modelThinking } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import { CredentialUnavailableError, decryptSecret, encryptSecret, secretConfigured } from './credential-storage.js';
+import { validBindings } from './shortcut-bindings.js';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
 import { OutputRedactor, resolveHostRiskDomain, resolveHostRiskBindings, type CommandAnalyzer, type OutboundLimitState } from '@cloudhelm/core';
@@ -26,21 +27,6 @@ import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhe
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number; credentialRevision?: string }
 interface StoredShortcuts { bindings: Record<string, string>; enabled: boolean }
 interface StoredReviewer { selection: ReviewSelection; revision: number }
-
-const SHORTCUT_ACTION_LIMIT = 128;
-const SHORTCUT_BINDING_PATTERN = /^[a-z0-9+]{0,40}$/u;
-
-function validBindings(input: unknown): Record<string, string> {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
-  const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.length > SHORTCUT_ACTION_LIMIT) return {};
-  const result: Record<string, string> = {};
-  for (const [key, value] of entries) {
-    if (!/^[a-z][a-z0-9.]{1,40}$/u.test(key) || typeof value !== 'string' || !SHORTCUT_BINDING_PATTERN.test(value)) continue;
-    result[key] = value;
-  }
-  return result;
-}
 
 export class AppState {
   readonly requestBudgets: RequestBudgetAuthority;

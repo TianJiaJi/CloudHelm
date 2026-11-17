@@ -2,7 +2,7 @@ import { MessagePreparations } from './message-preparations.js';
 import { ShellMarkerParser } from '@cloudhelm/adapters';
 import { createTerminalCodec } from '@cloudhelm/adapters';
 import { PrivilegedRuntime } from './privileged-runtime.js';
-import { ApprovalInterruptedError, type ApprovalInterruption, resolveHostRiskDomain, safeDiagnostic } from '@cloudhelm/core';
+import { ApprovalInterruptedError, commandEnvironmentFacts, type ApprovalInterruption, resolveHostRiskDomain, safeDiagnostic } from '@cloudhelm/core';
 import { eventDiagnostic, reservationDiagnostic } from './diagnostic-events.js';
 import { HostEnvironmentRegistry, HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
@@ -103,7 +103,13 @@ export class WorkerServer {
       }, signal)),
       jump: (host) => host.jumpHostId ? this.hosts.get(host.jumpHostId) : undefined,
       input: (request, signal) => this.requestPrivateInput(request, signal) });
-    this.executor = new HostSerialExecutor(new PermissionAwareExecutor(this.privileged, new BashAnalyzer()));
+    this.executor = new HostSerialExecutor(new PermissionAwareExecutor(this.privileged, new BashAnalyzer(), Date.now,
+      (operation, analysis, result, options) => {
+        const scope = operation.scope;
+        // Exit-0 evidence backfills tool readiness; dispatched mutations invalidate per fact type.
+        this.environment.absorbCommandFacts(scope.hostId, scope.loginAs ?? scope.runAs, commandEnvironmentFacts(analysis,
+          result, options, scope.loginAs ?? scope.runAs, Date.now()));
+      }));
   }
 
   private post(message: RuntimeMessage): void {

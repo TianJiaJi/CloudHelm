@@ -1,6 +1,7 @@
 export * from './model.js';
 export * from './conversation-input.js';
 export * from './host-environment.js';
+export * from './tool-readiness.js';
 export * from './host-risk-domain.js';
 export * from './execution-workspace.js';
 export * from './execution-job.js';

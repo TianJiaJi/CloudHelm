@@ -62,3 +62,40 @@ describe('shared Docker permission prerequisite', () => {
     now = 60_001; await executor.execute(operation('docker ps'), 'hash'); expect(execute).toHaveBeenCalledTimes(3);
   });
 });
+
+describe('command environment observation', () => {
+  const success = (op: ProposedOperation) => ({ operationId: op.id, status: 'succeeded' as const, exitCode: 0, stdoutTail: '' });
+  it('observes dispatched commands with the final result, not other operation kinds', async () => {
+    const execute = vi.fn(async (op: ProposedOperation) => success(op));
+    const observe = vi.fn();
+    const executor = new PermissionAwareExecutor({ execute }, analyzer, Date.now, observe);
+    const write: ProposedOperation = { id: 'write', kind: 'write-file', path: '/srv/app', content: 'x',
+      scope: operation('x').scope };
+    await executor.execute(write, 'hash');
+    expect(observe).not.toHaveBeenCalled();
+    await executor.execute(operation('docker ps'), 'hash', undefined, { readOnly: true });
+    expect(observe).toHaveBeenCalledOnce();
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({ command: 'docker ps' }),
+      expect.anything(), expect.objectContaining({ status: 'succeeded', exitCode: 0 }), { readOnly: true });
+  });
+  it('observes the denied-decorated result and never fails the command when observation throws', async () => {
+    const execute = vi.fn(async (op: ProposedOperation) => ({ operationId: op.id, status: 'failed' as const, exitCode: 1,
+      stdoutTail: 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock' }));
+    const observe = vi.fn(() => { throw new Error('observer down'); });
+    const executor = new PermissionAwareExecutor({ execute }, analyzer, Date.now, observe);
+    const denied = await executor.execute(operation('docker ps'), 'hash');
+    expect(denied.failureKind).toBe('permission-denied');
+    expect(observe).toHaveBeenCalledWith(expect.anything(), expect.anything(),
+      expect.objectContaining({ failureKind: 'permission-denied' }), undefined);
+  });
+  it('does not observe the suppressed duplicate Docker denial that was never sent', async () => {
+    const execute = vi.fn(async (op: ProposedOperation) => ({ operationId: op.id, status: 'failed' as const, exitCode: 1,
+      stdoutTail: 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock' }));
+    const observe = vi.fn();
+    const executor = new PermissionAwareExecutor({ execute }, analyzer, Date.now, observe);
+    await executor.execute(operation('docker ps'), 'hash');
+    await executor.execute(operation('docker ps -a'), 'hash');
+    expect(execute).toHaveBeenCalledOnce();
+    expect(observe).toHaveBeenCalledOnce();
+  });
+});
