@@ -38,7 +38,7 @@ describe('deterministic safety policy', () => {
   });
   it.each([
     ['pwd', 'allow', 'allow', 'allow'],
-    ['apt-get install -y curl', 'allow', 'allow', 'allow'],
+    ['apt-get install -y curl', 'ask', 'evaluate', 'allow'],
     ['systemctl restart nginx', 'allow', 'allow', 'allow'],
     ['rm -rf /srv/app/cache', 'ask', 'evaluate', 'ask'],
     ['python3 -c "print(1)"', 'ask', 'evaluate', 'allow'],
@@ -106,8 +106,10 @@ describe('deterministic safety policy', () => {
     expect(decideSafety(upload, { mode: 'permissive', revision: 1 }).verdict).toBe('deny');
   });
 
-  it('allows ordinary mutation without an AI request in level two', async () => {
-    const operation = command('docker compose up -d');
+  it('routes detected package code to review but keeps ordinary mutation without an AI request in level two', async () => {
+    const compose = command('docker compose up -d');
+    expect(decideSafety(compose, { mode: 'ai-review', revision: 1 }, await analyzer.analyze(compose.command)).verdict).toBe('evaluate');
+    const operation = command('systemctl restart nginx');
     expect(decideSafety(operation, { mode: 'ai-review', revision: 1 }, await analyzer.analyze(operation.command)).verdict).toBe('allow');
   });
 

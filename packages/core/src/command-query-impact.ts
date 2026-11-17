@@ -97,6 +97,41 @@ function singleSudoEffectFree(analysis: CommandAnalysis): boolean {
     && args.slice(1).every((arg, index) => arg === inner.args[index]) && isQuery(inner);
 }
 
+/** External launchers that provably add no file, network, identity or session effect
+ * around the command they start: they exec or wait in place in the same terminal and
+ * write no output files. nohup still writes nohup.out under a TTY; setsid detaches from
+ * the terminal and breaks completion/output observation; xargs injects stdin lines as
+ * arguments; sudo/runuser keep their own separate privilege proof paths; shell builtins
+ * like command/exec are never flattened into literal steps, so they keep native review. */
+const HARMLESS_LAUNCHERS: ReadonlySet<string> = new Set(['env', 'busybox', 'nice', 'time', 'timeout']);
+
+/** One recognized harmless launcher wrapping exactly one proven query: the
+ * launcher's argument tail is the query's argv verbatim, both calls share one
+ * source span, and the wrapper parse left no context uncertainty. */
+function wrappedQuery(analysis: CommandAnalysis): boolean {
+  if (analysis.hasError || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection
+    || analysis.steps?.length !== 1 || analysis.calls.length !== 2) return false;
+  const step = analysis.steps[0]!;
+  const outer = analysis.calls[0]!;
+  const inner = analysis.calls[1]!;
+  if (step.condition !== 'always' || step.call.name !== outer.name || step.call.dynamic
+    || step.call.redirects || step.call.args.length !== outer.args.length
+    || !step.call.args.every((arg, index) => arg === outer.args[index])
+    || !HARMLESS_LAUNCHERS.has(path.posix.basename(outer.name))
+    || outer.dynamic || outer.redirects || inner.dynamic || inner.redirects) return false;
+  if (!isQuery(inner) && !isBoundedDiagnosticCall(inner)) return false;
+  const source = outer.source;
+  if (!source || inner.source?.start !== source.start || inner.source.end !== source.end
+    || inner.source.depth !== source.depth) return false;
+  for (const context of [outer.context, inner.context])
+    if (!context || context.cwd.state !== 'known' || context.cwd.changes.length > 0
+      || context.identity.state !== 'inherited' || context.namespace !== 'inherited'
+      || context.unknownReasons.length > 0) return false;
+  const split = outer.args.length - inner.args.length - 1;
+  return split >= 0 && outer.args[split] === inner.name
+    && inner.args.every((arg, index) => outer.args[split + 1 + index] === arg);
+}
+
 /** Shared query facts for review and replay/effect classification. This is not
  * access authorization: callers must still apply sensitive/protected paths,
  * scope, identity, current leases and durable audit before executing anything. */
@@ -105,7 +140,8 @@ export interface QueryImpact {
   reviewReasons?: CommandReviewReasonCode[];
   effects: 'none' | 'unknown';
   autoApproval: 'eligible' | 'review-required';
-  evidence: 'known-query' | 'bounded-diagnostic' | 'literal-query-list' | 'query-pipeline' | 'privileged-query' | 'unproven';
+  evidence: 'known-query' | 'bounded-diagnostic' | 'literal-query-list' | 'wrapped-query'
+    | 'query-pipeline' | 'privileged-query' | 'unproven';
 }
 
 export function analyzeQueryImpact(analysis: CommandAnalysis): QueryImpact {
@@ -118,6 +154,7 @@ export function analyzeQueryImpact(analysis: CommandAnalysis): QueryImpact {
       && !analysis.hasCompound && analysis.calls.length === 1 && isBoundedDiagnosticCall(analysis.calls[0]!);
     if (diagnostic) return known('bounded-diagnostic');
     if (literalReadList(analysis)) return known('literal-query-list');
+    if (wrappedQuery(analysis)) return known('wrapped-query');
     if (analysis.hasPipeline) pipeline = queryPipelineStatus(analysis, (call) => isQuery(call) || isBoundedDiagnosticCall(call));
     if (pipeline === 'proven') return known('query-pipeline');
     if (plainSudoQuery(analysis, ['cat', 'ls', 'stat'], true) || singleSudoEffectFree(analysis))

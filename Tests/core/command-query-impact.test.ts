@@ -17,6 +17,24 @@ it.each(['ss -ltnp', 'ip -br addr show', 'lsblk -o NAME,SIZE,TYPE', 'lscpu --jso
       .toMatchObject({ verdict: 'allow', ruleId: 'low-risk-command' });
 });
 
+it.each(['timeout 10s df -h', 'timeout -k 5s 10s df -h', 'timeout --foreground 10s df -h', 'timeout -s KILL 5s ss -ltnp',
+  'nice -n 10 free -m', 'time ls', 'time -p ls', 'env LANG=C.UTF-8 id', 'env -i df -h', 'env -u LC_ALL df -h',
+  'busybox df -h', 'env ping -c 1 -W 1 example.test'])('proves the same bounded query when wrapped by a harmless launcher: %s', async (command) => {
+  const parsed = await analyzer.analyze(command);
+  expect(analyzeQueryImpact(parsed)).toMatchObject({ effects: 'none', autoApproval: 'eligible', evidence: 'wrapped-query' });
+  expect(isEffectFreeQuery(parsed)).toBe(true);
+  for (const mode of ['ask', 'ai-review', 'permissive'] as const)
+    expect(decideSafety({ id: 'op', kind: 'command', command, scope }, { mode, revision: 1 }, parsed))
+      .toMatchObject({ verdict: 'allow', ruleId: 'low-risk-command' });
+});
+
+it.each(['nohup uptime', 'setsid df -h', 'xargs ls', 'command -p df -h', 'exec df -h',
+  'env FOO=bar df -h', 'env -S "A=1" df -h',
+  'env -C /tmp df -h', 'time -o /tmp/timing.txt ls', 'exec -a custom df -h',
+  'timeout 10s rm -rf /tmp/x', 'timeout 10s df -h; touch /tmp/changed'])('keeps unproven launchers and wrapper options out of auto-approval: %s', async (command) => {
+  expect(analyzeQueryImpact(await analyzer.analyze(command))).toMatchObject({ effects: 'unknown', autoApproval: 'review-required' });
+});
+
 it.each(['ss -K', 'ip link set eth0 down', 'lsblk --output-all', 'ping example.test', 'ping -f -c 1 -W 1 example.test',
   '/tmp/ss -ltnp', 'df -h; touch /tmp/changed', 'df -h > /tmp/result', 'id; ls "$(touch /tmp/changed)"',
   'df -h | cat', 'env LD_PRELOAD=/tmp/code.so df -h', 'sudo -u root df -h', 'make -f project.mk'])('does not infer auto-approval from a familiar program inside %s', async (command) => {
