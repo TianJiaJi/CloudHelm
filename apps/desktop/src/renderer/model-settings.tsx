@@ -8,7 +8,7 @@ import { Icon } from './ui-helpers.js';
 import styles from './model-settings.module.css';
 
 type Profile = AppSnapshot['profile'];
-type Section = 'api' | 'subscription' | 'review' | 'shortcuts';
+type Section = 'api' | 'subscription' | 'review' | 'budget' | 'shortcuts';
 type Destination = { section: Section } | { providerId: string } | { close: true } | { externalAction(): void };
 type NavigationGuard = (next: () => void) => void;
 type Feedback = { kind: 'success' | 'error'; text: string } | null;
@@ -36,6 +36,8 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
   const reviewMenu = useMenuAnchor();
   const [reviewModels, setReviewModels] = useState<Array<{ provider: string; modelId: string; name: string }>>([]);
   const [disableJev, setDisableJev] = useState(false);
+  const [outboundUsed, setOutboundUsed] = useState(0);
+  const [outboundCap, setOutboundCap] = useState('');
   const [busy, setBusy] = useState<'save' | 'test' | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [loadError, setLoadError] = useState('');
@@ -57,6 +59,17 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     || JSON.stringify(reviewer) !== JSON.stringify(current.reviewer ?? { kind: 'current' }));
 
   useEffect(() => { void window.cloudhelm.availableModels().then(setReviewModels).catch(() => undefined); }, []);
+
+  useEffect(() => {
+    if (section !== 'budget') return;
+    let active = true;
+    void window.cloudhelm.outboundLimit().then((snapshot) => {
+      if (!active) return;
+      setOutboundUsed(snapshot.used);
+      setOutboundCap(snapshot.cap?.toString() ?? '');
+    }).catch((error: unknown) => { if (active) setFeedback({ kind: 'error', text: message(error) }); });
+    return () => { active = false; };
+  }, [section]);
   const custom = providerId === 'cloudhelm-custom';
   const capacity = (value: string) => /^(?:[1-9][0-9]*)$/u.test(value) && Number.isSafeInteger(Number(value));
   const validLimits = !custom || ((!draft.contextWindow && !draft.maxTokens)
@@ -193,6 +206,26 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     else setPending(null);
   }
 
+  async function saveOutbound(): Promise<boolean> {
+    if (busy) return false;
+    const capText = outboundCap.trim();
+    if (capText && !/^[1-9][0-9]*$/u.test(capText)) {
+      setFeedback({ kind: 'error', text: '上限必须是正整数，或留空表示不限制。' });
+      return false;
+    }
+    setBusy('save');
+    setFeedback(null);
+    try {
+      const snapshot = await window.cloudhelm.saveOutboundLimit(capText ? Number(capText) : null);
+      setOutboundUsed(snapshot.used);
+      setOutboundCap(snapshot.cap?.toString() ?? '');
+      setFeedback({ kind: 'success', text: snapshot.cap === null ? '已保存：不限制出站请求数，仅计数。' : `已保存：出站请求上限 ${snapshot.cap} 次。` });
+      callback.current.report('');
+      return true;
+    } catch (error) { setFeedback({ kind: 'error', text: message(error) }); callback.current.report(errorMessage(error)); return false; }
+    finally { setBusy(null); }
+  }
+
   async function testConnection(): Promise<void> {
     if (!validApi || !hasApiKey || busy) return;
     setBusy('test');
@@ -213,7 +246,8 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     </header>
     <nav className={styles.sections} role="tablist" aria-label="模型接入方式">
       {([{ id: 'api', label: 'API Key', icon: 'key' }, { id: 'subscription', label: '模型订阅 · 未开放', icon: 'subscription' },
-        { id: 'review', label: 'AI 审核', icon: 'shield' }, { id: 'shortcuts', label: '快捷键', icon: 'keyboard' }] as const).map((item) =>
+        { id: 'review', label: 'AI 审核', icon: 'shield' }, { id: 'budget', label: '出站限制', icon: 'gauge' },
+        { id: 'shortcuts', label: '快捷键', icon: 'keyboard' }] as const).map((item) =>
         <button key={item.id} id={`model-tab-${item.id}`} type="button" role="tab" aria-selected={section === item.id}
           aria-controls={`model-panel-${item.id}`} disabled={busy !== null} className={styles.sectionTab}
           onClick={() => requestNavigation({ section: item.id })}><SettingsIcon kind={item.icon} />{item.label}</button>)}
@@ -335,17 +369,33 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
       <FeedbackLine feedback={feedback} />
     </div>}
 
+    {section === 'budget' && <div className={styles.reviewPanel} role="tabpanel" id="model-panel-budget" aria-labelledby="model-tab-budget">
+      <div className={styles.providerHeading}><h2>出站请求限制</h2>
+        <p>限制本机实际发送给模型服务的请求总数：对话、压缩、总结、AI 审核与连接测试同计，失败重试同计。</p></div>
+      <fieldset className={styles.reviewFields} disabled={busy !== null}>
+        <label htmlFor="outbound-cap">请求上限</label>
+        <input id="outbound-cap" type="number" min="1" step="1" value={outboundCap}
+          onChange={(event) => { setOutboundCap(event.target.value); setFeedback(null); }} placeholder="留空表示不限制" />
+        <p className={styles.hint}>已累计出站请求 {outboundUsed} 次。计数只增不减，作为负载与费用指标。</p>
+        <p className={styles.hint}>达到上限时任务会暂停而不是失败，提高上限后可继续；上限降到已计数以下视为已用尽。</p>
+      </fieldset>
+      <FeedbackLine feedback={feedback} />
+    </div>}
+
     {section === 'shortcuts' && <ShortcutSettings report={callback.current.report} />}
 
     <footer className={styles.footer}>
       <p>{section === 'api' ? '默认模型用于新对话；已有对话可在输入框中切换模型。'
         : section === 'review' ? '密钥默认仅保存在此设备。'
-          : section === 'shortcuts' ? '快捷键保存在本机，更改立即生效。' : '当前版本不提供订阅登录。'}</p>
+          : section === 'budget' ? '出站限制立即生效，覆盖所有任务与本机全部模型请求。'
+            : section === 'shortcuts' ? '快捷键保存在本机，更改立即生效。' : '当前版本不提供订阅登录。'}</p>
       <button type="button" className={styles.button} disabled={busy !== null} onClick={() => requestNavigation({ close: true })}>返回</button>
       {section === 'api' && <button type="button" className={styles.primary} disabled={busy !== null || !validApi}
         onClick={() => void saveApi()}>{busy === 'save' ? '保存中…' : '保存为默认'}</button>}
       {section === 'review' && <button type="button" className={styles.primary} disabled={busy !== null}
         onClick={() => void saveReview()}>{busy === 'save' ? '保存中…' : '保存审核设置'}</button>}
+      {section === 'budget' && <button type="button" className={styles.primary} disabled={busy !== null}
+        onClick={() => void saveOutbound()}>{busy === 'save' ? '保存中…' : '保存出站限制'}</button>}
     </footer>
     {pending && <UnsavedChanges api={section === 'api'} busy={busy !== null} canSave={section !== 'api' || !!validApi}
       cancel={() => setPending(null)} discard={discardAndNavigate} save={() => void saveAndNavigate()} />}
@@ -380,7 +430,7 @@ function UnsavedChanges({ api, busy, canSave, cancel, discard, save }: {
   </dialog>;
 }
 
-type IconKind = 'key' | 'subscription' | 'shield' | 'search' | 'eye' | 'eye-off' | 'keyboard';
+type IconKind = 'key' | 'subscription' | 'shield' | 'search' | 'eye' | 'eye-off' | 'keyboard' | 'gauge';
 function SettingsIcon({ kind }: { kind: IconKind }): React.JSX.Element {
   const paths: Record<IconKind, React.JSX.Element> = {
     key: <><circle cx="15" cy="8" r="5" /><path d="m11.5 11.5-8 8V22H7v-3h3v-3l3-3" /></>,
@@ -389,7 +439,8 @@ function SettingsIcon({ kind }: { kind: IconKind }): React.JSX.Element {
     shield: <><path d="m12 3 8 4v6c0 5-8 9-8 9S4 18 4 13V7z" /><path d="m8 12 3 3 5-6" /></>,
     search: <><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></>,
     eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>,
-    'eye-off': <><path d="m3 3 18 18M9 5.5 12 5c6.5 0 10 7 10 7s-1 2-3 4M6 7c-2.5 2-4 5-4 5s3.5 7 10 7c1.5 0 3-.4 4.2-1M10 10a3 3 0 0 0 4 4" /></>
+    'eye-off': <><path d="m3 3 18 18M9 5.5 12 5c6.5 0 10 7 10 7s-1 2-3 4M6 7c-2.5 2-4 5-4 5s3.5 7 10 7c1.5 0 3-.4 4.2-1M10 10a3 3 0 0 0 4 4" /></>,
+    gauge: <><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></>
   };
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;

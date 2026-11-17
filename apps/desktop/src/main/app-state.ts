@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { CredentialUnavailableError, decryptSecret, encryptSecret, secretConfigured } from './credential-storage.js';
 import { Value } from 'typebox/value';
 import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapters';
-import { OutputRedactor, resolveHostRiskDomain, resolveHostRiskBindings, type CommandAnalyzer } from '@cloudhelm/core';
+import { OutputRedactor, resolveHostRiskDomain, resolveHostRiskBindings, type CommandAnalyzer, type OutboundLimitState } from '@cloudhelm/core';
 import { HISTORICAL_QUERY_REPAIR, planHistoricalQueryRepair } from './historical-query-repair.js';
 import { RequestBudgetAuthority } from './request-budget-authority.js';
 import { createRequestBudget } from '@cloudhelm/core';
@@ -140,6 +140,10 @@ export class AppState {
 
   commitInput(value: import('@cloudhelm/contracts').StoredConversationInput): void { this.inputStore.commit(value); this.publish(); }
   queuedInputs(taskId: string): import('@cloudhelm/contracts').StoredConversationInput[] { return this.inputStore.list(taskId); }
+
+  outboundLimit(): OutboundLimitState { return this.requestBudgets.outboundLimit(); }
+  saveOutboundLimit(cap: number | null): OutboundLimitState { return this.requestBudgets.saveOutboundLimit(cap); }
+  reserveConnectionTest(): OutboundLimitState { return this.requestBudgets.reserveConnectionTest(); }
 
   snapshot(): AppSnapshot {
     return {

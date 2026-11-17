@@ -80,4 +80,7 @@ export class TaskRunner extends ProductionTaskRunner {
     this.authority.input(this.fixtureTaskId, args[1]?.requestId ?? randomUUID());
     return super.message(...args);
   }
+
+  /** Sets the shared outbound ledger exactly as Main's settings IPC would. */
+  setOutboundLimit(cap: number | null): void { this.authority.saveOutboundLimit(cap); }
 }

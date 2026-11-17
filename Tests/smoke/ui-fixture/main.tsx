@@ -21,6 +21,7 @@ const sync = (): void => emit({ type: 'snapshot', value: structuredClone(view) }
 const terminalEvent = (terminal: TerminalViewState): void => emit({ type: 'terminal-state', terminalId: terminal.id, ...terminal });
 const unsupported = async (): Promise<never> => { throw new Error('UI smoke reached an unimplemented fixture method'); };
 const shortcutSettings = { bindings: {} as Record<string, string>, enabled: true };
+let outboundLedger = { used: 3, cap: null as number | null };
 
 const referenceBodies = new Map<string, ReferenceBody>();
 const api: DesktopAPI = {
@@ -137,6 +138,8 @@ const api: DesktopAPI = {
   listModelProviders: async () => [{ id: 'openai', name: 'OpenAI', defaultBaseUrl: 'https://api.openai.com/v1', models: [{ id: 'gpt-5.4', name: 'GPT-5.4' }] }],
   modelProviderSettings: async () => ({ hasKey: true }),
   testModelConnection: async () => ({ latencyMs: 12 }),
+  outboundLimit: async () => outboundLedger,
+  saveOutboundLimit: async (cap) => { outboundLedger = { ...outboundLedger, cap }; return structuredClone(outboundLedger); },
   testHostConnection: async (input) => { calls.push({ kind: 'test-host', input }); return { status: 'success', latencyMs: 42 }; },
   saveModelProfile: async (profile) => { calls.push({ kind: 'profile', profile }); },
   saveReviewSettings: async (settings) => { calls.push({ kind: 'review-settings', settings }); },

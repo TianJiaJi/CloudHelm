@@ -18,6 +18,7 @@ import { RuntimeBridge } from './runtime-bridge.js';
 import { HostConnectionTester } from './host-connection-test.js';
 import { AppShutdown } from './app-shutdown.js';
 import { applicationTestWindowPolicy, silenceTestDialogs } from './test-window-policy.js';
+import { RequestBudgetError } from '@cloudhelm/core';
 
 const testWindow = (() => {
   try { return applicationTestWindowPolicy(process.env, app); }
@@ -126,12 +127,24 @@ function registerIpc(): void {
   });
   ipcMain.handle('cloudhelm:shortcuts', () => state.shortcuts());
   ipcMain.handle('cloudhelm:save-shortcuts', (_event, settings: Parameters<DesktopAPI['saveShortcuts']>[0]) => state.saveShortcuts(settings));
+  ipcMain.handle('cloudhelm:outbound-limit', () => state.outboundLimit());
+  ipcMain.handle('cloudhelm:save-outbound-limit', (_event, cap: number | null) => state.saveOutboundLimit(cap));
   ipcMain.handle('cloudhelm:read-clipboard', () => clipboard.readText());
   ipcMain.handle('cloudhelm:write-clipboard', (_event, text: string) => {
     if (typeof text !== 'string' || text.length > 200_000) throw new Error('Invalid clipboard content');
     clipboard.writeText(text);
   });
-  ipcMain.handle('cloudhelm:test-model', (_event, profile: Parameters<DesktopAPI['testModelConnection']>[0]) => runtime.call({ method: 'test-model', profile: state.testProfile(profile) }));
+  ipcMain.handle('cloudhelm:test-model', async (_event, profile: Parameters<DesktopAPI['testModelConnection']>[0]) => {
+    const prepared = state.testProfile(profile);
+    // A connection test is one real billed request; it shares the global
+    // outbound ledger and is refused, not deferred, at the hard limit.
+    try { state.reserveConnectionTest(); } catch (error) {
+      if (error instanceof RequestBudgetError && error.code === 'outbound-limit-exhausted')
+        throw new Error('模型出站请求已达上限：本次连接测试未发送。请在模型设置的出站限制中提高上限。');
+      throw error;
+    }
+    return runtime.call({ method: 'test-model', profile: prepared });
+  });
   ipcMain.handle('cloudhelm:available-models', () => state.availableModels());
   ipcMain.handle('cloudhelm:disconnect-host', async (_event, hostId: string) => {
     state.getHost(hostId); connecting.cancel(hostId); await runtime.call({ method: 'disconnect', hostId }); state.updateHost(hostId, { status: 'disconnected' });

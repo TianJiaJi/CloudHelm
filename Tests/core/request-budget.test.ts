@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest';
-import { assertModelRequestAttempt, assertRequestBudget, beginRequestRound, closeRequestRound, createAuxiliaryBudget,
-  createRequestBudget, extendRequestRound, legacyRequestBudget, remainingRequests, reopenRequestRound,
-  requestAttemptKey, reserveAuxiliaryRequest, reserveRoundRequest, type RoundCompletion } from '../../packages/core/src/request-budget.js';
+import { assertModelRequestAttempt, assertOutboundLimit, assertRequestBudget, beginRequestRound, chargeOutboundLimit,
+  closeRequestRound, createAuxiliaryBudget, createOutboundLimit, createRequestBudget, extendRequestRound,
+  legacyRequestBudget, outboundLimitExhausted, remainingRequests, reopenRequestRound, requestAttemptKey,
+  reserveAuxiliaryRequest, reserveRoundRequest, setOutboundLimitCap, type RoundCompletion } from '../../packages/core/src/request-budget.js';
 
 const done: RoundCompletion = { answered: true, unresolved: false, reportPending: false, modelIdle: true, remoteIdle: true };
 it('allows precisely 100 reservations and refuses the 101st without changing the last snapshot', () => {
@@ -91,4 +92,36 @@ it('distinguishes logical requests from HTTP attempts and does not claim opaque 
     { ...attempt, logicalRequestId: 'contains/newline\n' }, { ...attempt, purpose: {} }, { ...attempt, transport: 'guessed' }]) {
     expect(() => assertModelRequestAttempt(invalid)).toThrow('budget-invalid');
   }
+});
+it('caps total outbound reservations without resetting usage when the cap changes', () => {
+  let state = createOutboundLimit(2);
+  state = chargeOutboundLimit(state);
+  expect(state).toMatchObject({ used: 1, cap: 2 });
+  state = chargeOutboundLimit(state);
+  expect(outboundLimitExhausted(state)).toBe(true);
+  expect(() => chargeOutboundLimit(state)).toThrow('outbound-limit-exhausted');
+  expect(state.used).toBe(2);
+  const lowered = setOutboundLimitCap(state, 1);
+  expect(lowered).toMatchObject({ used: 2, cap: 1 });
+  expect(outboundLimitExhausted(lowered)).toBe(true);
+  expect(() => chargeOutboundLimit(lowered)).toThrow('outbound-limit-exhausted');
+  expect(chargeOutboundLimit(setOutboundLimitCap(state, 3))).toMatchObject({ used: 3, cap: 3 });
+  expect(chargeOutboundLimit(createOutboundLimit())).toMatchObject({ used: 1, cap: null });
+  expect(outboundLimitExhausted(chargeOutboundLimit(createOutboundLimit()))).toBe(false);
+});
+it.each([-1, 0.5, NaN, Infinity])('rejects corrupt outbound counters instead of minting fresh credits (%s)', (invalid) => {
+  expect(() => assertOutboundLimit({ ...createOutboundLimit(), used: invalid })).toThrow('budget-invalid');
+});
+it.each([0, -1, 0.5, NaN, Infinity])('rejects zero or corrupt outbound caps instead of minting fresh credits (%s)', (invalid) => {
+  expect(() => createOutboundLimit(invalid)).toThrow('budget-invalid');
+  expect(() => assertOutboundLimit({ ...createOutboundLimit(), cap: invalid })).toThrow('budget-invalid');
+  expect(() => setOutboundLimitCap(createOutboundLimit(), invalid)).toThrow('budget-invalid');
+});
+it('refuses unknown versions, extra fields and missing caps on the outbound ledger', () => {
+  const state = createOutboundLimit(5);
+  const restored: unknown = JSON.parse(JSON.stringify(state));
+  assertOutboundLimit(restored);
+  expect(restored).toEqual(state);
+  for (const corrupt of [{ ...state, version: 2 }, { ...state, used: -1 }, { ...state, cap: 0 },
+    { version: 1, used: 0 }, { ...state, extra: true }]) expect(() => assertOutboundLimit(corrupt)).toThrow('budget-invalid');
 });

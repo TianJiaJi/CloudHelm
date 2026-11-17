@@ -215,3 +215,33 @@ it('durably bounds summary and review scopes, including individual HTTP retries,
   f.store.put('request-budget-scopes', 'aux:summary:document', { purpose: 'summary', scopeId: 'document', used: 0, limit: 999 });
   expect(() => f.authority.reserveAuxiliary('summary', 'document', request('summary-0', 'summary'))).toThrow('budget-invalid');
 });
+it('charges every outbound purpose to one global ledger and blocks all of them at the cap without partial commits', () => {
+  const f = fixture();
+  f.authority.saveOutboundLimit(3);
+  const round = f.authority.current('task').roundId;
+  f.authority.reserve('task', round, request('conversation-one'));
+  f.authority.reserveAuxiliary('summary', 'document', request('summary-one', 'summary'));
+  f.authority.reserveAuxiliary('review', 'review', request('review-one', 'review'));
+  expect(f.authority.outboundLimit()).toMatchObject({ used: 3, cap: 3 });
+  expect(() => f.authority.reserve('task', round, request('conversation-two'))).toThrow('outbound-limit-exhausted');
+  expect(() => f.authority.reserveAuxiliary('summary', 'document', request('summary-two', 'summary'))).toThrow('outbound-limit-exhausted');
+  expect(() => f.authority.reserveAuxiliary('review', 'review', request('review-two', 'review'))).toThrow('outbound-limit-exhausted');
+  expect(() => f.authority.reserveConnectionTest()).toThrow('outbound-limit-exhausted');
+  expect(f.authority.outboundLimit()).toMatchObject({ used: 3, cap: 3 });
+  expect(f.task().budget?.roundUsed).toBe(1);
+  expect(f.store.get('request-budget-scopes', 'aux:summary:document')).toMatchObject({ used: 1 });
+});
+it('counts connection tests, skips duplicate attempt replays, and never resets usage when the cap changes', () => {
+  const f = fixture();
+  f.authority.reserveConnectionTest();
+  const round = f.authority.current('task').roundId;
+  const first = f.authority.reserve('task', round, request('same-attempt'));
+  expect(f.authority.reserve('task', first.budget.roundId, request('same-attempt')).duplicate).toBe(true);
+  expect(f.authority.outboundLimit()).toMatchObject({ used: 2, cap: null });
+  f.authority.saveOutboundLimit(1);
+  expect(f.authority.outboundLimit()).toMatchObject({ used: 2, cap: 1 });
+  expect(() => f.authority.reserveConnectionTest()).toThrow('outbound-limit-exhausted');
+  f.authority.saveOutboundLimit(null);
+  f.authority.reserveConnectionTest();
+  expect(f.authority.outboundLimit()).toMatchObject({ used: 3, cap: null });
+});

@@ -24,7 +24,8 @@ export type BudgetValue = Static<typeof BudgetValueSchema>;
 export const BudgetErrorSchema = Type.Union([
   Type.Literal('budget-invalid'), Type.Literal('budget-exhausted'), Type.Literal('budget-stale'),
   Type.Literal('budget-round-closed'), Type.Literal('budget-round-open'), Type.Literal('budget-not-exhausted'),
-  Type.Literal('summary-budget-exhausted'), Type.Literal('review-budget-exhausted'), Type.Literal('budget-unavailable')
+  Type.Literal('summary-budget-exhausted'), Type.Literal('review-budget-exhausted'), Type.Literal('budget-unavailable'),
+  Type.Literal('outbound-limit-exhausted')
 ]);
 export type BudgetError = Static<typeof BudgetErrorSchema>;
 export type BudgetOutcome = { value: BudgetValue; error?: never } | { error: BudgetError; value?: never };

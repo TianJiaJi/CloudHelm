@@ -49,7 +49,7 @@ export interface ClarificationRequest {
 
 export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'waiting-user' | 'human-control' | 'recovering' | 'paused' | 'answered' | 'failed';
 /** Only these backend-owned reasons permit a host-initiated continuation. */
-export type ResumeReason = 'verify' | 'report' | 'interrupted' | 'model' | 'budget-exhausted';
+export type ResumeReason = 'verify' | 'report' | 'interrupted' | 'model' | 'budget-exhausted' | 'outbound-limit-exhausted';
 
 /**
  * How an uncertain remote outcome was resolved. It never rewrites the recorded
@@ -396,6 +396,10 @@ export interface DesktopAPI {
   modelProviderSettings(providerId: string): Promise<ModelProviderSettings>;
   saveModelProfile(profile: ModelProfileDraft): Promise<void>;
   testModelConnection(profile: ModelProfileDraft): Promise<{ latencyMs: number }>;
+  /** Actual outbound request ledger shared by conversation, compaction, summary,
+   * review and connection tests; used is monotonic, cap null means unlimited. */
+  outboundLimit(): Promise<{ used: number; cap: number | null }>;
+  saveOutboundLimit(cap: number | null): Promise<{ used: number; cap: number | null }>;
   availableModels(): Promise<Array<ModelChoice & { name: string; thinkingLevels?: ThinkingLevel[] }>>;
   saveReviewSettings(settings: { jevKey?: string; disableJev?: boolean; reviewer?: ReviewSelection }): Promise<void>;
   shortcuts(): Promise<ShortcutSettings>;

@@ -39,7 +39,8 @@ export interface AuxiliaryRequestBudget {
   limit: number;
 }
 export type RequestBudgetErrorCode = 'budget-invalid' | 'budget-exhausted' | 'budget-stale' | 'budget-round-closed'
-  | 'budget-round-open' | 'budget-not-exhausted' | 'summary-budget-exhausted' | 'review-budget-exhausted';
+  | 'budget-round-open' | 'budget-not-exhausted' | 'summary-budget-exhausted' | 'review-budget-exhausted'
+  | 'outbound-limit-exhausted';
 export class RequestBudgetError extends Error {
   constructor(readonly code: RequestBudgetErrorCode) {
     super(code); this.name = 'RequestBudgetError';
@@ -148,4 +149,43 @@ export function reserveAuxiliaryRequest(state: AuxiliaryRequestBudget): Auxiliar
   assertAuxiliaryBudget(state);
   if (state.used === state.limit) throw new RequestBudgetError(state.purpose === 'summary' ? 'summary-budget-exhausted' : 'review-budget-exhausted');
   return { ...state, used: plus(state.used, 1) };
+}
+
+/** One global actual-outbound counter across every purpose (conversation,
+ * compaction, summary, review, connection test) and every HTTP retry.
+ * Usage is monotonic and doubles as the load/cost metric; cap is the hard limit. */
+export interface OutboundLimitState {
+  version: 1;
+  used: number;
+  cap: number | null;
+}
+export function assertOutboundLimit(value: unknown): asserts value is OutboundLimitState {
+  if (!value || typeof value !== 'object') invalid();
+  const state = value as Record<string, unknown>;
+  exactFields(state, ['version', 'used', 'cap']);
+  if (state.version !== 1) invalid();
+  counter(state.used);
+  if (state.cap !== null) { counter(state.cap); if ((state.cap as number) < 1) invalid(); }
+}
+export function createOutboundLimit(cap: number | null = null): OutboundLimitState {
+  if (cap !== null) { counter(cap); if (cap < 1) invalid(); }
+  return { version: 1, used: 0, cap };
+}
+export function outboundLimitExhausted(state: OutboundLimitState): boolean {
+  assertOutboundLimit(state);
+  return state.cap !== null && state.used >= state.cap;
+}
+/** The caller must atomically persist the charged state together with the
+ * triggering attempt receipt before any request is dispatched. */
+export function chargeOutboundLimit(state: OutboundLimitState): OutboundLimitState {
+  assertOutboundLimit(state);
+  if (outboundLimitExhausted(state)) throw new RequestBudgetError('outbound-limit-exhausted');
+  return { ...state, used: plus(state.used, 1) };
+}
+/** Adjusting the cap never resets usage and never mints a fresh allowance;
+ * a cap at or below current usage stays exhausted until it is raised above it. */
+export function setOutboundLimitCap(state: OutboundLimitState, cap: number | null): OutboundLimitState {
+  assertOutboundLimit(state);
+  if (cap !== null) { counter(cap); if (cap < 1) invalid(); }
+  return { ...state, cap };
 }

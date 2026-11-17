@@ -199,8 +199,12 @@ export class TaskRunner {
         let roundId: string;
         try { const budget = await this.budget.reserve(attempt, signal); this.requestCount = budget.totalUsed; roundId = budget.roundId; }
         catch (error) {
-          if (error instanceof RequestBudgetError && error.code === 'budget-exhausted' && this.status === 'running')
-            this.setStatus('paused', '本轮请求预算已用尽，请显式追加100次后继续。', 'budget-exhausted');
+          if (error instanceof RequestBudgetError && this.status === 'running') {
+            if (error.code === 'budget-exhausted')
+              this.setStatus('paused', '本轮请求预算已用尽，请显式追加100次后继续。', 'budget-exhausted');
+            else if (error.code === 'outbound-limit-exhausted')
+              this.setStatus('paused', '模型出站请求已达上限，请在模型设置的出站限制中提高上限后继续。', 'outbound-limit-exhausted');
+          }
           throw error;
         }
         this.assertRemoteActive(); signal?.throwIfAborted();

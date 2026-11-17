@@ -4,12 +4,12 @@ import type { TaskView } from '@cloudhelm/contracts';
 import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
 import { openAiFixture } from './openai-sse-fixture.js';
 
-async function setup(needsAnotherRequest: boolean) {
+async function setup(needsAnotherRequest: boolean, requestLimit = 1) {
   const fixture = await openAiFixture(async () => needsAnotherRequest
     ? { calls: [{ id: 'plan', name: 'update_plan', arguments: { steps: [{ id: 'one', title: '解释概念', status: 'pending' }] } }] }
     : { text: '这是概念解释，不需要远端操作。' });
   const task: TaskView = { id: 'budget-task', goal: '解释 SSH', hostIds: [], localScopes: [], modelId: 'fixture',
-    status: 'draft', requestCount: 0, requestLimit: 1, createdAt: 1, updatedAt: 1 };
+    status: 'draft', requestCount: 0, requestLimit, createdAt: 1, updatedAt: 1 };
   const events: Parameters<TaskSignals['event']>[0][] = [];
   const execute = vi.fn(async () => { throw new Error('No remote execution permitted'); });
   const runner = new TaskRunner(task, [], { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: fixture.baseUrl },
@@ -42,6 +42,25 @@ it('uses a distinct budget pause and ordinary continuation cannot refill the exh
     await vi.waitFor(() => expect(f.status()?.status).not.toBe('running'));
     expect(f.fixture.requests).toHaveLength(1);
     expect(f.status()).toMatchObject({ status: 'paused', resumeReason: 'budget-exhausted', requestCount: 1 });
+    expect(f.execute).not.toHaveBeenCalled();
+  } finally { await f.close(); }
+});
+it('pauses with a distinct reason at the global outbound cap and allows exactly one more request after raising it', async () => {
+  const f = await setup(true, 10);
+  try {
+    f.runner.setOutboundLimit(1);
+    await f.runner.start();
+    expect(f.fixture.requests).toHaveLength(1);
+    expect(f.status()).toMatchObject({ status: 'paused', resumeReason: 'outbound-limit-exhausted' });
+    await f.runner.resume().catch(() => undefined);
+    await vi.waitFor(() => expect(f.status()?.status).not.toBe('running'));
+    expect(f.fixture.requests).toHaveLength(1);
+    expect(f.status()).toMatchObject({ status: 'paused', resumeReason: 'outbound-limit-exhausted' });
+    f.runner.setOutboundLimit(2);
+    await f.runner.resume().catch(() => undefined);
+    await vi.waitFor(() => expect(f.status()?.status).not.toBe('running'));
+    expect(f.fixture.requests).toHaveLength(2);
+    expect(f.status()).toMatchObject({ status: 'paused', resumeReason: 'outbound-limit-exhausted', requestCount: 2 });
     expect(f.execute).not.toHaveBeenCalled();
   } finally { await f.close(); }
 });

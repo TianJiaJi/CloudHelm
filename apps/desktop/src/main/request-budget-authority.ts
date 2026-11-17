@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Value } from 'typebox/value';
 import type { SqliteStore } from '@cloudhelm/adapters';
-import { assertAuxiliaryBudget, assertModelRequestAttempt, assertRequestBudget, beginRequestRound, closeRequestRound, createAuxiliaryBudget,
-  extendRequestRound, legacyRequestBudget, reopenRequestRound, requestAttemptKey, reserveAuxiliaryRequest,
-  reserveRoundRequest, RequestBudgetError, type AuxiliaryRequestBudget, type ModelRequestAttempt,
-  type RequestBudgetState, type RoundCompletion } from '@cloudhelm/core';
+import { assertAuxiliaryBudget, assertModelRequestAttempt, assertOutboundLimit, assertRequestBudget, beginRequestRound,
+  chargeOutboundLimit, closeRequestRound, createAuxiliaryBudget, createOutboundLimit, extendRequestRound,
+  legacyRequestBudget, reopenRequestRound, requestAttemptKey, reserveAuxiliaryRequest,
+  reserveRoundRequest, setOutboundLimitCap, RequestBudgetError, type AuxiliaryRequestBudget, type ModelRequestAttempt,
+  type OutboundLimitState, type RequestBudgetState, type RoundCompletion } from '@cloudhelm/core';
 import { ExtendRequestBudgetSchema, type ExtendRequestBudget, type RequestBudgetGrant, type TaskView } from '@cloudhelm/contracts';
 
 interface AuthorityState {
@@ -14,7 +15,7 @@ interface AuthorityState {
   completion(id: string): RoundCompletion;
 }
 interface Receipt {
-  kind: 'initialize' | 'attempt' | 'input' | 'close' | 'reopen' | 'extension';
+  kind: 'initialize' | 'attempt' | 'input' | 'close' | 'reopen' | 'extension' | 'connection-test' | 'outbound-cap';
   roundId?: string;
   preparationId?: string;
   request?: ModelRequestAttempt;
@@ -57,10 +58,11 @@ export class RequestBudgetAuthority {
     const binding = JSON.stringify(value); const key = `attempt:${requestAttemptKey(request)}`;
     if (this.existing(this.owner(taskId), key, binding)) return { budget, duplicate: true };
     this.predecessor(this.owner(taskId), request, roundId, preparationId);
+    const outbound = this.chargeOutbound();
     const next = reserveRoundRequest(budget);
     const input = marker;
-    const records = request.purpose === 'conversation' && input?.awaitingRequest
-      ? [{ bucket: 'request-round-inputs', id: taskId, before: input, value: { ...input, awaitingRequest: false } }] : [];
+    const records = [outbound, ...(request.purpose === 'conversation' && input?.awaitingRequest
+      ? [{ bucket: 'request-round-inputs', id: taskId, before: input, value: { ...input, awaitingRequest: false } }] : [])];
     this.commit(task, stored, next, key, binding, value, records);
     return { budget: structuredClone(next), duplicate: false };
   }
@@ -144,7 +146,7 @@ export class RequestBudgetAuthority {
   }
 
   /** The IPC broker must bind scopeId to its active preparation or review first.
-   * Cancellation does not delete/refill a previously consumed auxiliary scope. */
+    * Cancellation does not delete/refill a previously consumed auxiliary scope. */
   reserveAuxiliary(purpose: 'summary' | 'review', scopeId: string, request: ModelRequestAttempt): AuxiliaryRequestBudget {
     assertModelRequestAttempt(request);
     if (request.purpose !== purpose) throw new RequestBudgetError('budget-invalid');
@@ -158,10 +160,54 @@ export class RequestBudgetAuthority {
     const key = `attempt:${requestAttemptKey(request)}`;
     if (this.existing(owner, key, binding)) return structuredClone(state);
     this.predecessor(owner, request);
+    const outbound = this.chargeOutbound();
     const next = reserveAuxiliaryRequest(state);
-    this.store.commitRequestBudget({ records: [{ bucket: 'request-budget-scopes', id: owner, before: stored, value: next }],
+    this.store.commitRequestBudget({ records: [{ bucket: 'request-budget-scopes', id: owner, before: stored, value: next }, outbound],
       receipt: { owner, requestId: key, binding, value } });
     return structuredClone(next);
+  }
+
+  /** One durable actual-outbound ledger across every purpose; the record rides
+    * in the same transaction as the triggering attempt receipt. */
+  outboundLimit(): OutboundLimitState {
+    const stored = this.store.get<OutboundLimitState>('outbound-limit', 'global');
+    const state = stored === undefined ? createOutboundLimit() : stored;
+    assertOutboundLimit(state);
+    return structuredClone(state);
+  }
+
+  /** Changing the cap never resets usage and never refills spent reservations. */
+  saveOutboundLimit(cap: number | null): OutboundLimitState {
+    const stored = this.store.get<OutboundLimitState>('outbound-limit', 'global');
+    const state = stored === undefined ? createOutboundLimit() : stored;
+    assertOutboundLimit(state);
+    const next = setOutboundLimitCap(state, cap);
+    const value: Receipt = { kind: 'outbound-cap' };
+    const binding = JSON.stringify(value);
+    this.store.commitRequestBudget({ records: [{ bucket: 'outbound-limit', id: 'global', before: stored, value: next }],
+      receipt: { owner: 'outbound', requestId: `outbound-cap:${randomUUID()}`, binding, value } });
+    return structuredClone(next);
+  }
+
+  /** A connection test is one real billed request; it shares the same ledger
+    * and is refused, not deferred, when the hard limit is reached. */
+  reserveConnectionTest(): OutboundLimitState {
+    const stored = this.store.get<OutboundLimitState>('outbound-limit', 'global');
+    const state = stored === undefined ? createOutboundLimit() : stored;
+    assertOutboundLimit(state);
+    const next = chargeOutboundLimit(state);
+    const value: Receipt = { kind: 'connection-test' };
+    const binding = JSON.stringify(value);
+    this.store.commitRequestBudget({ records: [{ bucket: 'outbound-limit', id: 'global', before: stored, value: next }],
+      receipt: { owner: 'outbound', requestId: `connection-test:${randomUUID()}`, binding, value } });
+    return structuredClone(next);
+  }
+
+  private chargeOutbound(): { bucket: 'outbound-limit'; id: 'global'; before: OutboundLimitState | undefined; value: OutboundLimitState } {
+    const stored = this.store.get<OutboundLimitState>('outbound-limit', 'global');
+    const state = stored === undefined ? createOutboundLimit() : stored;
+    assertOutboundLimit(state);
+    return { bucket: 'outbound-limit', id: 'global', before: stored, value: chargeOutboundLimit(state) };
   }
 
   private owner(taskId: string): string { return `task:${taskId}`; }
