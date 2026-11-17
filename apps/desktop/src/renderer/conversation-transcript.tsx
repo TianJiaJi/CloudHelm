@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AppSnapshot, TaskView } from '@cloudhelm/contracts';
+import type { AppSnapshot, ConversationMessage, TaskView } from '@cloudhelm/contracts';
 import { conversationTimeline, type TimelineEntry } from './conversation-timeline.js';
 import { conversationTurns, type ConversationTurn } from './conversation-turns.js';
 import { AgentPlan, AssistantIdentity, OperationActivity } from './agent-panel-parts.js';
@@ -7,11 +7,35 @@ import { ClarificationCard } from './clarification-card.js';
 import { ReasoningContent } from './reasoning-content.js';
 import { MarkdownMessage } from './markdown-message.js';
 import { UserMessage } from './user-message.js';
-import { copyEntries } from './clipboard.js';
+import { copyEntries, copyText } from './clipboard.js';
 import { openContextMenu } from './context-menu.js';
 import { Icon } from './ui-helpers.js';
 import { useUi } from './store.js';
 import styles from './agent-panel.module.css';
+
+/** Finished assistant answers expose discoverable copy actions; the raw
+ * Markdown source stays distinct from code blocks' own copy. */
+function AssistantMessage({ message, report, omitReasoning = false }: {
+  message: ConversationMessage; report(error: string): void; omitReasoning?: boolean;
+}): React.JSX.Element {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  async function copy(): Promise<void> {
+    setCopyState(await copyText(message.text) ? 'copied' : 'failed');
+  }
+  return <article className={styles.message} aria-label="助手消息"
+    onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
+    <AssistantIdentity />
+    {!omitReasoning && <ReasoningContent value={message.reasoning} />}
+    {message.text && <MarkdownMessage text={message.text} />}
+    {message.model && <small>{message.model.provider} · {message.model.modelId}</small>}
+    <footer className={styles.assistantActions}>
+      <button type="button" aria-label="复制回答" title={copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败，点击重试' : '复制回答'}
+        onClick={() => void copy()} onBlur={() => setCopyState('idle')}>
+        <Icon name={copyState === 'copied' ? 'check' : 'copy'} size={14} />复制回答</button>
+    </footer>
+    <span className={styles.assistantCopyStatus} role="status">{copyState === 'copied' ? '回答已复制到剪贴板，不会执行。' : copyState === 'failed' ? '无法访问剪贴板，请重试或手动选择回答。' : ''}</span>
+  </article>;
+}
 
 function Entry({ entry, conversation, report, omitReasoning = false }: {
   entry: TimelineEntry; conversation: TaskView; report(error: string): void; omitReasoning?: boolean;
@@ -21,11 +45,10 @@ function Entry({ entry, conversation, report, omitReasoning = false }: {
   const message = entry.value;
   if (message.role === 'user') return <UserMessage message={message} canEdit={!!conversation.session && conversation.hostIds.length <= 1} report={report} />;
   if (message.role === 'agent' && !message.text.trim() && !message.reasoning?.text.trim()) return null;
+  if (message.role === 'agent') return <AssistantMessage message={message} report={report} omitReasoning={omitReasoning} />;
   return <article className={styles.message}
     onContextMenu={(event) => openContextMenu(event, copyEntries('复制文本', message.text, report), '消息操作')}>
-    {message.role === 'agent' ? <AssistantIdentity /> : <strong>系统</strong>}
-    {message.role === 'agent' ? <>{!omitReasoning && <ReasoningContent value={message.reasoning} />}
-      {message.text && <MarkdownMessage text={message.text} />}</> : <p>{message.text}</p>}
+    <strong>系统</strong><p>{message.text}</p>
     {message.model && <small>{message.model.provider} · {message.model.modelId}</small>}
   </article>;
 }

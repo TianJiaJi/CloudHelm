@@ -48,4 +48,27 @@ describe('assistant Markdown rendering', () => {
     expect(html).toContain('href="https://service.example.test/"');
     expect(html).not.toContain('<img');
   });
+
+  it('labels code blocks with their fence language and exposes reading controls', () => {
+    const html = render('```yaml\nservices:\n  web:\n    image: nginx\n```');
+    expect(html).toContain('yaml');
+    expect(html).toContain('aria-label="复制代码"');
+    expect(html).toContain('aria-label="切换换行"');
+    expect(html).toContain('aria-pressed="false"');
+  });
+
+  it('highlights bundled languages and falls back to plain text for unknown ones', () => {
+    const highlighted = render('```yaml\nservices:\n  web:\n    image: nginx\n```');
+    expect(highlighted).toContain('class="hljs-attr"');
+    const unknown = render('```not-a-language\nplain fallback text\n```');
+    expect(unknown).not.toContain('hljs-');
+    expect(unknown).toContain('plain fallback text');
+  });
+
+  it('keeps HTML literals inside code escaped even while highlighted', () => {
+    const html = render('```bash\necho "<script>not executed</script>"\n```');
+    expect(html).toContain('class="hljs-string"');
+    expect(html).toContain('&lt;script&gt;not executed&lt;/script&gt;');
+    expect(html).not.toContain('<script>');
+  });
 });

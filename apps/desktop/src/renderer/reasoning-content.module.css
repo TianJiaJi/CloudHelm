@@ -8,7 +8,7 @@
 .status[data-status=interrupted] { color: light-dark(#975a17, #dfb27e); }
 .elapsed { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
 .thinkingIcon { width: 4px; height: 4px; margin: 0 2px; border-radius: 50%; background: currentColor; animation: breathe 1.6s ease-in-out infinite; }
-.body { --assistant-font-size: 11px; max-height: 180px; overflow: auto; scrollbar-width: thin; margin: 6px 0 2px 6px; padding: 2px 6px 2px 10px; border-left: 1px solid var(--border); overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 16px; }
+.body { --assistant-font-size: 11px; --assistant-line-height: 16px; max-height: 180px; overflow: auto; scrollbar-width: thin; margin: 6px 0 2px 6px; padding: 2px 6px 2px 10px; border-left: 1px solid var(--border); overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 16px; }
 .body > div { color: inherit; font-size: inherit; line-height: inherit; }
 .body p { margin: 0 0 8px; }
 .body h1, .body h2, .body h3, .body h4, .body h5, .body h6 { margin: 8px 0 4px; font-size: 11px; font-weight: 500; line-height: 16px; }

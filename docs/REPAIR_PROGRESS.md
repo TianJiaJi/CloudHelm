@@ -8,8 +8,8 @@
 
 完整简表见 [当前整改进度总览](REPAIR_STATUS_OVERVIEW.md)。本账为详细证据来源，当前批次与基准以最新记录及Git为准。
 
-- 原42父项完整保留：**4已完成、32已实现待验收、2进行中、1待开始、3延期转新版（F05/G01/G02）**；延期未完成，但不计旧版剩余或完成。
-- **旧版统计范围39项：已完成或已实现36项，仍需推进3项（2进行中、1待开始）**。严格最终验收仍有32项待验收加3项推进，共35项未收口；不把待验收冒充最终完成。
+- 原42父项完整保留：**4已完成、33已实现待验收、2进行中、0待开始、3延期转新版（F05/G01/G02）**；延期未完成，但不计旧版剩余或完成。
+- **旧版统计范围39项：已完成或已实现37项，仍需推进2项（2进行中）**。严格最终验收仍有33项待验收加2项推进，共35项未收口；不把待验收冒充最终完成。
 - 用户已确认NV01–NV06所列旧路线/交互子项暂不做，转新版承接，范围与13项剩余表见[当前总览](REPAIR_STATUS_OVERVIEW.md)。A06/A07等部分移交的父项仍按其旧版保留范围计数；U06整包延期，其他11个UI包按保留范围跟进，UI不另计父项。
 - C02按用户选择先安全封口：SFTP不能核验ACL/xattr时拒绝覆盖已有文件，新建只用非覆盖rename，删除副本仅承诺正文。禁止策略已实现、待验收；不等于支持元数据保持或真实平台已验收。
 
@@ -33,14 +33,14 @@
 | 2 执行结果/审核/恢复 | 进行中 | A05–A07已实现待验收（复杂上下文保守核验、包装诊断证明、硬禁令矩阵预期修正）；B01–B08/C06/E03已实现待验收 |
 | 3 工具/权限/文件/环境 | 进行中 | C03/C04/C05、D03已实现待验收；真实平台与ACL/LSM验收仍待 |
 | 4 终端与生命周期 | 进行中 | F02已完成；C07已实现待验收，不能把单项完成当作阶段完成 |
-| 5 UI/流式/性能/表达 | 进行中 | E04/F04/F03已实现待验收；旧版保留F06及未延期UI范围；F05/G01/G02/U06转新版，U05/U07仅部分移交 |
+| 5 UI/流式/性能/表达 | 进行中 | E04/F04/F03/F06已实现待验收；未延期UI范围继续；F05/G01/G02/U06转新版，U05/U07仅部分移交 |
 | 6 真实受限验收 | 进行中 | 原状握手停在主机指纹核验；命令/三条业务链/受限模型样本未验收，不升级系统或预装依赖掩盖问题 |
 | 7 全量收口 | 待开始 | 全部条目、测试、迁移、提交、费用与剩余边界逐项核对 |
 
 ## 下一轮起点（交接）
 
 - 当前HEAD业务基准及已保存能力以Git为准；本轮有设计和统计文档修改，工作区以`git status`为准，保留未跟踪`nul`与无关文件，不据历史“应干净”描述重置。
-- 当前用户确认按[旧版清单](REPAIR_STATUS_OVERVIEW.md#旧版仍需推进总表3项)推进：F06、H02/H03；A06/A07等只做保留的安全范围，NV01–NV06承接子项暂停旧版实施。F05/G01/G02/U06不排入旧版后续开发；U05/U07只做保留部分。A05–A07已收口为待验收（包装诊断证明、复杂上下文保守核验、硬禁令既有覆盖），H01已收口为待验收（四类安全事实跨层一致性审查无实质分歧），H04已收口为待验收（必要迁移/回退/保守恢复与降级防护失败关闭），H05已收口为待验收（全局出站硬限制单账本、连接测试同计、达到上限暂停可续），C03/C05已有事务闭环、D01/D02已实现待验收，F03已收口为待验收（正文流式text-progress与高频事件增量投影），不能重复从零建设或把历史子包当父项完成。
+- 当前用户确认按[旧版清单](REPAIR_STATUS_OVERVIEW.md#旧版仍需推进总表2项)推进：H02/H03；F06已收口为待验收。A06/A07等只做保留的安全范围，NV01–NV06承接子项暂停旧版实施。F05/G01/G02/U06不排入旧版后续开发；U05/U07只做保留部分。A05–A07已收口为待验收（包装诊断证明、复杂上下文保守核验、硬禁令既有覆盖），H01已收口为待验收（四类安全事实跨层一致性审查无实质分歧），H04已收口为待验收（必要迁移/回退/保守恢复与降级防护失败关闭），H05已收口为待验收（全局出站硬限制单账本、连接测试同计、达到上限暂停可续），C03/C05已有事务闭环、D01/D02已实现待验收，F03已收口为待验收（正文流式text-progress与高频事件增量投影），F06已收口为待验收（Markdown排版/代码高亮/消息操作重整，U02/U03/U04/U08同批已实现待验收），不能重复从零建设或把历史子包当父项完成。
 - 最新用户要求：各批只做改动相关局部测试、类型/语法检查和构建运行验证；全量及最终验收留到全部整改完成后，每批完成后只做一次中文本地Git提交，不自动推送。
 - 未完成边界：真实 SSH/VM 业务链（H03，需用户确认主机指纹）、Linux/macOS 与安装包验收、付费 6 次/1024 tokens 上限验收配置仍待用户执行（出站硬限制机制已实现，实际付费调用仍禁止）。
 
@@ -82,7 +82,7 @@
 | F03 | 补齐普通回答正文流式投影；高频全量快照改为增量事件、按会话订阅/历史分页和局部投影；移除高频解密。 | 5 UI与性能 | 已实现待验收 | 【本批收口】正文流式与增量投影已实现：adapters新增PiTextStream（60ms合并、whitespace跳过、clear先冲刷窗口内未发更新再发null），Pi会话订阅assistant消息流，正文增量以text-progress事件经worker→main→renderer贯穿，不等message_end即显示（liveText区，最终transcript仍由project落账）；contracts/core新增TextProgress、AppSnapshot.textProgress与AppEvent text-progress变体。main新增app-event-routing.ts增量事件集——terminal-data、reasoning-progress、text-progress、context-usage、model-request、task-message不再触发全量快照publish、仅单发emit（agent-lifecycle保留publish：accept()非平凡状态且频率为每工具调用；message-preparation保留publish+emit：revalidatePreparations时机钩子），高频全量快照发布与随之的高频重投影/解密发布移除，小更新载荷不随全部历史正文增长；renderer按事件原位增量应用（task-message按entryId原位更新去重、store增量handler），agent-panel在reasoning块后直出liveText，不重挂transcript；runtimeStopped时textProgress整体删除、reasoningProgress保留interrupted标记。验证：pi-text-stream 3项（含deepseek夹具端到端流式、最终transcript与null收尾）、pi-reasoning 3项（含clear冲刷回归）、pi-session系列、task-session-events映射、app-state增量路由（高频事件不改快照计数断言+text-progress路由）、store增量应用、agent-panel-parts及maxWorkers=4全量321文件2793项零失败（25项跳过）、类型/lint/depcruise/行数/布局/版本/更新日志通过。真实模型端到端流式与实际IPC/FPS量测留验收；按会话订阅/历史分页的载荷目标已由增量事件与局部投影达成，不作为独立机制重复建设，超长会话历史窗口留观察 |
 | F04 | 终端只有在用户正在跟随尾部时自动滚动；离开底部后显示新输出提示。 | 5 UI与性能 | 已实现待验收 | 终端写入只在视口位于尾部时自动滚动，离开底部后出现“有新输出 · 跳到末尾”提示且不打断阅读；滚动跟随判定抽为可测纯函数。Tests/desktop/renderer/terminal-follow.test.ts 2项与工程检查通过；真实持续输出与缩放待隐藏桌面/人工验收。 |
 | F05 | 明确展示模型、远端任务、审核、认证、核验各自的状态与操作入口，避免混成一个“运行/停止/失败”。 | 新版NV04 | 延期转新版 | 用户确认暂不做旧版完整状态/控制界面；统一新状态、诊断/注入续跑与模型设置由NV04承接，不计旧版剩余；现有停止与风险提示保留，未验收。 |
-| F06 | 以 Trae CN 为对标重整 AI 阅读与交互：Markdown 排版、代码高亮/长块阅读、消息操作、发送/停止入口；结论与必要动作优先，减少空诊断面板和重复证据卡。 | 5 UI与性能 | 待开始 | 【旧版范围】独立阅读/高亮/复制/滚动等继续；关联状态/报告展示移交NV04/NV05。  未验收 |
+| F06 | 以 Trae CN 为对标重整 AI 阅读与交互：Markdown 排版、代码高亮/长块阅读、消息操作、发送/停止入口；结论与必要动作优先，减少空诊断面板和重复证据卡。 | 5 UI与性能 | 已实现待验收 | 【本批收口】阅读与交互重整已实现：新增lowlight/highlight.js直接渲染（固定版本11.11.1/3.3.0，按块注册8语法bash/diff/ini/javascript/json/python/typescript/yaml，无dangerouslySetInnerHTML），`highlightCode`按块10万字符上限、未知/超长/解析异常一律回退纯文本（react-markdown默认安全渲染，HTML转义保持）；新CodeBlock组件（语言标签、换行开关aria-pressed、溢出才出现的展开/收起aria-expanded、复制载荷为原样代码，默认折叠max-height 320px，hljs双主题配色light-dark()）；Markdown排版重整（正文行高var(--assistant-line-height,20px)、标题em刻度h1 1.4em–h4 1em配字重层级、表格12px带边框独立滚动、嵌套列表间距、思考区16px行高），消息操作补齐：助手消息复制回答按钮（hover/focus-within显现，role=status状态，复制原始Markdown源与代码块自身复制区分）。既有发送/停止入口、结论优先与重复证据卡治理沿用F03前批次，未重复建设。验证：Tests/desktop/renderer/code-highlight.test.ts 6项（8语法/别名/未知回退/超长回退/空与异常）、markdown-message.test.ts扩至18项（标签与控件、高亮与回退、HTML转义）、markdown-smoke重写为正式目标行为回归（逐语言高亮断言、未知回退、13px/20px正文、h4/表格12px、100行折叠320px与展开收起往返、换行往返、复制载荷、主题/窄视口不回归）、ai-panel-smoke新增面板内断言（yaml高亮、复制回答hover/focus显现与载荷=快照原文）、test:ui四检查含推理体排版通过；类型检查通过。真实Electron窗口下的阅读体验、长会话滚动性能与DPI矩阵留U12/最终验收。U02/U03/U04/U08同批转已实现待验收；U09/U10部分推进进行中，U12基线转换进行中。 |
 | G01 | 沿用已有后端 facts，清晰区分执行结果、当前观察、业务目标判断、模型解释及风险接受。 | 新版NV05 | 延期转新版 | 用户确认随新版任务结果与交接包统一实施，不计旧版剩余；现有后端事实、证据与风险区分继续保留，未验收。 |
 | G02 | 以正常回答/结论为主，证据按需展开；对真实异常使用明确提示，核对用户黄色警告的具体来源后再改。 | 新版NV05 | 延期转新版 | 用户确认随新版结果/证据展示统一实施，不计旧版剩余；现有必要风险提示不隐藏，未验收。 |
 | H01 | 为共享事实、决策与投影建立明确领域契约及跨模块不变量，沿现有 core/application/adapters/contracts 分层演进。 | 0 基线/贯穿 | 已实现待验收 | 【旧版范围】现用安全事实契约继续；新版运行/诊断状态契约与旧方案重复定版移交NV06。四类安全事实（只读/effect-free、未决与锁释放、恢复分类、授权当次性）跨层一致性审查完成：单一来源核实（core analyzeOperationImpact/isEffectFreeQuery、contracts operationNeedsVerification/operationOutcomeResolvable、main operation-recovery、SafetyGate 唯一铸出点），core之外约40处重猜点全量核查无实质分歧——均消费同一铸出事实或调用同一core函数，缺失一律fail-closed；冻结迁移8的reconciledAt字面差异更保守且被迁移9快照中和；分层导入方向由dependency-cruiser六规则机器强制，无第二套状态机。证据资格谓词与变更习语的层内重复属维护性聚合空间，不构成各层重猜。Tests/scripts/repair-coverage.test.ts一致性回归、类型与三入口构建通过；全域统一复核留验收。 |
@@ -96,17 +96,17 @@
 | ID | 范围 | 状态 | 提交/目标测试/剩余边界 |
 | --- | --- | --- | --- |
 | U01 | 正文真流式 / 首批契约 | 已实现待验收 | 对应F03：正文text-progress流式不等message_end，liveText与最终transcript不重复；真实模型流式链与实际IPC/FPS量测留验收 |
-| U02 | Markdown 阅读系统 / 首批 | 待开始 | 未验收 |
-| U03 | 完整代码块 / 首批 | 待开始 | 未验收 |
-| U04 | 表格与长内容 / 首批 | 待开始 | 未验收 |
+| U02 | Markdown 阅读系统 / 首批 | 已实现待验收 | F06批：正文行高20px精确变量、标题em刻度与字重层级、表格12px带边框独立滚动、嵌套列表间距、思考区16px行高、13px基准字号下限；排版刻度与双主题留U12/验收 |
+| U03 | 完整代码块 / 首批 | 已实现待验收 | F06批：lowlight 8语法直接渲染、10万字符上限回退、未知语言纯文本、折叠320px+展开收起、换行开关、复制原样代码、语言标签、双主题hljs配色；tsx别名等长尾留验收 |
+| U04 | 表格与长内容 / 首批 | 已实现待验收 | F06批：表格12px带边框内滚动、长URL anywhere换行、100行长块折叠/展开往返、长行块换行开关往返；真实超长回答留验收 |
 | U05 | 对话与过程层级 / 首批 | 待开始 | 旧版保留独立阅读层级；关联任务结果/证据/状态展示移交NV04/NV05，未验收。 |
 | U06 | 风险与控制入口 / 随后端契约 | 延期转新版 | NV04承接新版风险/控制状态整合，不计旧版UI剩余；现有安全入口保留，未验收。 |
 | U07 | Composer 完整交互 / 首批布局，契约联动 | 待开始 | 旧版保留发送补充、键盘/IME、多行粘贴和草稿；诊断/恢复控制语义移交NV04，未验收。 |
-| U08 | 消息与证据操作 / 首批 | 待开始 | 未验收 |
-| U09 | 滚动与选择稳定 / 全程 | 待开始 | 未验收 |
-| U10 | 统一视觉与可访问性 / 首批 | 待开始 | 未验收 |
+| U08 | 消息与证据操作 / 首批 | 已实现待验收 | F06批：助手消息复制回答（hover/focus-within显现、role=status、复制原始Markdown源）、代码块复制与上下文菜单、用户消息复制既有；证据操作留NV05 |
+| U09 | 滚动与选择稳定 / 全程 | 进行中 | AI区跟尾/回到最新/新输出提示既有（F03/F04批）；F06批补代码展开不致滚动跳变、宽度调整360px与主题切换回归；选区保持由liveText独立区不重挂设计保证（未直接断言），跨会话位置与DPI矩阵留U12/验收 |
+| U10 | 统一视觉与可访问性 / 首批 | 进行中 | F06批：阅读级字号下限12px、focus-visible轮廓、aria-pressed/aria-expanded状态、深浅高亮配色、复制状态role=status；全局对比度矩阵、字体缩放、reduced-motion整体验收留U12/新版 |
 | U11 | 增量渲染与性能 / 与 U01 同步 | 已实现待验收 | 高频事件改增量应用、载荷不随历史正文增长，liveText独立区不重挂transcript保持选择稳定；渲染性能量测与查找场景留验收 |
-| U12 | UI 专项验收 / 先建基线，全程 | 待开始 | 未验收 |
+| U12 | UI 专项验收 / 先建基线，全程 | 进行中 | 阶段0基线转换进行中：markdown-smoke已重写为正式目标行为回归、ai-panel-smoke已补面板内高亮/复制断言、test:ui四检查通过；真实Electron/DPI/长历史/缩放矩阵验收留H03及最终收口 |
 
 ## 后补专项覆盖检查
 
@@ -123,6 +123,7 @@
 
 以下保留历史事实和当时统计；当前范围与数量以前述总览为准，不用历史的“23完成/19剩余”覆盖本轮移交结果。
 
+- AI阅读与交互重整批（F06收口，一次中文本地提交，不推送）：固定版本新增依赖highlight.js 11.11.1+lowlight 3.3.0（`--save-exact`），renderer新增`code-highlight.ts`——lowlight单例按需注册8语法（bash/diff/ini/javascript/json/python/typescript/yaml，语法自带别名sh/zsh/yml/toml/ts等），`highlightCode(language, code)`将HAST转为React节点直接渲染（无dangerouslySetInnerHTML/react-highlight之类的HTML字符串路径），按块10万字符上限、未知语言/超长/解析异常/空串一律返回null回退纯文本，react-markdown默认安全渲染与HTML转义保持；新增`code-block.tsx`+`code-block.module.css`——语言标签、换行开关（aria-pressed）、溢出才出现的展开/收起（scrollHeight>clientHeight+1检测，aria-expanded，默认折叠max-height 320px）、复制载荷为原样代码文本（与上下文菜单共用entries），hljs token配色light-dark()双主题，focus-visible轮廓，复制状态role=status（含剪贴板不可用失败文案）。`markdown-message.tsx`重写为39行（CodeBlock抽出，safeMarkdownUrl/DeferredImage保留），`markdown-message.module.css`排版重整：正文行高`var(--assistant-line-height, 20px)`（13px×1.55=20.15px不达标故用精确变量而非倍数）、标题em刻度（h1 1.4em/h2 1.25em/h3 1.1em/h4–h6 1em配650/600/500字重、h6 muted）、表格12px带边框独立横向滚动、行内代码.92em、嵌套列表间距；`reasoning-content.module.css` .body补`--assistant-line-height: 16px`（思考区11px/16px精确）。`conversation-transcript.tsx`新增AssistantMessage组件：article aria-label="助手消息"，底部“复制回答”按钮复制原始Markdown源（message.text），`agent-panel.module.css` .assistantActions opacity 0→1（.message:hover与:focus-within，键盘focus可见），复制状态与代码块复制区分（“回答已复制到剪贴板，不会执行。”）。验证：Tests/desktop/renderer/code-highlight.test.ts 6项（语法注册/别名/未知回退/超长回退/空串/异常）、markdown-message.test.ts扩至18项（代码块标签与控件/高亮与回退/高亮内HTML转义）、markdown-fixture重写富样例（h1–h6、嵌套列表、任务列表、长URL、表格、yaml/bash/json/ts/diff/未知语言/无语言块、100行块、长行块、块引用）、markdown-smoke.mjs重写为正式目标行为回归（逐语言hljs类断言、未知语言回退纯文本、正文13px/20px、h4与表格12px、100行块折叠320px→展开→收起往返、长行块换行开关往返、复制载荷字节级断言、主题切换与360px窄视口不回归、无外部请求）、ai-panel-smoke.mjs新增U08断言块（面板内yaml高亮、复制回答opacity 0→focus 1、载荷=fixture快照原文、状态文本、剪贴板描述符恢复）、test:ui四检查（含推理体11px/16px排版）通过，typecheck通过；Playwright chromium 1243（153.0.8010.12）已安装。修复过程记录：CSS module类名哈希导致page.evaluate不能用`.markdown`选择器（改结构选择器）；ai-panel假API `inject({type:'snapshot'})`只emit不改view、断言载荷须比`window.fixture.aiPanelSnapshot`。F06转已实现待验收（待验收32→33、待开始1→0），U02/U03/U04/U08同批转已实现待验收，U09/U10/U12转进行中；tsx无别名回退纯文本（可接受，计划最低要求Shell/YAML/JSON/TS/diff已覆盖）、真实Electron阅读体验/长会话滚动/DPI矩阵留U12与最终验收。
 - 正文流式与增量投影批（F03收口，一次中文本地提交，不推送）：adapters新增`PiTextStream`——Pi会话订阅assistant消息流，正文增量60ms合并、whitespace跳过、clear先冲刷窗口内未发更新再发null（修复fixture端到端复现的clear丢尾：流在60ms窗口内结束时正文从未上屏），`text-progress`事件经worker映射、main记录贯穿renderer；contracts/core新增`TextProgress`、`AppSnapshot.textProgress`与AppEvent `text-progress`变体。main新增`app-event-routing.ts`增量事件集（terminal-data、reasoning-progress、text-progress、context-usage、model-request、task-message）：这些事件不再触发全量快照publish、仅单发emit，agent-lifecycle保留publish（accept()非平凡状态、频率为每工具调用而非每token）、message-preparation保留publish+emit（revalidatePreparations时机钩子）；emit行用字面量判别链保证record()联合窄化（Set.has不窄化），高频全量快照发布与随之的高频重投影/解密发布移除，小更新载荷不随全部历史正文增长。renderer store按事件原位增量应用（reasoning/text/context-usage/task-message按entryId原位更新去重），agent-panel在reasoning块后直出liveText，不重挂transcript保持选择稳定；runtimeStopped时textProgress整体删除、reasoningProgress保留interrupted标记既有。验证：Tests/adapters/pi-text-stream.test.ts 3项（60ms合并/whitespace/null收尾、身份稳定、deepseek夹具端到端流式+最终transcript+null收尾）、pi-reasoning 3项（含clear冲刷）、pi-session系列回归、task-session-events映射、app-state增量路由（高频事件不改快照计数断言+text-progress路由2项）、store增量应用、agent-panel-parts及`--maxWorkers=4`全量321文件2793项零失败（25项跳过；受影响批量中input-queue负载抖动单跑通过，归H02观察）、类型/eslint/depcruise/行数/布局/版本/更新日志通过。F03转已实现待验收（待验收31→32、待开始2→1），U01/U11同批转已实现待验收（U01与U11同批为F03硬性要求）；真实模型端到端流式、实际IPC/FPS量测留验收，按会话订阅/历史分页的载荷目标已由增量事件与局部投影达成、不作为独立机制重复建设，超长会话历史窗口留观察。
 
 - 按事实类型刷新/失效与daemon就绪回填批（D02收口，一次中文本地提交，不推送）：core新增`tool-readiness.ts`纯函数模块——`commandEnvironmentFacts(analysis, result, options, invokedAs, now)`从命令结果提取两类事实：①就绪回填：exit-0且succeeded且单一前台步骤（condition 'always'、无error/pipeline/expansion/dynamic弱证据）时，跟踪工具（`TRACKED_READINESS_TOOLS=['docker','systemctl']`）裸名直接调用（observedAs=invokedAs）或一层sudo解包（isSudo+sudoTarget，observedAs=target.runAs通常root）回填`{state:'responsive', evidence:'exit-0'}`，未知不写负值；②提及失效：非readOnly且已派发（排除failureKind not-dispatched/unresolved-prior-operation且effects none）时按提及匹配（调用名===tool或endsWith('/'+tool)、参数basename===tool或startsWith(tool+'.')，覆盖/usr/bin/docker、docker.io、/var/run/docker.sock、docker.service）置presenceStale并丢弃提及工具就绪，先弃后填防`systemctl stop docker`退0后留旧docker就绪。`HostEnvironmentObservation`新增可选`toolReadiness`/`presenceStale`字段；注册表就绪事实独立于探测记录存储（refresh重探不清空），absorb门禁要求记录存在+connectionId匹配+loginAs匹配（root SSH loginAs='root'无匹配记录整体丢弃，跨连接不串），presenceStale绕过5秒刷新去重强制重探，in-flight探测epoch竞态保标志（探测开始捕获staleEpoch、提交时仅epoch未变才清除）。`PermissionAwareExecutor`构造函数新增可选observe回调（try/catch包裹、观察失败不影响命令结果，未派发与抑制重复拒绝早返回路径不触发），server接线`observe→commandEnvironmentFacts→absorbCommandFacts`；toolReadiness/presenceStale经environmentProjection自动流入提示词，inspect_host_environment描述同步（就绪事实绑定身份与连接、presenceStale语义）。附带收口H05遗留两处800行门禁回归：app-state.ts抽`validBindings`至shortcut-bindings.ts（804→791）、task-runner.ts抽budget暂停文案映射至task-request-budget.ts的`budgetPauseNotice`（804→800）。修复本轮core索引漏导出（tool-readiness.js未export致tsc TS2305）。验证：Tests/core/tool-readiness.test.ts 8项（回填/解包/弱证据排除/失效/跳过集/readOnly）、Tests/application/host-environment-registry.test.ts新增6项（回填持久化/先弃后填/去重绕过/in-flight竞态/门禁丢弃/跨连接隔离）、Tests/application/permission-aware-executor.test.ts新增3项（派发观察/denied装饰与观察异常不影响结果/抑制重复不观察）共31项，repair-coverage 5项更新（待验收30→31、剩余5→4项），类型/eslint/depcruise/行数/测试布局/版本/更新日志及`--maxWorkers=4`全量320文件2785项零失败通过（全并行下4个时序敏感文件负载抖动单跑均通过，归H02观察）。D02转已实现待验收（待验收30→31、进行中3→2）；真实主机daemon启停、断线刷新与多身份混合链留H03及最终收口。

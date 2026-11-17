@@ -1,8 +1,7 @@
-import { Children, createContext, isValidElement, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { copyEntries } from './clipboard.js';
-import { openContextMenu } from './context-menu.js';
+import { CodeBlock } from './code-block.js';
 import styles from './markdown-message.module.css';
 
 const InsideLink = createContext(false);
@@ -26,24 +25,6 @@ function DeferredImage({ src, alt }: { src?: string; alt?: string }): React.JSX.
   // Linked images retain the surrounding link's explicit destination without nesting anchors.
   if (insideLink || !src) return <span className={styles.imageLink}>{label}{!src ? '（地址不可用）' : ''}</span>;
   return <a className={styles.imageLink} href={src} target="_blank" rel="noopener noreferrer">{label}</a>;
-}
-
-function CodeBlock({ children }: { children?: ReactNode }): React.JSX.Element {
-  const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const child = Children.toArray(children).find(isValidElement);
-  const code = child?.props as { className?: string; children?: ReactNode } | undefined;
-  const language = /language-([^\s]+)/u.exec(code?.className ?? '')?.[1] ?? '代码';
-  const text = Children.toArray(code?.children).filter((part) => typeof part === 'string' || typeof part === 'number').join('');
-  async function copy(): Promise<void> {
-    try { await navigator.clipboard.writeText(text); setCopied('copied'); }
-    catch { setCopied('failed'); }
-  }
-  return <div className={styles.codeBlock} onContextMenu={(event) => openContextMenu(event, copyEntries('复制代码', text), '代码操作')}>
-    <div className={styles.codeHeader}><span>{language}</span><button type="button" aria-label="复制代码" onClick={() => void copy()}>
-      {copied === 'copied' ? '已复制' : copied === 'failed' ? '复制失败，点击重试' : '复制'}</button></div>
-    <pre>{children}</pre>
-    <span className={styles.copyStatus} role="status">{copied === 'copied' ? '代码已复制到剪贴板，不会执行。' : copied === 'failed' ? '无法访问剪贴板，请重试或手动选择代码。' : ''}</span>
-  </div>;
 }
 
 export function MarkdownMessage({ text }: { text: string }): React.JSX.Element {

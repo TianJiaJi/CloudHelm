@@ -1,4 +1,4 @@
-/* global window, document, structuredClone */
+/* global window, document, navigator, getComputedStyle, structuredClone */
 import assert from 'node:assert/strict';
 import { checkExecutionWorkspace } from './check-execution-workspace.mjs';
 import { checkTurnFolding } from './check-turn-folding.mjs';
@@ -205,6 +205,32 @@ try {
   assert.equal(await scroll.evaluate((element) => element.scrollTop), 0);
   await panel.getByRole('button', { name: '回到最新', exact: true }).click();
   assert.ok(await scroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight < 48));
+  // Completed assistant answers expose discoverable copy actions next to highlighted code (U03/U08).
+  await page.evaluate(() => {
+    const snapshot = window.fixture.aiPanelSnapshot;
+    snapshot.messages[1].text = '配置检查完成。\n\n```yaml\nservices:\n  web:\n    image: nginx:1.27\n    ports:\n      - "8080:80"\n```\n\n以上配置已核对，无需变更。';
+    window.fixture.inject({ type: 'snapshot', value: structuredClone(snapshot) });
+    window.fixture.assistantClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { window.fixture.assistantCopied = text; } } });
+  });
+  const assistant = panel.getByRole('article', { name: '助手消息', exact: true }).first();
+  await assistant.locator('.hljs-attr').first().waitFor();
+  const copyAnswer = assistant.getByRole('button', { name: '复制回答', exact: true });
+  await page.getByRole('textbox', { name: '给 AI 的消息', exact: true }).hover();
+  assert.equal(await copyAnswer.evaluate((button) => getComputedStyle(button.parentElement).opacity), '0', 'answer actions stay quiet without hover or focus');
+  await copyAnswer.evaluate((button) => button.focus());
+  assert.equal(await copyAnswer.evaluate((button) => getComputedStyle(button.parentElement).opacity), '1', 'keyboard focus alone reveals answer actions');
+  await assistant.hover();
+  await page.screenshot({ path: path.join(output, 'assistant-answer-actions.png') });
+  await copyAnswer.click();
+  assert.equal(await page.evaluate(() => window.fixture.assistantCopied),
+    await page.evaluate(() => window.fixture.aiPanelSnapshot.messages.find((message) => message.role === 'agent').text),
+    'copying the answer delivers the raw Markdown source, distinct from code-block copy');
+  await assistant.getByRole('status').filter({ hasText: '回答已复制到剪贴板，不会执行。' }).waitFor();
+  await page.evaluate(() => {
+    if (window.fixture.assistantClipboard) Object.defineProperty(navigator, 'clipboard', window.fixture.assistantClipboard);
+    else delete navigator.clipboard;
+  });
   await panel.getByRole('button', { name: '历史对话', exact: true }).click();
   await page.getByRole('menu', { name: '历史对话', exact: true }).waitFor();
   await page.keyboard.press('Escape');
