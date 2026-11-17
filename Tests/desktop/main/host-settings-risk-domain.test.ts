@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SshTransport, SqliteStore } from '@cloudhelm/adapters';
 import { PermissionAwareExecutor, type HostSerialExecutor } from '@cloudhelm/application';
 import type { HostDraft, HostView } from '@cloudhelm/contracts';
-import type { ProposedOperation } from '@cloudhelm/core';
+import { resolveHostRiskBindings, type ProposedOperation } from '@cloudhelm/core';
 import { createHostSettings, editHostSettings } from '../../../apps/desktop/src/main/host-settings.js';
 import { WorkerServer } from '../../../apps/desktop/src/worker/server.js';
 
@@ -47,13 +47,15 @@ describe('host settings revisions retain unresolved remote risk', () => {
     expect((await f.serial.execute(query, 'diagnostic-fingerprint', undefined, { readOnly: true })).status).toBe('succeeded');
     expect(f.downstream).toHaveBeenCalledOnce(); expect(f.environment).not.toHaveBeenCalled();
   });
-  it('does not allow host drafts to forge a risk domain or predecessor', async () => {
+  it('does not allow host drafts to forge a risk domain, predecessor or association', async () => {
     const f = fixture();
-    const untrusted = { ...draft, username: 'new-login', riskDomainId: 'forged-free-domain', previousHostId: 'forged-parent' };
+    const untrusted = { ...draft, username: 'new-login', riskDomainId: 'forged-free-domain', previousHostId: 'forged-parent', riskPeerHostId: 'forged-peer' };
     const added = createHostSettings(f.context, untrusted);
     expect(added).not.toHaveProperty('riskDomainId'); expect(added).not.toHaveProperty('previousHostId');
+    expect(added).not.toHaveProperty('riskPeerHostId');
     const replacement = editHostSettings(f.context, f.original.id, untrusted);
     expect(replacement).not.toHaveProperty('riskDomainId'); expect(replacement.previousHostId).toBe(f.original.id);
+    expect(replacement.riskPeerHostId).toBeUndefined();
     await f.server.dispatch({ method: 'restore-operations', operations: [{ id: 'prior-unknown', hostId: f.original.id }] });
     await f.server.dispatch({ method: 'connect', host: replacement });
     expect(await f.serial.execute(write(replacement), 'synthetic-fingerprint')).toMatchObject({
@@ -75,6 +77,56 @@ describe('host settings revisions retain unresolved remote risk', () => {
     expect(replacement.previousHostId).toBe(f.original.id);
     await f.server.dispatch({ method: 'connect', host: replacement });
     expect(await f.serial.execute(write(replacement), 'synthetic-new-fingerprint')).toMatchObject({
+      status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation'
+    });
+    expect(f.downstream).not.toHaveBeenCalled(); expect(f.environment).not.toHaveBeenCalled();
+  });
+});
+
+describe('duplicate target configurations share the unresolved risk domain', () => {
+  it('blocks a duplicate configuration write behind the original record lock', async () => {
+    const f = fixture();
+    await f.server.dispatch({ method: 'restore-operations', operations: [{ id: 'prior-unknown', hostId: f.original.id }] });
+    await f.server.dispatch({ method: 'connect', host: f.original });
+    const duplicate = createHostSettings(f.context, draft);
+    expect(duplicate.riskPeerHostId).toBe(f.original.id);
+    await f.server.dispatch({ method: 'connect', host: duplicate, riskBindings: resolveHostRiskBindings(f.context.hosts) });
+    expect(await f.serial.execute(write(duplicate), 'synthetic-fingerprint')).toMatchObject({
+      status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation'
+    });
+    expect(f.downstream).not.toHaveBeenCalled(); expect(f.environment).not.toHaveBeenCalled();
+  });
+  it('keeps a target-unchanged revision inside the associated domain', async () => {
+    const f = fixture();
+    await f.server.dispatch({ method: 'restore-operations', operations: [{ id: 'prior-unknown', hostId: f.original.id }] });
+    await f.server.dispatch({ method: 'connect', host: f.original });
+    const duplicate = createHostSettings(f.context, draft);
+    const revision = editHostSettings(f.context, duplicate.id,
+      { ...draft, connection: { version: 1 as const, timeoutMs: 4000 } });
+    expect(revision.previousHostId).toBe(duplicate.id);
+    expect(revision.riskPeerHostId).toBeUndefined();
+    await f.server.dispatch({ method: 'connect', host: revision, riskBindings: resolveHostRiskBindings(f.context.hosts) });
+    expect(await f.serial.execute(write(revision), 'synthetic-fingerprint')).toMatchObject({
+      status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation'
+    });
+    expect(f.downstream).not.toHaveBeenCalled(); expect(f.environment).not.toHaveBeenCalled();
+  });
+  it('does not inherit the association when the target changes', () => {
+    const f = fixture();
+    const duplicate = createHostSettings(f.context, draft);
+    const moved = editHostSettings(f.context, duplicate.id, { ...draft, address: 'fresh.invalid' });
+    expect(moved.riskPeerHostId).toBeUndefined();
+  });
+  it('does not re-associate a changed target even when another duplicate exists there', async () => {
+    const f = fixture();
+    await f.server.dispatch({ method: 'restore-operations', operations: [{ id: 'prior-unknown', hostId: f.original.id }] });
+    await f.server.dispatch({ method: 'connect', host: f.original });
+    createHostSettings(f.context, { ...draft, address: 'fresh.invalid' });
+    const moved = editHostSettings(f.context, f.original.id, { ...draft, address: 'fresh.invalid' });
+    expect(moved.riskPeerHostId).toBeUndefined();
+    expect(moved.previousHostId).toBe(f.original.id);
+    await f.server.dispatch({ method: 'connect', host: moved, riskBindings: resolveHostRiskBindings(f.context.hosts) });
+    expect(await f.serial.execute(write(moved), 'synthetic-fingerprint')).toMatchObject({
       status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation'
     });
     expect(f.downstream).not.toHaveBeenCalled(); expect(f.environment).not.toHaveBeenCalled();

@@ -152,7 +152,7 @@ export class TaskRunner {
       taskId: this.task.id, controlledFiles: this.executor.supportsFileTransactions, fileBinding: () => this.requestGeneration(), fileOperations: () => this.operationViews(),
       refused: (tool, code) => this.diagnostic({ event: 'tool.refused', tool, errorCode: code }),
       background: (signal, run) => this.background.withLifetime(signal, run),
-      legacyRootSessions: legacyRootSessionsEnabled,
+      legacyRootSessions: legacyRootSessionsEnabled(),
       ensureTerminal: async (id, sessionId) => {
         this.assertRemoteActive();
         if (sessionId) {

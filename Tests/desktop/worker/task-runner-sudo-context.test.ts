@@ -31,6 +31,10 @@ class ProtocolChannel extends EventEmitter {
 }
 
 it.each(['retry', 'denied', 'required'] as const)('runs default sudo through native tools, Gate and private authentication without replay (%s)', async (behavior) => {
+  // These sessions ride the legacy advanced identity entry point, which is hidden
+  // unless the operator opts in for the process.
+  const previousLegacyFlag = process.env.CLOUDHELM_LEGACY_ROOT_SESSIONS;
+  process.env.CLOUDHELM_LEGACY_ROOT_SESSIONS = '1';
   const connect = vi.spyOn(SshTransport.prototype, 'connect').mockRejectedValue(new Error('Real SSH is forbidden in this fixture'));
   let count = 0; const requests: string[] = [];
   // A security-config target deliberately requires human review; ordinary touch may be auto-allowed.
@@ -89,5 +93,9 @@ it.each(['retry', 'denied', 'required'] as const)('runs default sudo through nat
     }
     expect(connect).not.toHaveBeenCalled();
     expect(requests.join('')).not.toContain('synthetic-wrong'); expect(requests.join('')).not.toContain('synthetic-correct');
-  } finally { runner.dispose(); bridge.clearTask(task.id); await fixture.close(); }
+  } finally {
+    if (previousLegacyFlag === undefined) delete process.env.CLOUDHELM_LEGACY_ROOT_SESSIONS;
+    else process.env.CLOUDHELM_LEGACY_ROOT_SESSIONS = previousLegacyFlag;
+    runner.dispose(); bridge.clearTask(task.id); await fixture.close();
+  }
 });

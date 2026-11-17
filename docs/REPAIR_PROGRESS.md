@@ -8,8 +8,8 @@
 
 完整简表见 [当前整改进度总览](REPAIR_STATUS_OVERVIEW.md)。本账为详细证据来源，当前批次与基准以最新记录及Git为准。
 
-- 原42父项完整保留：**4已完成、22已实现待验收、7进行中、6待开始、3延期转新版（F05/G01/G02）**；延期未完成，但不计旧版剩余或完成。
-- **旧版统计范围39项：已完成或已实现26项，仍需推进13项（7进行中、6待开始）**。严格最终验收仍有22项待验收加13项推进，共35项未收口；不把待验收冒充最终完成。
+- 原42父项完整保留：**4已完成、23已实现待验收、6进行中、6待开始、3延期转新版（F05/G01/G02）**；延期未完成，但不计旧版剩余或完成。
+- **旧版统计范围39项：已完成或已实现27项，仍需推进12项（6进行中、6待开始）**。严格最终验收仍有23项待验收加12项推进，共35项未收口；不把待验收冒充最终完成。
 - 用户已确认NV01–NV06所列旧路线/交互子项暂不做，转新版承接，范围与13项剩余表见[当前总览](REPAIR_STATUS_OVERVIEW.md)。A06/A07等部分移交的父项仍按其旧版保留范围计数；U06整包延期，其他11个UI包按保留范围跟进，UI不另计父项。
 - C02按用户选择先安全封口：SFTP不能核验ACL/xattr时拒绝覆盖已有文件，新建只用非覆盖rename，删除副本仅承诺正文。禁止策略已实现、待验收；不等于支持元数据保持或真实平台已验收。
 
@@ -40,7 +40,7 @@
 ## 下一轮起点（交接）
 
 - 当前HEAD业务基准及已保存能力以Git为准；本轮有设计和统计文档修改，工作区以`git status`为准，保留未跟踪`nul`与无关文件，不据历史“应干净”描述重置。
-- 当前用户确认按[旧版13项清单](REPAIR_STATUS_OVERVIEW.md#旧版仍需推进总表13项)推进：A01/A05–A07、D01–D02、F03/F06、H01–H05；A06/A07等只做保留的安全范围，NV01–NV06承接子项暂停旧版实施。F05/G01/G02/U06不排入旧版后续开发；U05/U07只做保留部分。A05–A07前三批已有局部证据、C03/C05已有事务闭环，不能重复从零建设或把历史子包当父项完成。
+- 当前用户确认按[旧版12项清单](REPAIR_STATUS_OVERVIEW.md#旧版仍需推进总表12项)推进：A05–A07、D01–D02、F03/F06、H01–H05；A06/A07等只做保留的安全范围，NV01–NV06承接子项暂停旧版实施。F05/G01/G02/U06不排入旧版后续开发；U05/U07只做保留部分。A05–A07前三批已有局部证据、C03/C05已有事务闭环，不能重复从零建设或把历史子包当父项完成。
 - 最新用户要求：各批只做改动相关局部测试、类型/语法检查和构建运行验证；全量及最终验收留到全部整改完成后，每批完成后只做一次中文本地Git提交，不自动推送。
 - 未完成边界：真实 SSH/VM 业务链（H03，需用户确认主机指纹）、Linux/macOS 与安装包验收、付费 6 次/1024 tokens 硬限制仍未实现（禁止实际模型付费调用）。
 
@@ -48,7 +48,7 @@
 
 | ID | 范围 | 计划批次 | 状态 | 提交/目标测试/剩余边界 |
 | --- | --- | --- | --- | --- |
-| A01 | 分离稳定远端目标/风险域与连接配置版本。只修改超时等设置产生新 hostId 时，不能失去旧未决操作锁；重复配置需有目标关联策略。 | 1 安全与数据 | 进行中 | 已复现并修复超时/登录修订绕过旧未决锁：后端按持久化previousHostId链派生风险域，连接/凭据/审批身份仍独立；首批5文件41项、扩展6文件29项与工程检查通过（两批有重叠，不累加）。跨配置恢复卡/人工接管7文件90项与真实隐藏Electron验收通过；交还控制后存活完成信号的绑定缺口另有反例，修复后5文件35项通过。长链专项与全量258文件2374项通过（7文件25项条件跳过）；工程/构建/隐藏风险恢复通过，标准桌面截图超时经定界后改用原生stayHidden路径，15项相关回归及全部隐藏桌面复验通过；最终259文件2383项通过（7文件25项条件跳过），headless UI/剪贴板通过；本子包验收完成，准备本地保存。重复配置/未知别名、完整链和真实SSH验收仍待，不按IP或指纹简单合并 |
+| A01 | 分离稳定远端目标/风险域与连接配置版本。只修改超时等设置产生新 hostId 时，不能失去旧未决操作锁；重复配置需有目标关联策略。 | 1 安全与数据 | 已实现待验收 | 已复现并修复超时/登录修订绕过旧未决锁：后端按持久化previousHostId链派生风险域，连接/凭据/审批身份仍独立；首批5文件41项、扩展6文件29项与工程检查通过（两批有重叠，不累加）。跨配置恢复卡/人工接管7文件90项与真实隐藏Electron验收通过；交还控制后存活完成信号的绑定缺口另有反例，修复后5文件35项通过。长链专项与全量258文件2374项通过（7文件25项条件跳过）；工程/构建/隐藏风险恢复通过，标准桌面截图超时经定界后改用原生stayHidden路径，15项相关回归及全部隐藏桌面复验通过；最终259文件2383项通过（7文件25项条件跳过），headless UI/剪贴板通过；本子包验收完成，准备本地保存。本批补齐重复配置目标关联策略：新建重复目标（address/port/username精确匹配，active优先archived）由后端显式记录riskPeerHostId并入既有记录风险域，域走查谱系优先（previousHostId先于riskPeerHostId），修订恒沿谱系、编辑不继承不重算关联，终态记录无链接即为稳定根，缺失记录仍以durable id保守锚定，10000深度/环守卫保留；peer在首次连接绑定前写入，HostRiskDomains.bind不可替换约束天然满足。补齐connect分发缺口：worker仅见已连接记录，从未连接的谱系中间记录被当缺失锚点可绕过旧未决锁（host-settings-risk-domain回归复现），connect现与restore-operations同模式携带主进程全量riskBindings，同值重绑为no-op。Tests/core/host-risk-peer.test.ts新增6项、Tests/desktop/main/host-settings-risk-domain.test.ts扩展4项，风险域7文件46项与类型检查通过；附带修复批次1遗留回归4项（sudo-context三测试与task-prompt预算）。未知别名不合并为固定边界，不按IP或指纹简单合并；完整链和真实SSH验收仍待 |
 | A02 | 模型地址、密钥密文、配置修订原子保存；成功后才更新内存。检查其他同类配置提交点。 | 1 安全与数据 | 已完成 | `93a79be`；Tests/desktop/main/credential-isolation.test.ts真实SQLite故障注入及审核事务回滚通过；Tests/smoke/credential-isolation-smoke.mjs真实IPC/OS加密保存通过，全量2190项通过 |
 | A03 | 原始用户指令、引用资料、模型摘要保留独立来源；禁止将粘贴摘要标为原始 explicit 意图。 | 1 安全与数据 | 已实现待验收 | Tests/application/prepare-message.test.ts：9项；相关6文件47项及工程检查通过；原文保留、摘要仅作派生资料、来源先验证，待全量与真实链复验 |
 | A04 | 重做流式脱敏的跨块状态：ANSI、长行溢出、引号、多行 cookie 等使用一致规则。 | 1 安全与数据 | 已实现待验收 | Tests/core/redaction-stream.test.ts：16项；相关5文件86项＋工程检查通过；待全量调用方/真实输出链复验；E04有界捕获已另行落地，真实长日志仍待 |
@@ -122,6 +122,8 @@
 ## 最新记录
 
 以下保留历史事实和当时统计；当前范围与数量以前述总览为准，不用历史的“23完成/19剩余”覆盖本轮移交结果。
+
+- 重复配置目标关联批（A01收口，一次中文本地提交，不推送）：重复目标配置（address/port/username精确匹配，active优先archived、同类取最新）在新建时由后端显式记录`riskPeerHostId`并入既有记录的风险域，公网HostDraft不可伪造该字段；域走查改为谱系优先（previousHostId先于riskPeerHostId），修订恒沿谱系、编辑不继承也不重算关联，终态记录无任何链接即为稳定根，缺失记录仍以durable id保守锚定，10000深度/环守卫保留；终态与锚点满足HostRiskDomains.bind稳定根校验，peer在首次连接绑定前写入，不可替换约束天然满足，目标变更且无新关联的修订保守留在原域。补齐connect分发缺口：worker侧仅见已连接记录，从未连接的谱系中间记录会被当作缺失锚点导致修订版绕过旧未决锁（host-settings-risk-domain回归复现），connect现在与restore-operations同模式携带主进程全量riskBindings，同值重绑为no-op、调用未携带时保留worker本地回退解析。附带修复批次1遗留回归4项：legacy开关从模块加载时常量改为构造时读取（生产语义不变，vitest forks池按文件隔离进程、测试env注入安全），sudo-context三测试显式启用`CLOUDHELM_LEGACY_ROOT_SESSIONS=1`；恢复材料指引行压缩、任务提示预算上调至9400（C03/C05安全指引的合理代价），PROMPT_VERSION升2026-11.5。验证：全仓类型检查、风险域7文件46项（Tests/core/host-risk-peer.test.ts新增6项、host-settings-risk-domain扩展4项）、Tests/desktop+Tests/application全量对比基线（8失败→4失败，净修复4项；剩余background三测试与input-queue负载抖动均为基线已有，归H01/H02）、三入口生产构建通过。A01转已实现待验收（待验收22→23、进行中7→6）；未知别名不合并为固定边界、不按IP或指纹简单合并，完整链和真实SSH验收留H03及最终收口。
 
 - 恢复材料枚举/显式清理与legacy root入口门控批（C03/C04/C05收口，一次中文本地提交，不推送）：C03新增`list-recovery`/`cleanup-recovery`两种结构化操作与`list_remote_recovery`/`cleanup_remote_recovery`工具：path为恢复材料容器目录；只读枚举返回≤128条+truncated、name/kind/size/mtimeMs，按owner==uid过滤，edit目录0700、backup单链接普通文件；逐名显式清理要求1..16个唯一名字（edit目录`.cloudhelm-edit-`+uuid、backup `<basename>.cloudhelm-backup-<uuid>`，双端一致校验），目录内只允许entry名前缀的单链接普通文件（≤64）且st_dev一致，逐项返回removed/missing/refused，破坏性unlink前置`removed_any`标记使部分删除中断仍保守结算unknown/possible。安全层：枚举受保护路径拒绝，root枚举为`privileged-recovery-listing`高影响审核，非root按`structured-file-read`放行；清理在`high-impact-file`之后恒为`recovery-cleanup`人工审核（/etc/ssh等容器仍命中高影响文件），names形状错误`invalid-recovery-cleanup`。runner回执校验`recoveryEntries`/`recoveryItems`、code白名单及与请求names逐一对应；worker执行链路由到受控文件驱动，列表回执28 KiB截断保护，cleaned按removed派生effects，逐项拒绝/缺失为确定性结果不转unknown；预检/重放保护按mutation分类（list只读跳过写锁，cleanup受未决锁与重放保护约束）；contracts OperationView与VerificationFacts kind联合同步扩展。C04：legacy root入口收敛，新建`legacy-root-sessions.ts`，仅环境变量`CLOUDHELM_LEGACY_ROOT_SESSIONS=1`显式启用时经`legacyRootSessions`依赖注册`request_root_session`工具与任务提示（评估过deferred方案对非query工具无效后弃用）；`run_remote privilege=root`等正常路径不变。C05随批核对高价值工具反馈闭环，无新开发点。PROMPT_VERSION升2026-11.4并新增恢复材料不自动清理策略行。验证：全仓类型检查、三入口生产构建通过，内嵌Python驱动提取后`py_compile`语法校验通过；修复VerificationFacts kind联合与两处测试mock窄化回归；按用户约定本批未跑测试套件，无真实SSH/付费调用。C03/C04/C05转已实现待验收（待验收19→22、进行中10→7），真实Linux平台/竞争窗口/断线与跨工具一致性验收留H03及最终收口。
 

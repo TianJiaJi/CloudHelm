@@ -15,7 +15,7 @@ import { encodeBusinessFacts, requestBusinessFacts } from './request-business-fa
 export function createTaskPrompt(task: TaskView, hosts: RuntimeHost[], operations: () => OperationView[],
   roundOperations: () => OperationView[], privileged?: PrivilegedTaskAccess, _hasReport: () => boolean = () => false,
   intent: () => TaskIntentState | undefined = () => task.intent, _submissionClosed: () => boolean = () => false,
-  environment?: HostEnvironmentAccess, legacyRootSessions: boolean = legacyRootSessionsEnabled): () => string {
+  environment?: HostEnvironmentAccess, legacyRootSessions: boolean = legacyRootSessionsEnabled()): () => string {
   return () => {
     const owned = mergeOperationViews(operations()).filter((operation) => operation.taskId === task.id);
     const unresolvedCount = owned.filter(operationOutcomeResolvable).length;

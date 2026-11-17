@@ -58,11 +58,25 @@ export function credentialsForDraft(draft: HostDraft, previous: HostView | undef
   return credentials;
 }
 
+/** A duplicate configuration declares the same login target as an existing record; the
+ * association keeps unresolved risk shared. DNS/IP/fingerprint aliases are never guessed. */
+export function resolveRiskPeer(hosts: Map<string, HostView>, target: Pick<HostDraft, 'address' | 'port' | 'username'>,
+  excludeId?: string): string | undefined {
+  let active: string | undefined, archived: string | undefined;
+  for (const host of hosts.values()) {
+    if (host.id === excludeId || host.address !== target.address
+      || host.port !== target.port || host.username !== target.username) continue;
+    if (host.archived) archived = host.id; else active = host.id;
+  }
+  return active ?? archived;
+}
+
 export function createHostSettings(context: HostSettingsContext, input: HostDraft, patch?: HostCredentialsPatch): HostView {
   const draft = publicDraft(input, context.hosts);
   const credentials = credentialsForDraft(draft, undefined, {}, patch);
+  const riskPeerHostId = resolveRiskPeer(context.hosts, draft);
   const host: HostView = { ...draft, id: randomUUID(), status: 'disconnected', protectedPaths: [], protectedReadPaths: [],
-    protectedWritePaths: [], defaultMode: 'ask', policyRevision: 1 };
+    protectedWritePaths: [], defaultMode: 'ask', policyRevision: 1, ...(riskPeerHostId !== undefined ? { riskPeerHostId } : {}) };
   const changes: Parameters<SqliteStore['commitHostSettings']>[0] = [{ bucket: 'hosts', id: host.id, value: host }];
   if (patch !== undefined) changes.push({ bucket: 'secrets', id: `host-credentials:${host.id}`, value: context.encrypt(JSON.stringify(credentials)) });
   context.store.commitHostSettings(changes);
@@ -87,8 +101,11 @@ export function editHostSettings(context: HostSettingsContext, id: string, input
   const credentials = credentialsForDraft(draft, previous, readHostCredentials(previous, context.secret), {
     ...(newSecret ? draft.auth === 'password' ? { password: newSecret } : { passphrase: newSecret } : {}), ...patch });
   const ciphertext = context.encrypt(JSON.stringify(credentials));
+  // Revisions derive their domain from the recorded lineage alone; a duplicate-target
+  // association is only ever recorded for a fresh configuration, never inherited or
+  // recomputed by editing, so an edit cannot move a record out of its risk domain.
   const replacement: HostView = { ...previous, ...draft, id: randomUUID(), previousHostId: id, archived: false,
-    status: 'disconnected', policyRevision: 1,
+    status: 'disconnected', policyRevision: 1, riskPeerHostId: undefined,
     fingerprint: previous.address === draft.address && previous.port === draft.port ? previous.fingerprint : undefined };
   const archived = { ...previous, archived: true };
   context.store.commitHostSettings([{ bucket: 'hosts', id, value: archived }, { bucket: 'hosts', id: replacement.id, value: replacement },

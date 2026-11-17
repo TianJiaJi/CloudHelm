@@ -79,7 +79,7 @@ async function connectOnce(hostId: string, signal: AbortSignal): Promise<void> {
   const jump = jumpHostId ? state.runtimeHost(jumpHostId) : undefined;
   state.updateHost(hostId, { status: 'connecting' });
   try {
-    await runtime.call({ method: 'connect', host, jump });
+    await runtime.call({ method: 'connect', host, jump, riskBindings: state.hostRiskBindings() });
     signal.throwIfAborted();
     untrustedFingerprints.delete(hostId);
   } catch (error) {

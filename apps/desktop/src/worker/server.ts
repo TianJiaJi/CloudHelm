@@ -186,7 +186,7 @@ export class WorkerServer {
         this.ssh.disconnect(call.hostId);
         this.post({ event: { type: 'host-status', hostId: call.hostId, status: 'disconnected' } });
         return;
-      case 'connect': return this.connect(call.host, call.jump);
+      case 'connect': return this.connect(call.host, call.jump, call.riskBindings);
       case 'test-host': return testHostConnection(call.host, call.jump);
       case 'update-host-safety':
         for (const [id, pending] of this.pendingApprovals) {
@@ -399,9 +399,14 @@ export class WorkerServer {
       riskDomainId: host.riskDomainId ?? resolveHostRiskDomain(host, (id) => known.get(id)) })));
   }
 
-  private async connect(host: RuntimeHost, jump?: RuntimeHost): Promise<void> {
+  private async connect(host: RuntimeHost, jump?: RuntimeHost,
+    riskBindings?: Array<{ hostId: string; riskDomainId: string }>): Promise<void> {
     if (this.connectionAttempts.has(host.id)) throw new Error('SSH connection is already in progress');
-    this.bindHostRiskDomains(jump ? [jump, host] : [host]);
+    // The main process owns the full host graph; its bindings resolve lineages through
+    // records the worker has never seen. The local fallback only serves callers that
+    // cannot provide the authoritative bindings yet.
+    if (riskBindings !== undefined) this.executor.bindRiskDomains(riskBindings);
+    else this.bindHostRiskDomains(jump ? [jump, host] : [host]);
     const connectionId = randomUUID(), controller = new AbortController();
     this.connectionAttempts.set(host.id, controller);
     this.hosts.set(host.id, host);

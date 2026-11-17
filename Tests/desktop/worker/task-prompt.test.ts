@@ -27,7 +27,8 @@ it('refreshes bounded backend applicability and file preview/commit hints withou
     prepare_remote_edit: 'conditional', edit_remote_file: false, apply_remote_edit: 'conditional', restore_remote_edit: 'conditional', check_remote_edit: 'conditional' });
   expect(first).toMatchObject({ tools: { read_selected_text_file: false, list_selected_directory: false, upload_selected_file: false,
     read_operation_log: true, submit_verification: false, record_reconciled_result: false, request_root_session: false }, reportCount: 0, unresolvedCount: 0 });
-  expect(prompt().length).toBeLessThan(9000);
+  // Recovery-safety guidance (C03/C05) legitimately grew the prompt; 9400 keeps the bound meaningful.
+  expect(prompt().length).toBeLessThan(9400);
   current.localScopes = [{ path: 'C:/selected', kind: 'directory' }];
   operations = [operation('write', { readOnly: false }), operation('unknown', { status: 'unknown', effects: 'possible' })];
   expect(facts(prompt())).toMatchObject({ tools: { read_selected_text_file: true, list_selected_directory: true,

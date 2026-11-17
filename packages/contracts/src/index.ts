@@ -117,6 +117,8 @@ export interface HostView extends HostDraft {
   id: string;
   archived?: boolean;
   previousHostId?: string;
+  /** Backend-owned association with another record declaring the same login target. */
+  riskPeerHostId?: string;
   fingerprint?: string;
   status: 'disconnected' | 'connecting' | 'connected' | 'changed-key' | 'error';
   protectedPaths: string[];

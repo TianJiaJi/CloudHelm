@@ -28,7 +28,7 @@ export type RuntimeCall =
   | { method: 'restore-operations'; operations: Array<{ id: string; hostId: string }>; riskBindings?: Array<{ hostId: string; riskDomainId: string }> }
   | { method: 'prepare-operation-risk'; operationId: string; hostId: string }
   | { method: 'commit-operation-risk'; operation: OperationView }
-  | { method: 'connect'; host: RuntimeHost; jump?: RuntimeHost }
+  | { method: 'connect'; host: RuntimeHost; jump?: RuntimeHost; riskBindings?: Array<{ hostId: string; riskDomainId: string }> }
   | { method: 'test-host'; host: RuntimeHost; jump?: RuntimeHost }
   | { method: 'disconnect'; hostId: string }
   | { method: 'set-review-key'; jevKey?: string }
