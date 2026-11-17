@@ -1,6 +1,6 @@
 # CloudHelm 当前整改进度总览
 
-> 更新至H02正式回归收口切片（流式任意分块/边界组合回归、负载抖动观察归档），当前提交以Git记录为准。分支`repair/comprehensive-audit`，本地保存、未推送。数量变化由一致性回归校对，详细证据见进度账。
+> 更新至AI审核调用可观测性修复（审核路径补齐model.request/model.response诊断，观察1收口），当前提交以Git记录为准。分支`repair/comprehensive-audit`，本地保存、未推送。数量变化由一致性回归校对，详细证据见进度账。
 > 详细证据以 [REPAIR_PROGRESS](REPAIR_PROGRESS.md) 为准；原始问题与验收目标见 [审计总表](PROJECT_REMEDIATION_SUMMARY.md)，近期安全运行证据见 [专项验收](SECURITY_RUNTIME_ACCEPTANCE.md)。
 > 用户已确认：冲突/重复子项暂不按旧方案实施，由新版本接手，并排除旧版剩余统计。F05/G01/G02整项、U06细化包转新版；A06/A07、B04/B06/B08/C06、U05/U07、H01/H03/H04仅移交指定子项，保留旧版安全基础。承接范围见本页延期表及[统一设计§16](AGENT_SAFETY_AND_AUTONOMY_DESIGN.md#16-旧整改任务的取舍停止重复建设不取消安全目标)。延期不是完成，新版也尚未实现。
 
@@ -75,6 +75,7 @@
 | 本轮F03收口 | 正文流式与增量投影：adapters新增PiTextStream（60ms合并、whitespace跳过、clear先冲刷窗口内未发更新再发null），text-progress事件经worker→main→renderer贯穿、不等message_end即显示liveText，最终transcript由project落账不重复；main新增app-event-routing增量事件集（terminal-data、reasoning-progress、text-progress、context-usage、model-request、task-message不再触发全量快照publish、仅单发emit，agent-lifecycle/message-preparation保留publish），高频全量快照发布与随之的高频重投影/解密发布移除，小更新载荷不随全部历史正文增长；renderer按事件原位增量应用（task-message按entryId原位更新去重），runtimeStopped删除textProgress、reasoning保留interrupted | pi-text-stream 3项（含deepseek夹具端到端流式与null收尾）、pi-reasoning 3项、pi-session系列、task-session-events映射、app-state增量路由2项、store增量应用、agent-panel-parts及maxWorkers=4全量321文件2793项零失败（25项跳过）、类型/lint/depcruise/行数/布局/版本/更新日志通过；真实模型端到端流式与实际IPC/FPS量测留验收，超长会话历史窗口留观察 |
 | 本轮F06收口 | AI阅读与交互重整：固定版本新增highlight.js 11.11.1+lowlight 3.3.0，renderer新增code-highlight（8语法按需注册直接渲染React节点、按块10万字符上限、未知/超长/异常回退纯文本）与CodeBlock组件（语言标签、换行开关、溢出才出现的展开/收起、复制原样代码、默认折叠320px、hljs双主题配色）；Markdown排版重整（正文行高精确20px变量、标题em刻度、表格12px带边框独立滚动、思考区16px行高）；助手消息新增复制回答按钮（hover/focus-within显现、role=status、复制原始Markdown源）；U02/U03/U04/U08同批已实现待验收，U09/U10/U12转进行中 | code-highlight.test 6项、markdown-message.test扩至18项、markdown-smoke重写为正式目标行为回归（逐语言高亮/折叠展开/换行往返/复制载荷/主题与窄视口）、ai-panel-smoke新增面板内断言、test:ui四检查、typecheck通过；tsx别名回退纯文本可接受，真实Electron阅读体验/长会话滚动/DPI矩阵留U12与最终验收 |
 | 本轮H02收口 | 正式回归收口：新增pi-stream-chunking 4项任意分块/边界组合回归（mulberry32种子化可复现；PiTextStream五种子任意时序/边界切分/空白体跳过/代次身份、PiReasoningStream三种子、真实SSE管线种子化任意切分字节精确重组、CRLF/代理对/围栏对抗切分），分层确认流式text-progress字节精确保留尾部CRLF而transcript投影有意trim | 4项新增+单跑复验通过；maxWorkers=4全量323文件2831项仅3个已知时序敏感文件5项负载抖动（pi-session-input-queue、task-runner-input-queue、desktop-process进程生命周期30秒超时），单跑8/8、3/3通过归档观察；类型/lint/depcruise/行数/布局/版本/更新日志通过；真实持续负载稳定性留验收 |
+| 本轮审核可观测性 | AI审核调用补per-attempt诊断（观察1收口）：预算绑定成功后发射`model.request`（purpose=review、provider/model、logicalRequestId/attempt/transport、review used计数，重试按attempt可见），调用落定发射`model.response`（status=审核verdict或aborted/error、durationMs、responseAttributed:true）；未授权/预留前失败零事件，不与预算回执重复计账；createTaskRiskEvaluator从运行档案解析审核者身份并透传任务诊断通道，task-runner.ts保持799行 | 新增task-review-client.test 6项（jev/ordinary、审核者身份、aborted/error、未授权零事件、档案解析）＋task-runner-ai-review真实HTTP夹具端到端断言（transport=http、status=deny、前后logicalRequestId关联）；maxWorkers=4全量324文件2837项零失败（2812通过/25跳过）、类型/lint/depcruise 796模块/行数/布局/版本/更新日志通过；观察2（chat双记）/观察3（settled含审批墙钟）经确认暂不修 |
 
 上述测试集合有重叠，**不能累加为一次全量测试数**。生产Worker/Pi/Main链路的本地运行不等于真实SSH或真实utility process崩溃验收。
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TerminalManager } from '@cloudhelm/application';
-import type { ProposedOperation } from '@cloudhelm/core';
+import type { DiagnosticEvent, ProposedOperation } from '@cloudhelm/core';
 import type { TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { TaskRunner, type TaskSignals } from './task-runner-fixture.js';
@@ -32,6 +32,7 @@ describe('AI denial manual review', () => {
       return id;
     });
     const events: Parameters<TaskSignals['event']>[0][] = [];
+    const diagnostics: DiagnosticEvent[] = [];
     const execute = vi.fn(async (operation: ProposedOperation) => ({ operationId: operation.id,
       status: 'succeeded' as const, stdoutTail: '', exitCode: 0 }));
     const requestApproval = vi.fn(async () => true);
@@ -39,7 +40,8 @@ describe('AI denial manual review', () => {
       apiKey: 'test-key', baseUrl: fixture.baseUrl, reviewer: { selection: { kind: 'model', provider: 'cloudhelm-custom', modelId: 'auditor' },
         provider: 'cloudhelm-custom', modelId: 'auditor', apiKey: 'test-key', baseUrl: fixture.baseUrl, revision: 1 } },
     [], terminal, { execute }, openTerminal,
-    { event: (event) => events.push(structuredClone(event)), requestApproval, cancelApproval() {} });
+    { event: (event) => events.push(structuredClone(event)), requestApproval, cancelApproval() {},
+      diagnostic: (event) => diagnostics.push(event) });
     try {
       await runner.start();
       const denied = events.filter((event) => event.type === 'operation' && event.value.ruleId === 'ai-review-deny').at(-1);
@@ -47,6 +49,21 @@ describe('AI denial manual review', () => {
       if (!denied || denied.type !== 'operation') throw new Error('Missing denial');
       expect(execute).not.toHaveBeenCalled();
       expect(reviews).toBe(1);
+      // The review call is observable end to end: one per-attempt request and one
+      // attributed response with the verdict, never just a budget receipt.
+      const reviewRequests = diagnostics.filter((event) => event.event === 'model.request' && event.purpose === 'review');
+      expect(reviewRequests).toHaveLength(1);
+      expect(reviewRequests[0]).toMatchObject({ taskId: 'review-task', transport: 'http', attempt: 1,
+        provider: 'cloudhelm-custom', model: 'auditor' });
+      expect(reviewRequests[0]?.operationId).toBe(denied.value.id);
+      expect(reviewRequests[0]?.logicalRequestId).toMatch(/[\w-]{10,}/u);
+      const reviewResponses = diagnostics.filter((event) => event.event === 'model.response' && event.purpose === 'review');
+      expect(reviewResponses).toHaveLength(1);
+      expect(reviewResponses[0]).toMatchObject({ taskId: 'review-task', transport: 'http', attempt: 1,
+        status: 'deny', responseAttributed: true });
+      expect(reviewResponses[0]?.operationId).toBe(denied.value.id);
+      expect(reviewResponses[0]?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(reviewResponses[0]?.logicalRequestId).toBe(reviewRequests[0]?.logicalRequestId);
       expect(fixture.requests.find((request) => request.review)?.model).toBe('auditor');
       expect(terminal.isAgentOwner(opened[0]!)).toBe(true);
       if (takeover) runner.terminalInput(opened[0]!, 'pwd\n');

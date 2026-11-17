@@ -591,7 +591,7 @@ export class TaskRunner {
       reviewSignal: () => this.reviews.signal(),
       evaluator: createTaskRiskEvaluator(this.task.id, this.signals.budget, () => this.assertRemoteActive(),
         () => this.requestGeneration(), () => this.profile,
-      () => this.operationViews().slice(-5).map((item) => `${item.kind} ${item.status}: ${item.kind === 'command' ? redactOutput(item.preview).slice(0, 400) : item.preview.split('\n')[0]}`)),
+      () => this.operationViews().slice(-5).map((item) => `${item.kind} ${item.status}: ${item.kind === 'command' ? redactOutput(item.preview).slice(0, 400) : item.preview.split('\n')[0]}`), (event) => this.diagnostic(event)),
       approvals: createTaskApprovals(this.signals, (operation) => this.preview(operation),
         () => this.setStatus('waiting-review'), () => { if (this.status === 'waiting-review') this.setStatus('running'); }),
       executor, audit, lease: {
