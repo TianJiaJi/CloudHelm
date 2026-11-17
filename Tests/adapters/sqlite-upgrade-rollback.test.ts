@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SqliteStore } from '../../packages/adapters/src/sqlite-store.js';
+import { LATEST_SCHEMA_VERSION, SqliteStore } from '../../packages/adapters/src/sqlite-store.js';
 
 it('rolls back compatibility migrations 7–9 together and closes a failed database handle', () => {
   const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-upgrade-rollback-'));
@@ -40,5 +40,27 @@ it('rolls back compatibility migrations 7–9 together and closes a failed datab
       expect(reopened.get('tasks', 'risk')).toMatchObject({ status: 'paused', resumeReason: 'verify' });
     } finally { reopened.close(); }
     // On Windows this also verifies no failed-constructor handle retains the file.
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+it('refuses a database written by a newer schema version without touching it', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-downgrade-guard-'));
+  const file = join(directory, 'records.sqlite');
+  const future = LATEST_SCHEMA_VERSION + 1;
+  try {
+    const newer = new Database(file);
+    newer.exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations VALUES(${String(future)}, 1);`);
+    newer.close();
+    expect(() => new SqliteStore(file)).toThrow(new RegExp(`newer than this build supports \\(${String(LATEST_SCHEMA_VERSION)}\\)`));
+    const inspection = new Database(file);
+    try {
+      expect(inspection.prepare('SELECT max(version) AS version FROM schema_migrations').get()).toEqual({ version: future });
+      expect(inspection.prepare("SELECT name FROM sqlite_master WHERE name = 'records'").all()).toEqual([]);
+      expect(inspection.prepare('PRAGMA journal_mode').get()).toMatchObject({ journal_mode: 'delete' });
+    } finally { inspection.close(); }
+    // The refused handle must not retain the file on Windows either.
+    const reopened = new Database(file);
+    reopened.close();
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

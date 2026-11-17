@@ -17,6 +17,9 @@ const ownedPreparations = `SELECT request_id, reference_ids FROM reference_prepa
   WHERE conversation_id = ? OR request_id IN (SELECT id FROM records
     WHERE bucket = 'message-receipts' AND json_extract(value, '$.conversationId') = ?)`;
 
+/** Latest schema version this module writes; SqliteStore aggregates it into the downgrade guard. */
+export const REFERENCE_PREPARATIONS_SCHEMA_VERSION = 13;
+
 /** Add ownership metadata without inferring or deleting legacy body provenance. */
 export function migrateReferencePreparations(raw: Database.Database): void {
   raw.transaction(() => {

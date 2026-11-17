@@ -1,8 +1,8 @@
 import Database from 'better-sqlite3';
 import type { ReferenceBody } from '@cloudhelm/core';
-import { migrateReferenceDrafts, ReferenceDrafts, type ReferenceDraftScope } from './sqlite-reference-drafts.js';
+import { migrateReferenceDrafts, ReferenceDrafts, REFERENCE_DRAFTS_SCHEMA_VERSION, type ReferenceDraftScope } from './sqlite-reference-drafts.js';
 export type { ReferenceDraftScope } from './sqlite-reference-drafts.js';
-import { migrateReferencePreparations, ReferencePreparations, type ReferencePreparationReceipt } from './sqlite-reference-preparations.js';
+import { migrateReferencePreparations, ReferencePreparations, REFERENCE_PREPARATIONS_SCHEMA_VERSION, type ReferencePreparationReceipt } from './sqlite-reference-preparations.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { and, eq } from 'drizzle-orm';
 import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
@@ -40,6 +40,12 @@ UPDATE records SET value = json_set(value, '$.provider',
 WHERE bucket = 'tasks' AND json_extract(value, '$.provider') IS NULL;
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, unixepoch());
 `;
+
+/** Latest schema version written by this module. */
+const STORE_SCHEMA_VERSION = 11;
+/** A database written by a newer build must fail closed; downgrades never reinterpret evolved record shapes. */
+export const LATEST_SCHEMA_VERSION = Math.max(STORE_SCHEMA_VERSION, REFERENCE_PREPARATIONS_SCHEMA_VERSION,
+  REFERENCE_DRAFTS_SCHEMA_VERSION);
 
 export interface DataRepair {
   name: string;
@@ -87,6 +93,14 @@ export class SqliteStore {
   }
 
   private migrate(): void {
+    // Refuse newer data before running any migration or changing the journal mode,
+    // so a downgrade attempt explains itself and leaves the file untouched.
+    if (this.raw.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()) {
+      const persisted = this.raw.prepare('SELECT max(version) AS version FROM schema_migrations').get() as { version: number | null };
+      if ((persisted.version ?? 0) > LATEST_SCHEMA_VERSION) {
+        throw new Error(`Database schema version ${persisted.version} is newer than this build supports (${LATEST_SCHEMA_VERSION}); upgrade CloudHelm before opening this data`);
+      }
+    }
     this.raw.pragma('journal_mode = WAL');
     this.raw.exec(migration0001);
     this.raw.exec(migration0002);

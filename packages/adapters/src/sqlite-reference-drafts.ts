@@ -6,6 +6,9 @@ interface DraftRow { id: string; producer_id: string; recipient_id: string; conv
 const validId = (id: unknown): id is string => typeof id === 'string' && /^[\w-]{1,100}$/u.test(id);
 const scopeOf = (row: DraftRow): ReferenceDraftScope => ({ ...(row.conversation_id ? { conversationId: row.conversation_id } : {}), hostId: row.host_id });
 
+/** Latest schema version this module writes; SqliteStore aggregates it into the downgrade guard. */
+export const REFERENCE_DRAFTS_SCHEMA_VERSION = 14;
+
 export function migrateReferenceDrafts(raw: Database.Database): void {
   raw.transaction(() => {
     if (raw.prepare('SELECT 1 FROM schema_migrations WHERE version=14').get()) return;
