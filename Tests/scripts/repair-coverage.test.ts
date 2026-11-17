@@ -46,17 +46,17 @@ describe('complete remediation tracking (not proof of product acceptance)', () =
     const active = rows.filter((row) => row[4] !== '延期转新版');
     expect(active).toHaveLength(39);
     expect(active.filter((row) => row[4] === '已完成')).toHaveLength(4);
-    expect(active.filter((row) => row[4] === '已实现待验收')).toHaveLength(33);
+    expect(active.filter((row) => row[4] === '已实现待验收')).toHaveLength(34);
     const remaining = active.filter((row) => ['进行中', '待开始'].includes(row[4]!));
     expect(remaining.map((row) => row[1])).toEqual([
-      'H02', 'H03'
+      'H03'
     ]);
     expect(ids(overview, /^\| \d+ \| ([A-H]\d{2}) \|/gmu)).toEqual(remaining.map((row) => row[1]));
     const uiRows = ledger.split('\n').filter((row) => /^\| U\d{2} \|/u.test(row))
       .map((row) => row.split('|').map((cell) => cell.trim()));
     expect(uiRows.filter((row) => row[3] === '延期转新版').map((row) => row[1])).toEqual(['U06']);
     expect(uiRows.filter((row) => row[3] !== '延期转新版')).toHaveLength(11);
-    expect(overview).toContain('仍需推进2项');
+    expect(overview).toContain('仍需推进1项');
     expect(overview).toContain('不计旧版剩余，不算完成');
   });
 
