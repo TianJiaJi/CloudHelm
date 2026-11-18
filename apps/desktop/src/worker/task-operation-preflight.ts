@@ -1,9 +1,9 @@
-import { analyzeOperationImpact, HOST_ENVIRONMENT_MAX_AGE_MS, isSudoStatusProbe, nativeCommandEligible, operationIntentKey, sudoTarget,
+import { analyzeOperationImpact, HOST_ENVIRONMENT_MAX_AGE_MS, isSudoStatusProbe, nativeCommandEligible, nativePtySudoEligible, operationIntentKey, sudoTarget,
   type CommandAnalyzer, type HostEnvironmentAccess, type ProposedOperation } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
-import { inputPlan } from './operation-input-plan.js';
+import { aptNeedsPtyStdin, inputPlan } from './operation-input-plan.js';
 import { blockedOperationFeedback } from './operation-feedback.js';
 
 type Feedback = Awaited<ReturnType<RemoteToolDependencies['runOperation']>>;
@@ -33,8 +33,14 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
       }
     }
     const analysis = operation.kind === 'command' ? await deps.analyzer.analyze(operation.command).catch(() => undefined) : undefined;
-    if (analysis && nativeCommandEligible(operation, analysis) && operation.kind === 'command')
+    // Transport selection stays backend-owned and capability-driven: single literal
+    // foreground commands run without Python, one literal sudo command gets the
+    // credential-bound PTY, and apt transactions that must answer a prompt keep a
+    // stdin-capable channel instead of the stdin-less native exec.
+    if (analysis && operation.kind === 'command' && !aptNeedsPtyStdin(analysis) && nativeCommandEligible(operation, analysis))
       operation = { ...operation, executionChannel: 'native-exec' };
+    else if (analysis && operation.kind === 'command' && nativePtySudoEligible(operation, analysis))
+      operation = { ...operation, executionChannel: 'native-pty' };
     // Replay protection answers one question: could repeating this request re-apply
     // effects that were already dispatched? Effect-free queries use exactly the safety
     // gate's own classification, so a repeated observation (ss, ip, ping, literal reads)

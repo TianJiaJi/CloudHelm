@@ -2,6 +2,8 @@
 
 > 用户要求停止继续实施并移交；本文件只记录当前事实和剩余工作，不代表发布、提交或 H03 完成。设计约束见 [NATIVE_SSH_EXECUTION_MIGRATION.md](NATIVE_SSH_EXECUTION_MIGRATION.md)，旧 H03 账见 [REPAIR_PROGRESS.md](REPAIR_PROGRESS.md)。**不要把任何聊天中的密码、密钥、VM 私密配置写进源码、命令或日志。**
 
+> **状态更新（2026-11-19）**：本文件为暂停交接时的快照。此后修正指令已裁决并实施：P0-A 已提交（`cb6476a`），P0-B（native-pty 通道、sudo 密码客户端 PTY 注入、apt 提示分流）已实施并通过串行全量回归与构建；实施记录见 [NATIVE_SSH_DIRECTIVE_REVIEW.md](NATIVE_SSH_DIRECTIVE_REVIEW.md) 第七、八节，下文"尚未完成"条目以各期实施记录为准。
+
 ## 已落地（未提交）
 
 - Agent 普通、非特权、单步、可解析的前台命令：`task-operation-preflight.ts` 选择 `native-exec`；SafetyGate 重分析验证；通道写入 `operationFingerprint` 与 `OperationView`；`TerminalManager` 经 `SshCommandTerminal` 使用 `SshTransport.runNativeExec`，固定 `/usr/bin/env -i`、`/bin/sh` 和受控 PATH/cwd。启动前以固定只读 SSH 命令检查工具，不再为这类命令放置 `process.py`。输出有上限；channel 关闭、信号、撤权或未观察到退出码维持 unknown，不自动重放。
@@ -15,7 +17,7 @@
 1. 无 Python 主机上的密码 sudo/su 私密认证尚无等价替代；现有私密窗口密码**不会进入模型上下文**，但远端接收方目前是 Python 驱动。不得把密码写进普通 Shell stdin、命令行、审计正文或日志，也不得通过人工终端绕过 SafetyGate。用户未授权改变认证安全边界；继续设计时先阐明具体接收方与威胁模型。
 2. `packages/adapters/src/file-transaction-runner.ts`、`remote-file-program.ts` 依赖远端 Python。需维持文件正文/身份/元数据比较、ACL/xattr 失败关闭、备份收据、原子提交、读回、断线与未知写锁；不能用 SFTP 单纯覆盖或 heredoc/rename 冒充事务。SFTP 可以继续用。
 3. 后台作业的启动收据、重连观察和精确停止未迁移；仅凭 SSH channel 关闭或 PID/PGID/cmdline 校验不构成无竞态退出证明。`su-session.ts` 及其程序、`ssh-transport.ts` 的 Python 前置检查与 SFTP 放置仍在。最终切换时须统一移除并测试，不保留安全性不明的自动回退。
-4. 执行通道目前绑定到操作指纹，但尚未把观察到的工具路径/能力档案版本一并绑定审批；能力归档也尚无 UI 投影。原生命令只固定探测 `/usr/bin/env` 与 `/bin/sh`，其他 POSIX 布局可保守阻断。Bootstrap、能力过期的跨重连演练、各平台兼容仍待做。
+4. 执行通道目前绑定到操作指纹，但尚未把观察到的工具路径/能力档案版本一并绑定审批；能力归档也尚无 UI 投影。原生命令只固定探测 `/usr/bin/env` 与 `/bin/sh`，其他 POSIX 布局可保守阻断。Bootstrap 已按裁决 B15 降级为纯指导形态（不向服务器安装任何东西）；能力过期的跨重连演练、各平台兼容仍待做。
 5. **H03 仍进行中**：此前隔离 VM 上的真实 Agent `id -u` 走旧 Python 通道，因缺 Python 退出 127；新原生路径尚未在该 VM 真机复验。诊断、配置→校验→服务健康、后台启动→观察→精确停止三条真实链均无最终通过证据；不得按本地替身结果结项。未发起新的付费模型调用或远端变更。
 
 ## 验证与停止状态

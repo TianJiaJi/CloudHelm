@@ -3,7 +3,7 @@ import { BashAnalyzer } from '../../packages/adapters/src/bash-analyzer.js';
 import { SshCommandTerminal, type CommandTransport } from '../../packages/adapters/src/ssh-command-terminal.js';
 import { SafetyGate } from '../../packages/application/src/safety-gate.js';
 import { TerminalManager } from '../../packages/application/src/terminal-manager.js';
-import { operationFingerprint, type OperationAudit, type ProposedOperation } from '../../packages/core/src/index.js';
+import { operationFingerprint, type OperationAudit, type OperationExecutor, type ProposedOperation, type TerminalLease } from '../../packages/core/src/index.js';
 import { taskOperationPreflight } from '../../apps/desktop/src/worker/task-operation-preflight.js';
 
 it('binds and audits native transport before executing id -u without placing Python or using SFTP', async () => {
@@ -41,4 +41,20 @@ it('binds and audits native transport before executing id -u without placing Pyt
   expect(stages).toEqual(['proposed', 'decided', 'completed']);
   expect(runNativeExec).toHaveBeenCalledOnce();
   expect(prepareCommandProgram).not.toHaveBeenCalled(); expect(openPipe).not.toHaveBeenCalled();
+});
+
+it('refuses a native PTY channel that does not match an eligible literal sudo command', async () => {
+  const decided = vi.fn(async () => {});
+  const gate = new SafetyGate({ analyzer: new BashAnalyzer(),
+    audit: { proposed: vi.fn(async () => {}), decided, completed: vi.fn(async () => {}) },
+    executor: {} as unknown as OperationExecutor, lease: {} as unknown as TerminalLease,
+    settings: () => ({ mode: 'permissive', revision: 1 }),
+    evaluator: { evaluate: async () => { throw new Error('a misrouted channel must not be evaluated'); } },
+    approvals: { requestApproval: async () => { throw new Error('a misrouted channel must not be approved'); } } });
+  const outcome = await gate.execute({ id: 'misrouted-pty', kind: 'command', command: 'id -u', executionChannel: 'native-pty', scope: {
+    taskId: 'task', hostId: 'host', cwd: '/', runAs: 'user', terminalId: 'terminal', terminalGeneration: 1,
+    policyRevision: 1, allowedWorkingRoots: [], protectedPaths: [], goal: 'identity' } });
+  expect(outcome.decision).toMatchObject({ verdict: 'error', ruleId: 'invalid-execution-channel' });
+  expect(decided).toHaveBeenCalledExactlyOnceWith('misrouted-pty',
+    expect.objectContaining({ verdict: 'error', ruleId: 'invalid-execution-channel' }), expect.any(String));
 });

@@ -87,3 +87,32 @@ it('refuses a known-blocked write before review while read-only inspection conti
     .resolves.toMatchObject({ isError: true, details: { code: 'unresolved-prior-operation', effects: 'none' } });
   await expect(taskOperationPreflight(query, depsWithBlocker)).resolves.toMatchObject({ operation: query });
 });
+
+it('binds one literal sudo command to the credential-bound native PTY', async () => {
+  for (const text of ['sudo id', 'sudo -u deploy id', 'sudo systemctl restart nginx', 'sudo apt install docker.io']) {
+    const result = await taskOperationPreflight(command('sudo-route', text), deps([]));
+    expect(result, text).toMatchObject({ operation: { executionChannel: 'native-pty' } });
+  }
+  const prompted = await taskOperationPreflight(command('prompted', 'sudo -p "x" id'), deps([]));
+  expect(prompted).toMatchObject({ isError: true, details: { code: 'unsupported-authentication-form' } });
+  const compound = await taskOperationPreflight(command('compound', 'sudo id; sudo whoami'), deps([]));
+  expect(compound).toMatchObject({ operation: { command: 'sudo id; sudo whoami' } });
+  expect(compound).not.toHaveProperty('operation.executionChannel');
+});
+
+it('keeps apt transactions on the reviewed legacy channel instead of native exec', async () => {
+  // A prompting transaction would strand its [Y/n] on a stdin-less channel, and
+  // -y transactions or apt update still run package maintainer scripts, which the
+  // static review treats as code execution; neither ever takes native exec.
+  for (const text of ['apt install docker.io', 'apt-get remove nano', 'apt upgrade', 'apt full-upgrade',
+    'apt-get dist-upgrade', 'apt autoremove', 'apt purge nano', 'apt reinstall curl',
+    'apt-get install -y docker.io', 'apt update']) {
+    const result = await taskOperationPreflight(command('apt-transaction', text), deps([]));
+    expect(result, text).toMatchObject({ operation: { command: text } });
+    expect(result, text).not.toHaveProperty('operation.executionChannel');
+  }
+  for (const text of ['apt list --installed', 'apt-cache policy nginx']) {
+    const result = await taskOperationPreflight(command('apt-static', text), deps([]));
+    expect(result, text).toMatchObject({ operation: { command: text, executionChannel: 'native-exec' } });
+  }
+});

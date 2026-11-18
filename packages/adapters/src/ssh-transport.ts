@@ -3,6 +3,7 @@ import { withSftpSession } from './ssh-sftp-session.js';
 import { readBoundedSftpFile } from './sftp-read.js';
 import { runFixedSshCommand } from './ssh-fixed-exec.js';
 import { runNativeSshExec, type NativeExecOutcome } from './native-ssh-exec.js';
+import { openNativeSshPty, type NativePtyHandle } from './native-ssh-pty.js';
 import { probeHostEnvironment } from './host-environment-probe.js';
 import { onDemandAuthHandler, type SshLoginChallenge } from './ssh-authentication.js';
 export { SshAuthenticationError } from './ssh-authentication.js';
@@ -229,6 +230,19 @@ export class SshTransport {
     if (!client) return { state: 'not-dispatched', reason: 'authorization-expired' };
     const generation = this.connectionGeneration(hostId);
     return runNativeSshExec(client, input, () => {
+      try { return authorized() && this.connections.get(hostId) === client
+        && this.connectionGeneration(hostId) === generation; }
+      catch { return false; }
+    }, hooks, signal);
+  }
+
+  /** Native PTY primitive for sudo credential delivery; never authorizes itself or retries an unknown dispatch. */
+  runNativePty(hostId: string, input: { command: string; cwd: string; envPath: string; shellPath: string; nonce: string; cols: number; rows: number },
+    authorized: () => boolean, hooks: { data(text: string): void; authentication(event: { id: string; open: boolean }): void },
+    signal?: AbortSignal): NativePtyHandle {
+    const client = this.connections.get(hostId);
+    const generation = this.connectionGeneration(hostId);
+    return openNativeSshPty(client, input, () => {
       try { return authorized() && this.connections.get(hostId) === client
         && this.connectionGeneration(hostId) === generation; }
       catch { return false; }

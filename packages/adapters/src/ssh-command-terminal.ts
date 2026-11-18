@@ -1,12 +1,15 @@
 import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.js';
+import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { CommandNotStartedError, isSudo, nativeCommandEligible, redactOutput, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
+import { CommandNotStartedError, isSudo, nativeCommandEligible, nativePtySudoEligible, redactOutput, sudoMarkerPrompt, sudoPtyCommand, supportsSudo,
+  type CommandAnalysis, type OperationResult, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
-export type CommandTransport = Pick<SshTransport, 'connectionGeneration' | 'prepareCommandProgram' | 'removeCommandProgram' | 'openPipe' | 'shell'> & Partial<Pick<SshTransport, 'integratedShell' | 'runNativeExec' | 'execFixed'>>;
+export type CommandTransport = Pick<SshTransport, 'connectionGeneration' | 'prepareCommandProgram' | 'removeCommandProgram' | 'openPipe' | 'shell'> & Partial<Pick<SshTransport, 'integratedShell' | 'runNativeExec' | 'runNativePty' | 'execFixed'>>;
 import { ProcessInterrupt } from './ssh-process-signal.js';
 import { remoteCommandProgram } from './remote-command-program.js';
+import type { NativePtyHandle, NativePtyOutcome } from './native-ssh-pty.js';
 
 /** Commands are process arguments; PTY input and sudo credentials have distinct channels. */
 export class SshCommandTerminal implements RawTerminal {
@@ -36,6 +39,9 @@ export class SshCommandTerminal implements RawTerminal {
   private interrupter?: ProcessInterrupt;
   private startupTimer?: ReturnType<typeof setTimeout>;
   private nativeAbort?: AbortController;
+  private ptySession?: NativePtyHandle;
+  private ptyAbort?: AbortController;
+  private readonly ptyChallenges = new Set<string>();
   private readonly generation: number;
   private readonly analyzer = new BashAnalyzer();
 
@@ -51,7 +57,7 @@ export class SshCommandTerminal implements RawTerminal {
   onClose(listener: () => void): void { this.closedListener = listener; }
   onAuthentication(listener: (challenge: { id: string; prompt?: string }) => void): void { this.authentication = listener; }
 
-  async execute(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' }): Promise<void> {
+  async execute(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' | 'native-pty' }): Promise<void> {
     if (this.busy || this.human || this.humanOpening) throw new Error('The command terminal is busy');
     this.busy = true;
     const deadline = new Promise<never>((_resolve, reject) => this.armStartup(reject));
@@ -64,7 +70,7 @@ export class SshCommandTerminal implements RawTerminal {
   }
 
   private async executeCommand(command: string, cwd: string, isAuthorized: () => boolean,
-    options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' }): Promise<void> {
+    options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' | 'native-pty' }): Promise<void> {
     const current = () => {
       if (this.closed || this.generation !== this.ssh.connectionGeneration(this.hostId) || !isAuthorized()) {
         throw new Error('Command authorization expired');
@@ -79,6 +85,14 @@ export class SshCommandTerminal implements RawTerminal {
         allowedWorkingRoots: [], protectedPaths: [], goal: '' } }, analysis) || options.sudoAuthorization)
         throw new CommandNotStartedError('Native exec review no longer matches command; nothing sent');
       await this.executeNative(command, cwd, current);
+      return;
+    }
+    if (options?.executionChannel === 'native-pty') {
+      if (!nativePtySudoEligible({ id: '', kind: 'command', command, scope: { taskId: '', hostId: this.hostId,
+        cwd, runAs: '', terminalId: '', terminalGeneration: 0, policyRevision: 0,
+        allowedWorkingRoots: [], protectedPaths: [], goal: '' } }, analysis))
+        throw new CommandNotStartedError('Native PTY review no longer matches command; nothing sent');
+      await this.executeNativePty(cwd, current, analysis);
       return;
     }
     const sudo = supportsSudo(analysis);
@@ -173,6 +187,57 @@ export class SshCommandTerminal implements RawTerminal {
       this.exited(outcome.state === 'exited' ? outcome.exitCode : undefined);
     } finally {
       this.nativeAbort = undefined; this.busy = false;
+      if (this.humanOwned && !this.closed) void this.openHuman().catch(() => this.close());
+    }
+  }
+
+  /** sudo on the credential-bound native PTY: the password reaches only the
+   * client-owned marker window, never command text, output, or logs. */
+  private async executeNativePty(cwd: string, current: () => void, analysis: CommandAnalysis): Promise<void> {
+    if (!this.ssh.runNativePty) {
+      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.exited(undefined); this.busy = false; return;
+    }
+    current();
+    const nonce = randomBytes(16).toString('hex');
+    const rebuilt = sudoPtyCommand(analysis, sudoMarkerPrompt(nonce));
+    if (!rebuilt) throw new CommandNotStartedError('Native PTY command cannot be rebuilt for this sudo form; nothing sent');
+    current(); this.clearStartup();
+    const controller = new AbortController(); this.ptyAbort = controller;
+    const session = this.ssh.runNativePty(this.hostId,
+      { command: rebuilt, cwd, envPath: '/usr/bin/env', shellPath: '/bin/sh', nonce, cols: this.cols, rows: this.rows },
+      () => { current(); return true; },
+      { data: (text: string) => { if (text) { this.lineStart = text.endsWith('\n'); this.data(text); } },
+        authentication: (event: { id: string; open: boolean }) => {
+          if (!/^[a-f0-9]{32}$/u.test(event.id)) return;
+          if (event.open) { this.ptyChallenges.add(event.id); this.authentication({ id: event.id, prompt: 'sudo 身份验证' }); }
+          else { this.ptyChallenges.delete(event.id); this.authentication({ id: event.id }); }
+        } },
+      controller.signal);
+    this.ptySession = session;
+    try {
+      const outcome: NativePtyOutcome = await session.result;
+      if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      if (outcome.state === 'exited') {
+        if (outcome.exitCode === 127) {
+          // A shell-reported missing sudo differs from sudo's own child diagnostic:
+          // only the first can offer the reviewed su alternative.
+          this.failure({ failureKind: 'unsupported', effects: 'none',
+            ...(outcome.sudoMissing ? { privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable',
+              source: 'transport', businessCommand: 'not-started', recovery: 'confirm-alternative' } as const } : {}) });
+        } else if (outcome.exitCode === 125 && !outcome.markerSeen) {
+          // The wrapper reports a failed directory change before sudo ever starts.
+          this.failure({ failureKind: 'permission-denied', effects: 'none' });
+        }
+      }
+      if (outcome.state === 'signaled') this.data(`远端命令收到 ${outcome.signal}；未观察到可确认的退出码。`);
+      if (outcome.state === 'unknown') this.data('原生 SSH 命令结果未知；请核验原操作，不要直接重放。');
+      this.exited(outcome.state === 'exited' ? outcome.exitCode : undefined);
+    } finally {
+      this.ptySession = undefined; this.ptyAbort = undefined;
+      for (const id of this.ptyChallenges) this.authentication({ id });
+      this.ptyChallenges.clear();
+      this.busy = false;
       if (this.humanOwned && !this.closed) void this.openHuman().catch(() => this.close());
     }
   }
@@ -279,13 +344,16 @@ export class SshCommandTerminal implements RawTerminal {
   }
 
   answerAuthentication(id: string, answer: string | null): boolean {
-    if (!this.active || !this.challenges.has(id) || (answer !== null && (answer.length > 4095 || /[\r\n\u0000]/u.test(answer)))) return false;
+    if (answer !== null && (answer.length > 4095 || /[\r\n\u0000]/u.test(answer))) return false;
+    if (this.ptySession) return this.ptyChallenges.has(id) && this.ptySession.answer(id, answer);
+    if (!this.active || !this.challenges.has(id)) return false;
     this.challenges.delete(id);
     this.active.write(`${JSON.stringify({ type: 'answer', id, answer })}\n`);
     return true;
   }
 
   write(data: string): void {
+    if (this.ptySession) { this.ptySession.write(data); return; }
     if (this.nativeAbort) { if (data === '\u0003') this.nativeAbort.abort(); return; }
     if (this.active) this.active.write(`${JSON.stringify({ type: 'input', data: Buffer.from(data).toString('base64') })}\n`);
     else if (this.human) this.human.write(data);
@@ -325,7 +393,8 @@ export class SshCommandTerminal implements RawTerminal {
 
   resize(cols: number, rows: number): void {
     this.cols = cols; this.rows = rows;
-    if (this.active) this.active.write(`${JSON.stringify({ type: 'resize', cols, rows })}\n`);
+    if (this.ptySession) this.ptySession.resize(cols, rows);
+    else if (this.active) this.active.write(`${JSON.stringify({ type: 'resize', cols, rows })}\n`);
     this.human?.setWindow(rows, cols, 0, 0);
   }
 
@@ -345,6 +414,7 @@ export class SshCommandTerminal implements RawTerminal {
     if (this.closed) return;
     this.closed = true;
     this.nativeAbort?.abort();
+    this.ptyAbort?.abort();
     this.interrupter?.close(); this.interrupter = undefined;
     this.active?.end(); this.active?.close(); this.human?.end();
     this.closedListener();

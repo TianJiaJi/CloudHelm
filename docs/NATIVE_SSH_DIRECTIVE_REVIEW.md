@@ -1,6 +1,6 @@
 # 执行层重构修正指令：接收与评审记录（2026-11-18）
 
-> 状态：**仅接收与评审，未开始实施**。本文记录用户下达的修正指令要点、与当前代码/契约文档的对照、以及评审发现的问题。实际进度仍以 [NATIVE_SSH_HANDOFF.md](NATIVE_SSH_HANDOFF.md) 为准；迁移契约见 [NATIVE_SSH_EXECUTION_MIGRATION.md](NATIVE_SSH_EXECUTION_MIGRATION.md)。
+> 状态：**指令已裁决并实施至 P0-B**。P0-A 已提交（`cb6476a`，见第七节）；P0-B 已实施、通过串行全量回归与构建（见第八节），实际进度以第七、八节实施记录为准；本文其余各节为接收与评审时的原始记录。迁移契约见 [NATIVE_SSH_EXECUTION_MIGRATION.md](NATIVE_SSH_EXECUTION_MIGRATION.md)。
 
 ## 一、指令要点（接收原文摘要，不改原意）
 
@@ -133,3 +133,52 @@
 - `pnpm typecheck`、`pnpm lint`、`pnpm lint:lines`、`pnpm lint:tests`、`pnpm lint:deps`（806 模块 3301 依赖零违规）全部通过。
 - 串行全量回归（`pnpm exec vitest run --no-file-parallelism`）：**504.3s，323 文件通过 / 7 跳过；2833 项通过 / 27 跳过（共 2860），零失败**。与第六节基线相比净减 2 项，对应删除的 Python 门禁缓存用例与 `host-environment` 编译条目，无回归。
 - Electron 构建（`pnpm build`）通过：main 290 模块 / renderer 1249 模块。
+
+## 八、P0-B 实施记录（2026-11-19）
+
+### A. 落地改动
+
+1. **native-pty 通道（新增 `packages/adapters/src/native-ssh-pty.ts`）**：`openNativeSshPty` 以 `pty: { term: 'dumb', cols/rows 钳制 [80,1000]/[1,1000], modes: { ECHO: 0 } }` 申请 exec channel；`SshTransport.runNativePty`（`ssh-transport.ts`）绑定传输。输出 1 MiB 上限；密码窗口内输出抑制上限 4096 字节、单次会话注入次数上限 3；启动超时 15s。结果四态：`exited`（附 markerSeen/sudoMissing）、`signaled`、`not-dispatched`（authorization-expired）、`unknown`（allocation/timeout/aborted/channel-error/missing-exit/authorization-expired/output-limit）；结束只关 channel，不假定远端进程已终止。
+2. **sudo 标记协议（`sudo-plan.ts`）**：nonce 由客户端生成（32 位 hex）；`sudoPtyCommand` 把单条字面 sudo 重建为 `sudo -k -p '<标记>' …`（已含 `-k/--reset-timestamp` 时不重复加前缀），拒绝 `-p/--prompt/-A/--askpass`、动态参数、重定向、管道、多步与非 sudo 首 call；标记提示符 `\rcloudhelm:<nonce> password: `，非法 nonce 抛错。伪造标记（无失败记录的重复标记）只逐字输出、不开窗，防止把 PTY 变成密码预言机；被吞的认证失败提示在重试开窗时补发合成提示。
+3. **环境净化与 native-exec 完全一致**：PTY 命令经 `renderNativeExecCommand` 渲染——`exec /usr/bin/env -i PATH=… LC_ALL=C /bin/sh -c 'cd <cwd> || exit 125\n<命令>'`。`LC_ALL=C` 保证 sudo 重试提示（`Sorry, try again.`）与 apt C-locale 摘要的确定拼写（另定 3 的 locale 确定性）；`cd` 失败以 exit 125 报告。
+4. **路由（`task-operation-preflight.ts` / `native-command-route.ts`）**：preflight 先剥离外部传入的 `executionChannel`（路由后端独占，不信任模型/工具提供的通道）；native-exec = `!aptNeedsPtyStdin && nativeCommandEligible`；native-pty = `nativePtySudoEligible`（单条字面 sudo，拒绝嵌套 sudo/su 与提示符覆盖参数）；`runAs` 由单步 sudoTarget 推导；认证桥无法执行的形式（`sudo -p … id`、sudo 管道/重定向组合）在审批卡之前以 unsupported-authentication-form 阻断。
+   **实施中发现并修复路由缺陷**：`nativePtySudoEligible` 首版在提取 call 前检查 `hasCompound`，而分析器把包裹命令（`sudo id`）本身标为 `hasCompound: true`（steps=1、calls=2），该检查使 native-pty 对一切 sudo 命令成为死代码；现改为提取 call 后按 `hasCompound && !isSudo(call)` 才拒绝，镜像 `sudoContextCommand` 的既有 carve-out。
+5. **apt 分流（`operation-input-plan.ts` 新增 `aptNeedsPtyStdin` 与 `APT_TRANSACTIONS`）**：apt 事务的确认提示在无 stdin 的 native-exec 上会永久搁置，故提示型事务（无 `-y` 且子命令为 install/remove/purge/reinstall/upgrade/full-upgrade/dist-upgrade/autoremove）不进 native-exec；与 `hasCodeExecution` 的包管理动作排除（maintainer 脚本属代码执行，`apt-get install -y …`、`apt update` 同样不上 native-exec）互为独立防线。`sudo apt-get install <包>` 走 native-pty：桥仅当最近一条完整 C-locale 摘要显示 0 removals 且无 REMOVED/essential/降级/覆盖/配置文件告警时自动答 `y`，否则答 `n` 并取消（fail-closed）。纯查询（`apt list --installed`）仍走 native-exec。
+6. **终端接线（`ssh-command-terminal.ts`）**：execute 先分析再按通道分支；native-pty 分支经 `nativePtySudoEligible` 复核、`sudoPtyCommand` 重建、`runNativePty` 派发；认证挑战翻译为私密输入请求（prompt `sudo 身份验证`，answer ≤4095 字符、拒绝 \r\n\0、仅对登记中的 challenge id 生效）；exit 127 且为 shell 报告的 sudo 缺失（区别于 sudo 自身子命令诊断）→ unsupported + sudo-unavailable 特权失败（可提供替代）；exit 125 且未见标记 → permission-denied（cd 失败）；结果未知 → 提示核验原操作不重放；终端关闭即中止 PTY。
+7. **SafetyGate 校验（`safety-gate.ts`）**：native-pty 标注在 gate 内重分析复核，不满足 `nativePtySudoEligible` → `invalid-execution-channel`（verdict error），不触达审批与评估。
+8. **契约与模型**：`executionChannel` 扩为 `'native-exec' | 'native-pty'`（core `model.ts`、`ports.ts` execute 签名、contracts `index.ts`、`operation-view-validation.ts`）。
+9. **B15（Bootstrap 向导）**：按裁决降级为纯指导形态——不实施向导、不向服务器安装任何东西；P0-B 未引入任何安装形态操作，后续如需引导仅以纯文本指导承载，不产生远端变更。
+10. **AGENTS.md 密码条目**：按 B11 修订为受控 PTY 凭证注入通道语义（红线不变：不落盘、不进模型上下文/命令行/审计/日志、服务器零放置）。
+
+### B. 测试同步
+
+- 新增 `Tests/adapters/native-ssh-pty.test.ts` 15 例（FakeChannel/FakeClient 双桩）：PTY 选项钳制、标记开窗注入、错密码重试与合成提示补发、伪造标记不开窗、重复标记 re-arm、取消、sudo 缺失与子命令诊断区分、抑制上限、标记跨块、畸形应答拒绝、原始写入与 resize 钳制、allocation/timeout/missing-exit/signaled/output-limit 分类、授权过期、abort。
+- 扩展 5 个既有测试文件共 14 例：native-command-route（nativePtySudoEligible 正反例）、sudo-plan（标记提示符/命令重建/拒绝形式）、native-command-terminal（ptyFixture + 7 例：路由复核、挑战翻译、127/125/unknown 分类、缺失 transport、通道失配拒绝、close 中止）、task-operation-preflight（native-pty 绑定、apt 分流）、native-ssh-gate（invalid-execution-channel）。
+- 六文件共 29 个新用例，全部通过。
+
+### C. 验证结果
+
+- `pnpm typecheck`、`pnpm lint`、`pnpm lint:lines`、`pnpm lint:tests`、`pnpm lint:deps`（808 模块零违规）全部通过。
+- 串行全量回归（`pnpm exec vitest run --no-file-parallelism`）：**487.2s，324 文件通过 / 7 跳过；2862 项通过 / 27 跳过（共 2889），零失败**。较第七节基线净增 1 文件、29 项，全部对应本次新增用例。
+- Electron 构建（`pnpm build`）通过：main 291 模块 / preload / renderer 1249 模块。
+
+### D. 残余与后续分期
+
+- **P1**：文件事务 shell 化并重新验收；su 走 native-pty（按 A1"窗口 + 单次注入 + 状态机一次进出"，提示特征见下表）。
+- **P2**：后台作业模块（此前 capability_blocked）；H03 后台链补验。
+- **P3**：删除四处远端 Python 残留（process.py 放置、`remoteCommandProgram --serve`、`suSessionProgram`、`remoteFileProgram`）及 SFTP 放置逻辑，不留兼容开关。
+- **真机验收（H03 前两链）**：待无 Python 的隔离 VM，本轮证据限于本地测试；B12 的 utility process 崩溃凭证销毁验证随真机链路一并覆盖。
+- **close settle 后仍挂起 PTY 的子进程**：属 P2 后台域问题，本期不处理。
+
+### E. sudo/su 提示特征跨实现核对表（另定 4）
+
+下表为静态核对结果（各实现文档与默认配置），P1 落地 su 时以隔离 VM 实测定稿：
+
+| 实现 | 密码提示特征 | 确定性来源 | 备注 |
+|---|---|---|---|
+| sudo（Linux 发行版通用） | 默认 `[sudo] password for <user>: `；`-p` 逐字覆盖（`%` 转义需 `%%`） | `-p` 客户端已知标记 | 本期方案；lecture 与标记共存，扫描不受影响 |
+| sudo 认证失败 | `Sorry, try again.`（LC_ALL=C 拼写）后同标记重试；3 次后 `sudo: 3 incorrect password attempts`，exit 1 | 同一 nonce 标记 | 客户端注入上限 3 次后销毁 |
+| su（shadow-utils + PAM） | pam_unix 默认 `Password: `；随 LANG/LC_ALL 本地化 | 无 `-p` 等价物 | A1 窗口方案；LC_ALL=C 下预期 `Password: ` |
+| su 认证失败 | `su: Authentication failure`（随发行版/PAM 配置） | — | 失败分类按窗口子串匹配，实测后定稿 |
+| BusyBox su | `Password: ` 简化形态，非 PAM | — | 无 Python 主机典型环境，实测补证 |
+| doas | `doas: password for <user>:` | — | 不在通道范围（wrappers 黑名单已含） |

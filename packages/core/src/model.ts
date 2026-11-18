@@ -36,7 +36,7 @@ export type ProposedOperation =
       /** Background lifetime is explicitly bound into review, never inferred from shell syntax. */
       executionMode?: 'background';
       /** Backend-selected, reviewed transport; absent on legacy records. Not a safety grant. */
-      executionChannel?: 'native-exec';
+      executionChannel?: 'native-exec' | 'native-pty';
       /** Backend-created control descriptor. The command is review text, never executed as shell. */
       processControl?: { kind: 'interrupt'; jobId: string; targetOperationId: string; pid: number;
         processSequence: number; connectionId: string };

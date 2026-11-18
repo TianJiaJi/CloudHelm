@@ -49,3 +49,27 @@ export function supportsSudo(analysis: CommandAnalysis): boolean {
     && analysis.calls.length === analysis.steps.length + sudo.length
     && !analysis.calls.some((call) => /(?:^|\/)su$/u.test(call.name));
 }
+
+/** Client-owned sudo marker prompt. The leading CR pins column 0 so the marker
+ * never wraps on any sane width; the 32-hex nonce is unguessable per dispatch. */
+export function sudoMarkerPrompt(nonce: string): string {
+  if (!/^[a-f0-9]{32}$/u.test(nonce)) throw new Error('Invalid sudo marker nonce');
+  return `\rcloudhelm:${nonce} password: `;
+}
+
+/** Rebuild one literal sudo command for the credential-bound native PTY with the
+ * client-owned marker prompt. Returns undefined when the parsed form carries an
+ * option that would override the marker or move the password to another helper;
+ * the caller must then not dispatch on this route. */
+export function sudoPtyCommand(analysis: CommandAnalysis, markerPrompt: string): string | undefined {
+  const call = analysis.steps?.[0]?.call;
+  if (!call || !isSudo(call) || call.dynamic || call.redirects) return undefined;
+  // A rebuild that silently dropped pipe or redirection content would dispatch a
+  // different command than the one reviewed; such forms never take this route.
+  if (analysis.hasError || analysis.hasPipeline || analysis.hasRedirection || analysis.steps?.length !== 1) return undefined;
+  if (call.args.some((arg) => ['-p', '--prompt', '-A', '--askpass'].includes(arg))) return undefined;
+  if (/[\u0000\u000a]/u.test(markerPrompt) || markerPrompt.length > 128) return undefined;
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const reset = call.args.includes('-k') || call.args.includes('--reset-timestamp') ? '' : '-k ';
+  return `sudo ${reset}-p ${quote(markerPrompt)}${call.args.length ? ` ${call.args.map(quote).join(' ')}` : ''}`;
+}

@@ -8,7 +8,8 @@ const schema = Type.Object({ version: Type.Literal(1), directoryId: Type.String(
 export function validateOperationView(operation: OperationView): void {
   if (operation.internal !== undefined && (operation.internal !== 'identity-probe' || operation.kind !== 'command'))
     throw new Error('Invalid internal preflight marker');
-  if (operation.executionChannel !== undefined && (operation.kind !== 'command' || operation.executionChannel !== 'native-exec'))
+  if (operation.executionChannel !== undefined && (operation.kind !== 'command'
+    || (operation.executionChannel !== 'native-exec' && operation.executionChannel !== 'native-pty')))
     throw new Error('Invalid execution channel projection');
   const receipt = operation.fileRecovery;
   if (receipt && (!Value.Check(schema, receipt) || /[\u0000-\u001f\u007f]/u.test(receipt.path)

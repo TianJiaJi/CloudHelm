@@ -207,7 +207,7 @@ export interface OperationView {
   /** Directory captured with the full command fingerprint, never inferred from a display preview. */
   commandSource?: { version: 1; cwd: string };
   /** Reviewed backend transport; missing historical records remain unknown. */
-  executionChannel?: 'native-exec';
+  executionChannel?: 'native-exec' | 'native-pty';
   serviceUnit?: string;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
