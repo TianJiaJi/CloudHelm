@@ -462,7 +462,7 @@ export class TaskRunner {
   private async performOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined,
     hostLabel: string, manualReview = false, onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']) {
     this.assertRemoteActive();
-    const prepared = await taskOperationPreflight(operation, { privileged: this.privileged, analyzer: this.analyzer,
+    const prepared = await taskOperationPreflight(operation, { privileged: this.privileged, analyzer: this.analyzer, environment: this.environment,
       operations: () => this.operationViews(), replayProtected: this.replayProtected,
       hostBlocked: (hostId) => this.pendingOutcomeBlocker(hostId) }, manualReview);
     if (!('operation' in prepared)) return prepared;
@@ -616,7 +616,7 @@ export class TaskRunner {
       ...(connectionId ? { executionContext: { version: 1, connectionId, terminalId: operation.scope.terminalId,
         terminalGeneration: operation.scope.terminalGeneration } } : {}),
       ...(operation.kind === 'command' && operation.processControl ? { processControl: { ...operation.processControl } } : {}),
-      ...(operation.kind === 'command' && operation.probe ? { internal: 'identity-probe' as const } : {}),
+      ...(operation.kind === 'command' && operation.probe ? { internal: 'identity-probe' as const } : {}), ...(operation.kind === 'command' && operation.executionChannel ? { executionChannel: operation.executionChannel } : {}),
       verificationSource: source,
       outputExpectation: operation.kind === 'command' ? operation.outputExpectation : undefined,
       serviceUnit: operation.kind === 'command' ? operation.serviceUnit : undefined,

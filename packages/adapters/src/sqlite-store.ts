@@ -1,5 +1,10 @@
 import Database from 'better-sqlite3';
-import type { ReferenceBody } from '@cloudhelm/core';
+import type { HostEnvironmentData, ReferenceBody } from '@cloudhelm/core';
+
+type HostCapabilityRecord = { version: 1; hostId: string; hostFingerprint: string;
+  loginAs: string; connectionId: string; observedAt: number;
+  /** Durable archives predate the shell-only carrier; legacy rows keep source='python'. */
+  data: Omit<HostEnvironmentData, 'source'> & { source: 'python' | 'shell' } };
 import { migrateReferenceDrafts, ReferenceDrafts, REFERENCE_DRAFTS_SCHEMA_VERSION, type ReferenceDraftScope } from './sqlite-reference-drafts.js';
 export type { ReferenceDraftScope } from './sqlite-reference-drafts.js';
 import { migrateReferencePreparations, ReferencePreparations, REFERENCE_PREPARATIONS_SCHEMA_VERSION, type ReferencePreparationReceipt } from './sqlite-reference-preparations.js';
@@ -42,7 +47,7 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, unixepoc
 `;
 
 /** Latest schema version written by this module. */
-const STORE_SCHEMA_VERSION = 11;
+const STORE_SCHEMA_VERSION = 15;
 /** A database written by a newer build must fail closed; downgrades never reinterpret evolved record shapes. */
 export const LATEST_SCHEMA_VERSION = Math.max(STORE_SCHEMA_VERSION, REFERENCE_PREPARATIONS_SCHEMA_VERSION,
   REFERENCE_DRAFTS_SCHEMA_VERSION);
@@ -234,6 +239,16 @@ export class SqliteStore {
     }).immediate();
     migrateReferencePreparations(this.raw);
     migrateReferenceDrafts(this.raw);
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 15').get()) return;
+      this.raw.exec(`
+        CREATE TABLE IF NOT EXISTS host_capabilities (
+          host_id TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL
+        );
+        INSERT INTO schema_migrations(version, applied_at) VALUES (15, unixepoch());
+      `);
+      this.raw.prepare('SELECT host_id, value, updated_at FROM host_capabilities LIMIT 0').all();
+    }).immediate();
   }
 
   /** Exclusive-profile startup only; never call while accepting IPC or running preparations. */
@@ -276,6 +291,18 @@ export class SqliteStore {
 
   bindReferencePreparation(id: string, taskId: string): void { this.referencePreparations.bind(id, taskId); }
   discardUnboundReferencePreparation(id: string): void { this.referencePreparations.discardUnbound(id); }
+
+  /** Persist observations for offline diagnostics only. This table never grants execution. */
+  putHostCapability(hostId: string, profile: HostCapabilityRecord): void {
+    if (hostId !== profile.hostId || profile.version !== 1) throw new Error('Invalid host capability binding');
+    this.raw.prepare('INSERT INTO host_capabilities(host_id, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(host_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at')
+      .run(hostId, JSON.stringify(profile), Date.now());
+  }
+
+  getHostCapability(hostId: string): HostCapabilityRecord | undefined {
+    const row = this.raw.prepare('SELECT value FROM host_capabilities WHERE host_id = ?').get(hostId) as { value: string } | undefined;
+    return row ? JSON.parse(row.value) as HostCapabilityRecord : undefined;
+  }
 
   get<T>(bucket: string, id: string): T | undefined {
     const row = this.db.select({ value: records.value }).from(records)

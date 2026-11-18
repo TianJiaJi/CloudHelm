@@ -8,6 +8,7 @@ export * from './execution-job.js';
 export * from './process-control.js';
 export * from './ssh-settings.js';
 export * from './command-semantics.js';
+export * from './native-command-route.js';
 export * from './ports.js';
 export * from './fingerprint.js';
 export * from './file-edit.js';

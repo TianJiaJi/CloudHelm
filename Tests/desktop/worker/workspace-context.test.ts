@@ -9,7 +9,7 @@ const host: RuntimeHost = { id: 'host', label: 'fixture', address: '127.0.0.1', 
 const observation: HostEnvironmentObservation = { version: 1, hostId: 'host', loginAs: 'fixture', connectionId: 'worker:1', observedAt: 100,
   status: 'observed', data: { os: 'Linux', distribution: 'debian', version: '12', kernel: '6.1', architecture: 'x86_64',
     architectureFamily: 'x86_64', username: 'fixture', uid: 1000, loginDirectory: '/home/fixture',
-    path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: { systemctl: true }, source: 'python' },
+    path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: { systemctl: true }, source: 'shell' },
   readiness: { ssh: 'connected', metadata: 'ready', execution: 'ready' } };
 const environment: HostEnvironmentAccess = { snapshot: () => structuredClone(observation), refresh: vi.fn(async () => structuredClone(observation)) };
 const op = (id: string, fields: Partial<OperationView> = {}): OperationView => ({ id, taskId: 'task', hostId: 'host',
@@ -79,6 +79,25 @@ it('marks stale/unknown host facts and generates context without network reads',
   const prompt = createTaskPrompt(task, [host], () => [], () => [], undefined, undefined, undefined, undefined, access)();
   expect(prompt).toContain('debian'); expect(prompt).toContain('query_operation_history'); expect(prompt).toContain('not root authorization');
   expect(refresh).not.toHaveBeenCalled();
+});
+it('projects the durable capability archive for planning only when no live observation exists', () => {
+  const archived = { loginAs: 'fixture', observedAt: 50, data: structuredClone(observation.data!) };
+  const withArchive = { ...host, archivedCapability: archived };
+  // Live data wins; the archive stays out of the projection entirely.
+  expect(environmentProjection([withArchive], environment, 101)[0]).not.toHaveProperty('archivedProfile');
+  // Without a live observation the archive backs planning, explicitly as a hint.
+  const projection = environmentProjection([withArchive], undefined, 101)[0];
+  expect(projection).toMatchObject({ status: 'unknown', archivedProfile: { observedAt: 50, data: archived.data } });
+  // Identity-scoped: an archive for another login never projects.
+  expect(environmentProjection([{ ...withArchive, archivedCapability: { ...archived, loginAs: 'root' } }], undefined, 101)[0])
+    .not.toHaveProperty('archivedProfile');
+  // Future-dated or invalid timestamps are refused rather than trusted.
+  expect(environmentProjection([{ ...withArchive, archivedCapability: { ...archived, observedAt: 999 } }], undefined, 101)[0])
+    .not.toHaveProperty('archivedProfile');
+  expect(environmentProjection([{ ...withArchive, archivedCapability: { ...archived, observedAt: 0 } }], undefined, 101)[0])
+    .not.toHaveProperty('archivedProfile');
+  const task = { id: 'task', goal: 'check', hostIds: ['host'], localScopes: [] } as unknown as TaskView;
+  expect(createTaskPrompt(task, [withArchive], () => [], () => [])()).toContain('"archivedProfile"');
 });
 it('rechecks tool authorization and cancellation instead of using discovery as permission', async () => {
   let allowed = true;

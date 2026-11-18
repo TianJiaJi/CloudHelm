@@ -1,8 +1,11 @@
-import type { AppEvent, ClarificationAnswer, ApprovalView, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, ReviewSelection, ResumeReason, TaskStatus, TaskView } from './index.js';
+import type { AppEvent, ClarificationAnswer, ApprovalView, HostCapabilityProfile, HostConnectionTestResult, HostView, InputRequestView, LocalScope, OperationView, ReviewMode, ReviewSelection, ResumeReason, TaskStatus, TaskView } from './index.js';
 
 export interface RuntimeHost extends HostView {
   /** Main-derived from durable lineage; not a renderer field or execution permission. */
   riskDomainId?: string;
+  /** Durable capability archive read by main; a possibly-stale planning hint
+   * for the agent prompt, never execution authorization or a freshness proof. */
+  archivedCapability?: { loginAs: string; observedAt: number; data: HostCapabilityProfile['data'] };
   secret?: string; credentials?: import('./host-settings.js').HostCredentials
 }
 /** Compatibility mapping is purpose-bound; a key passphrase is never a login password. */

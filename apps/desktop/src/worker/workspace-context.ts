@@ -18,7 +18,15 @@ export function environmentProjection(hosts: RuntimeHost[], access?: HostEnviron
     // Readiness is an operator-facing fact (SSH/metadata/exec channel); the model
     // context stays lean and never treats "connected" as permission to run anything.
     const { version: _version, reason: _reason, readiness: _readiness, ...publicSnapshot } = snapshot;
-    return { ...publicSnapshot, freshness: fresh ? 'recent-observation' : 'unknown-or-stale' };
+    // The durable capability archive backs planning when no live observation
+    // exists. It may be outdated and never substitutes for a fresh fact or an
+    // execution authorization; the live projection always wins when present.
+    const archive = host.archivedCapability;
+    const archivedProfile = !publicSnapshot.data && archive && archive.loginAs === host.username
+      && Number.isSafeInteger(archive.observedAt) && archive.observedAt > 0 && archive.observedAt <= now
+      ? { observedAt: archive.observedAt, data: archive.data } : undefined;
+    return { ...publicSnapshot, freshness: fresh ? 'recent-observation' : 'unknown-or-stale',
+      ...(archivedProfile ? { archivedProfile } : {}) };
   });
 }
 

@@ -77,7 +77,7 @@ export interface RawTerminal {
   onCwd?(listener: (directory: string) => void): void;
   onCommand?(listener: (event: { phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }) => void): void;
   /** Separate process/control channel; command text is never rewritten as terminal input. */
-  execute?(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean }): Promise<void>;
+  execute?(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' }): Promise<void>;
   onExecutionFailure?(listener: (failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege'>) => void): void;
   onExit?(listener: (exitCode: number | undefined) => void): void;
   /** Prompt/command echo for the terminal only, separate from captured command output. */

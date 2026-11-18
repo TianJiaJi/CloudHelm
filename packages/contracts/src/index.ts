@@ -206,6 +206,8 @@ export interface OperationView {
   completedAt?: number;
   /** Directory captured with the full command fingerprint, never inferred from a display preview. */
   commandSource?: { version: 1; cwd: string };
+  /** Reviewed backend transport; missing historical records remain unknown. */
+  executionChannel?: 'native-exec';
   serviceUnit?: string;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
@@ -346,9 +348,26 @@ export interface ModelProviderSettings {
   hasKey: boolean;
 }
 
+export interface HostCapabilityProfile {
+  version: 1;
+  hostId: string;
+  /** Must match the trusted host key before main persists a worker observation. */
+  hostFingerprint: string;
+  loginAs: string;
+  connectionId: string;
+  observedAt: number;
+  data: {
+    os: string | null; distribution: string | null; version: string | null;
+    architecture: string | null; architectureFamily: string | null; kernel: string | null;
+    username: string | null; uid: number | null; loginDirectory: string | null;
+    path: string | null; toolPresence: Record<string, boolean>; source: 'python' | 'shell';
+  };
+}
+
 export type AppEvent =
   | { type: 'agent-lifecycle'; taskId: string; value: import('./agent-lifecycle.js').AgentLifecycleObservation }
   | { type: 'terminal-cwd'; terminalId: string; directory: string; updatedAt: number }
+  | { type: 'host-capability-observed'; value: HostCapabilityProfile }
   | { type: 'terminal-command'; terminalId: string; generation: number; phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }
   | { type: 'message-preparation'; requestId: string; referenceId?: string; status: 'checking' | 'compressing' | 'ready'; context?: ContextUsageView; summaryRequests?: { used: number; limit: 32 } }
   | { type: 'reasoning-progress'; taskId: string; value: ReasoningProgress | null }

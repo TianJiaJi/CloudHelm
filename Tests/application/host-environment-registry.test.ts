@@ -4,7 +4,7 @@ import type { HostEnvironmentData } from '@cloudhelm/core';
 const data: HostEnvironmentData = { os: 'Linux', distribution: 'debian', version: '12', architecture: 'aarch64',
   architectureFamily: 'aarch64', kernel: '6.1',
   username: 'fixture', uid: 1000, loginDirectory: '/home/fixture',
-  path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: { python3: true }, source: 'python' };
+  path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: { python3: true }, source: 'shell' };
 it('does not probe or connect for snapshots, disconnected hosts or recovery', async () => {
   const read = vi.fn(async () => data);
   const registry = new HostEnvironmentRegistry({ connectionId: () => null, read });
@@ -60,18 +60,20 @@ it('reports SSH, metadata and exec-channel readiness as separate facts', async (
     .toEqual({ ssh: 'connected', metadata: 'unknown', execution: 'unknown' });
   expect((await registry.refresh('host', 'fixture')).readiness)
     .toEqual({ ssh: 'connected', metadata: 'ready', execution: 'ready' });
+  // The native shell probe is the one metadata carrier and observes the full
+  // fact set: a completed read is ready, never degraded.
   const shell = new HostEnvironmentRegistry({ connectionId: () => 'worker:1', read: async () => ({ ...data, source: 'shell' }) }, () => 31);
   expect((await shell.refresh('host', 'fixture')).readiness)
-    .toEqual({ ssh: 'connected', metadata: 'degraded', execution: 'ready' });
+    .toEqual({ ssh: 'connected', metadata: 'ready', execution: 'ready' });
   expect(new HostEnvironmentRegistry({ connectionId: () => null, read }).snapshot('host', 'fixture').readiness)
     .toEqual({ ssh: 'disconnected', metadata: 'unknown', execution: 'unknown' });
 });
 
 it('keeps a bounded cause instead of one undifferentiated probe failure', async () => {
   const registry = new HostEnvironmentRegistry({ connectionId: () => 'worker:1',
-    read: async () => { throw Object.assign(new Error('Host metadata unavailable'), { reason: 'python-missing' }); } }, () => 40);
+    read: async () => { throw Object.assign(new Error('Host metadata unavailable'), { reason: 'unsupported' }); } }, () => 40);
   const observation = await registry.refresh('host', 'fixture');
-  expect(observation).toMatchObject({ status: 'unknown', reason: 'python-missing' });
+  expect(observation).toMatchObject({ status: 'unknown', reason: 'unsupported' });
   expect(JSON.stringify(observation)).not.toContain('Host metadata unavailable');
   const unrelated = new HostEnvironmentRegistry({ connectionId: () => 'worker:1',
     read: async () => { throw Object.assign(new Error('private-detail'), { reason: 'not-a-real-reason' }); } }, () => 41);

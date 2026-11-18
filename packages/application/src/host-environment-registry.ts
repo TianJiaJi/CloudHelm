@@ -85,18 +85,19 @@ export class HostEnvironmentRegistry implements HostEnvironmentAccess {
   }
 }
 
-/** Shell observations are degraded on purpose, not guessed; a completed exec channel
- * is real evidence that one command channel opened, which is weaker than "the Agent
- * execution path is authorized" and is never treated as an approval. */
+/** The native shell probe is the metadata carrier and observes the full fact
+ * set, so a completed read is ready rather than degraded. A completed exec
+ * channel is real evidence that one command channel opened, which is weaker
+ * than "the Agent execution path is authorized" and is never an approval. */
 export function readinessOf(connectionId: string | null, data?: HostEnvironmentObservation['data']): HostEnvironmentObservation['readiness'] {
   return {
     ssh: connectionId ? 'connected' : 'disconnected',
-    metadata: !data ? 'unknown' : data.source === 'python' ? 'ready' : 'degraded',
+    metadata: data ? 'ready' : 'unknown',
     execution: data ? 'ready' : 'unknown'
   };
 }
 
-const FAILURE_REASONS = new Set(['python-missing', 'timeout', 'unsupported', 'unavailable', 'invalid', 'too-large', 'cancelled']);
+const FAILURE_REASONS = new Set(['timeout', 'unsupported', 'unavailable', 'invalid', 'too-large', 'cancelled']);
 
 function failureReason(error: unknown): NonNullable<HostEnvironmentObservation['reason']> {
   const reason = (error as { reason?: unknown } | null)?.reason;

@@ -16,9 +16,9 @@ export interface HostEnvironmentData {
   /** Executable presence under `path` for the probed identity. Presence is not
    * run-readiness: docker present does not mean the daemon is usable. */
   toolPresence: Record<string, boolean>;
-  /** Which bootstrap produced these facts. A shell fallback is real evidence,
-   * not a guess: it simply observes fewer fields than the Python probe. */
-  source: 'python' | 'shell';
+  /** The native shell carrier is the only probe source. Legacy durable archives
+   * (contracts) may still record `'python'` from pre-migration observations. */
+  source: 'shell';
 }
 
 const ARCHITECTURE_FAMILIES = new Map<string, string>([
@@ -40,7 +40,7 @@ export function architectureFamilyOf(raw: string | null): string | null {
 /** Why basic facts are unavailable. Distinct causes produce distinct decisions;
  * a single "unavailable" hides whether to retry, degrade, or never retry. */
 export type HostProbeFailure =
-  | 'python-missing' | 'timeout' | 'unsupported' | 'unavailable' | 'invalid' | 'too-large' | 'cancelled';
+  | 'timeout' | 'unsupported' | 'unavailable' | 'invalid' | 'too-large' | 'cancelled';
 
 export interface HostEnvironmentObservation {
   version: 1; hostId: string; loginAs: string; connectionId: string | null;

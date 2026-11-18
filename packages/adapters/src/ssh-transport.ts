@@ -2,7 +2,8 @@ import { openSshControlPipe } from './ssh-control-pipe.js';
 import { withSftpSession } from './ssh-sftp-session.js';
 import { readBoundedSftpFile } from './sftp-read.js';
 import { runFixedSshCommand } from './ssh-fixed-exec.js';
-import { readHostEnvironment } from './host-environment-probe.js';
+import { runNativeSshExec, type NativeExecOutcome } from './native-ssh-exec.js';
+import { probeHostEnvironment } from './host-environment-probe.js';
 import { onDemandAuthHandler, type SshLoginChallenge } from './ssh-authentication.js';
 export { SshAuthenticationError } from './ssh-authentication.js';
 export type { SshLoginPrompt, SshLoginChallenge } from './ssh-authentication.js';
@@ -207,30 +208,11 @@ export class SshTransport {
   async readEnvironment(hostId: string, loginAs: string, signal?: AbortSignal) {
     const client = this.connections.get(hostId), generation = this.connectionGeneration(hostId);
     if (!client || this.identities.get(hostId) !== loginAs) throw new Error('Host metadata identity unavailable');
-    const data = await readHostEnvironment(client, signal);
+    const data = await probeHostEnvironment(client, signal);
     if (this.connections.get(hostId) !== client || this.connectionGeneration(hostId) !== generation)
       throw new Error('Host metadata connection changed');
     return data;
   }
-  private readonly commandPreflights = new Map<string, { generation: number; promise: Promise<void> }>();
-
-  private async checkCommandEnvironment(hostId: string): Promise<void> {
-    const generation = this.connectionGeneration(hostId);
-    const previous = this.commandPreflights.get(hostId);
-    if (previous?.generation === generation) return previous.promise;
-    const promise = this.execFixed(hostId, `python3 -I -c 'import pty, fcntl, termios, socket, subprocess, shutil'`).then((result) => {
-      if (result.exitCode !== 0) {
-        const detail = redactOutput(result.output).trim().slice(-300);
-        throw new Error(`远端环境检查未通过（exit ${result.exitCode}）：需要可用的 POSIX Python 3${detail ? `；远端输出：${detail}` : ''}`);
-      }
-    }).catch((error: unknown) => {
-      if (this.commandPreflights.get(hostId)?.promise === promise) this.commandPreflights.delete(hostId);
-      throw error;
-    });
-    this.commandPreflights.set(hostId, { generation, promise });
-    return promise;
-  }
-
   connectionGeneration(hostId: string): number { return this.generations.get(hostId) ?? 0; }
 
   async execFixed(hostId: string, command: string): Promise<{ exitCode: number; output: string }> {
@@ -238,6 +220,19 @@ export class SshTransport {
     if (!client) throw new Error('Host is not connected');
     const generation = this.connectionGeneration(hostId);
     return runFixedSshCommand(client, command, () => this.connections.get(hostId) === client && this.connectionGeneration(hostId) === generation);
+  }
+
+  /** Native exec primitive; never authorizes itself or retries an unknown dispatch. */
+  async runNativeExec(hostId: string, input: { command: string; cwd: string; envPath: string; shellPath: string },
+    authorized: () => boolean, hooks: { stdout(data: Buffer): void; stderr(data: Buffer): void }, signal?: AbortSignal): Promise<NativeExecOutcome> {
+    const client = this.connections.get(hostId);
+    if (!client) return { state: 'not-dispatched', reason: 'authorization-expired' };
+    const generation = this.connectionGeneration(hostId);
+    return runNativeSshExec(client, input, () => {
+      try { return authorized() && this.connections.get(hostId) === client
+        && this.connectionGeneration(hostId) === generation; }
+      catch { return false; }
+    }, hooks, signal);
   }
 
   async openPipe(hostId: string, command: string): Promise<ClientChannel> {
@@ -249,8 +244,6 @@ export class SshTransport {
 
   /** Installs only the fixed process transport, never model-authored scripts or secrets. */
   async prepareCommandProgram(hostId: string, source: string, assertAuthorized: () => void): Promise<string> {
-    assertAuthorized();
-    await this.checkCommandEnvironment(hostId);
     assertAuthorized();
     const result = await this.execFixed(hostId, 'command -v python3 && mktemp -d /tmp/cloudhelm-run.XXXXXXXX');
     const lines = result.output.trim().split(/\r?\n/u);

@@ -422,8 +422,14 @@ export class WorkerServer {
         jump ? { host: jump as SshHost, secret: runtimeSshCredentials(jump) } : undefined,
         (prompt) => this.requestLoginInput(connectionId, prompt.hostId === jump?.id ? jump : host, prompt, controller.signal), controller.signal, { onDemandAuthentication: true });
       controller.signal.throwIfAborted();
-      await this.environment.refresh(host.id, host.username, controller.signal);
+      const observation = await this.environment.refresh(host.id, host.username, controller.signal);
       controller.signal.throwIfAborted();
+      if (host.fingerprint && observation.status === 'observed' && observation.data
+        && observation.connectionId && observation.observedAt !== null) this.post({ event: {
+        type: 'host-capability-observed', value: { version: 1, hostId: host.id, hostFingerprint: host.fingerprint,
+          loginAs: host.username, connectionId: observation.connectionId,
+          observedAt: observation.observedAt, data: observation.data }
+      } });
       this.post({ event: { type: 'host-status', hostId: host.id, status: 'connected' } });
     } catch (error) {
       this.post({ event: { type: 'host-status', hostId: host.id, status: controller.signal.aborted ? 'disconnected' : error instanceof HostKeyError ? 'changed-key' : 'error' } });

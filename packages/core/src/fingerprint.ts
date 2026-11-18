@@ -22,6 +22,7 @@ export function operationFingerprint(operation: ProposedOperation): string {
     privilege: operation.kind === 'command' || operation.kind === 'write-file' || operation.kind === 'inspect-file'
       || operation.kind === 'list-recovery' || operation.kind === 'cleanup-recovery' ? operation.privilege : undefined,
     executionMode: operation.kind === 'command' ? operation.executionMode : undefined,
+    executionChannel: operation.kind === 'command' ? operation.executionChannel : undefined,
     processControl: operation.kind === 'command' ? operation.processControl : undefined,
     payload: operation.kind === 'command' ? [operation.command, operation.probe]
       : operation.kind === 'write-file' ? [operation.path, operation.content, operation.expectedSha256, operation.createOnly, operation.fileEdit]
@@ -36,7 +37,7 @@ export function operationFingerprint(operation: ProposedOperation): string {
 
 /** Replay identity excludes transient approval leases; it never authorizes execution. */
 export function operationIntentKey(operation: ProposedOperation): string {
-  return operationFingerprint({ ...operation, ...(operation.kind === 'command' ? { privilege: undefined, executionMode: undefined } : {}),
+  return operationFingerprint({ ...operation, ...(operation.kind === 'command' ? { privilege: undefined, executionMode: undefined, executionChannel: undefined } : {}),
     ...(operation.kind === 'write-file' && operation.fileEdit ? { fileEdit: { ...operation.fileEdit, transactionId: '00000000-0000-0000-0000-000000000000' } } : {}), scope: { ...operation.scope,
     taskId: '', terminalId: '', terminalGeneration: 0, policyRevision: 0, conversationRevision: 0, reviewerRevision: 0,
     connectionGeneration: undefined, sessionId: undefined, allowedWorkingRoots: [], protectedPaths: [],

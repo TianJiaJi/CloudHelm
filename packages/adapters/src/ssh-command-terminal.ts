@@ -1,10 +1,10 @@
 import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.js';
 import { StringDecoder } from 'node:string_decoder';
-import { CommandNotStartedError, isSudo, redactOutput, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
+import { CommandNotStartedError, isSudo, nativeCommandEligible, redactOutput, supportsSudo, type OperationResult, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
-export type CommandTransport = Pick<SshTransport, 'connectionGeneration' | 'prepareCommandProgram' | 'removeCommandProgram' | 'openPipe' | 'shell'> & Partial<Pick<SshTransport, 'integratedShell'>>;
+export type CommandTransport = Pick<SshTransport, 'connectionGeneration' | 'prepareCommandProgram' | 'removeCommandProgram' | 'openPipe' | 'shell'> & Partial<Pick<SshTransport, 'integratedShell' | 'runNativeExec' | 'execFixed'>>;
 import { ProcessInterrupt } from './ssh-process-signal.js';
 import { remoteCommandProgram } from './remote-command-program.js';
 
@@ -35,6 +35,7 @@ export class SshCommandTerminal implements RawTerminal {
   private started = (_event: { pid: number }) => {};
   private interrupter?: ProcessInterrupt;
   private startupTimer?: ReturnType<typeof setTimeout>;
+  private nativeAbort?: AbortController;
   private readonly generation: number;
   private readonly analyzer = new BashAnalyzer();
 
@@ -50,7 +51,7 @@ export class SshCommandTerminal implements RawTerminal {
   onClose(listener: () => void): void { this.closedListener = listener; }
   onAuthentication(listener: (challenge: { id: string; prompt?: string }) => void): void { this.authentication = listener; }
 
-  async execute(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean }): Promise<void> {
+  async execute(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' }): Promise<void> {
     if (this.busy || this.human || this.humanOpening) throw new Error('The command terminal is busy');
     this.busy = true;
     const deadline = new Promise<never>((_resolve, reject) => this.armStartup(reject));
@@ -62,7 +63,8 @@ export class SshCommandTerminal implements RawTerminal {
     }
   }
 
-  private async executeCommand(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean }): Promise<void> {
+  private async executeCommand(command: string, cwd: string, isAuthorized: () => boolean,
+    options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' }): Promise<void> {
     const current = () => {
       if (this.closed || this.generation !== this.ssh.connectionGeneration(this.hostId) || !isAuthorized()) {
         throw new Error('Command authorization expired');
@@ -71,6 +73,14 @@ export class SshCommandTerminal implements RawTerminal {
     current();
     const analysis = await this.analyzer.analyze(command);
     if (analysis.hasError) throw new Error('Command parsing failed');
+    if (options?.executionChannel === 'native-exec') {
+      if (!nativeCommandEligible({ id: '', kind: 'command', command, scope: { taskId: '', hostId: this.hostId,
+        cwd, runAs: '', terminalId: '', terminalGeneration: 0, policyRevision: 0,
+        allowedWorkingRoots: [], protectedPaths: [], goal: '' } }, analysis) || options.sudoAuthorization)
+        throw new CommandNotStartedError('Native exec review no longer matches command; nothing sent');
+      await this.executeNative(command, cwd, current);
+      return;
+    }
     const sudo = supportsSudo(analysis);
     if (analysis.calls.some((call) => /(?:^|\/)(?:sudo|su)$/u.test(call.name)) && !sudo) {
       throw new Error('This authentication form requires manual takeover; no command was sent');
@@ -128,6 +138,43 @@ export class SshCommandTerminal implements RawTerminal {
     };
     try { await next(0, 0); }
     catch (error) { this.busy = false; throw error; }
+  }
+
+  private async executeNative(command: string, cwd: string, current: () => void): Promise<void> {
+    if (!this.ssh.execFixed || !this.ssh.runNativeExec) {
+      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.exited(undefined); this.busy = false; return;
+    }
+    current();
+    // Fixed read-only tool check before dispatch. No process.py, Python, or SFTP.
+    const tools = await this.ssh.execFixed(this.hostId,
+      'test -x /usr/bin/env && test -x /bin/sh && /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c "exit 0"');
+    if (tools.exitCode !== 0) {
+      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.data('原生 SSH 命令未发送：主机缺少 /usr/bin/env 或 /bin/sh。');
+      this.exited(undefined); this.busy = false; return;
+    }
+    current(); this.clearStartup();
+    const controller = new AbortController(); this.nativeAbort = controller;
+    const stdout = new StringDecoder('utf8'), stderr = new StringDecoder('utf8');
+    const emit = (decoder: StringDecoder, chunk: Buffer) => {
+      const text = decoder.write(chunk);
+      if (text) { this.lineStart = text.endsWith('\n'); this.data(text); }
+    };
+    try {
+      const outcome = await this.ssh.runNativeExec(this.hostId,
+        { command, cwd, envPath: '/usr/bin/env', shellPath: '/bin/sh' },
+        () => { current(); return true; },
+        { stdout: (data) => emit(stdout, data), stderr: (data) => emit(stderr, data) }, controller.signal);
+      for (const decoder of [stdout, stderr]) { const tail = decoder.end(); if (tail) this.data(tail); }
+      if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      if (outcome.state === 'signaled') this.data(`远端命令收到 ${outcome.signal}；未观察到可确认的退出码。`);
+      if (outcome.state === 'unknown') this.data('原生 SSH 命令结果未知；请核验原操作，不要直接重放。');
+      this.exited(outcome.state === 'exited' ? outcome.exitCode : undefined);
+    } finally {
+      this.nativeAbort = undefined; this.busy = false;
+      if (this.humanOwned && !this.closed) void this.openHuman().catch(() => this.close());
+    }
   }
 
   private async startProcess(argv: string[], cwd: string, sudo: boolean, command: string | undefined,
@@ -239,6 +286,7 @@ export class SshCommandTerminal implements RawTerminal {
   }
 
   write(data: string): void {
+    if (this.nativeAbort) { if (data === '\u0003') this.nativeAbort.abort(); return; }
     if (this.active) this.active.write(`${JSON.stringify({ type: 'input', data: Buffer.from(data).toString('base64') })}\n`);
     else if (this.human) this.human.write(data);
     else if (this.humanOwned && !this.closed) {
@@ -296,6 +344,7 @@ export class SshCommandTerminal implements RawTerminal {
     this.clearStartup();
     if (this.closed) return;
     this.closed = true;
+    this.nativeAbort?.abort();
     this.interrupter?.close(); this.interrupter = undefined;
     this.active?.end(); this.active?.close(); this.human?.end();
     this.closedListener();

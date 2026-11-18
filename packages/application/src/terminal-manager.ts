@@ -238,7 +238,8 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
         }
       }, { once: true });
       if (!terminal.channel.onDisplay) this.events.data(terminal.id, `$ ${operation.command}\r\n`);
-      void terminal.channel.execute!(operation.command, operation.scope.cwd, current, { sudoAuthorization: operation.privilege === 'root' }).catch((error: unknown) => {
+      void terminal.channel.execute!(operation.command, operation.scope.cwd, current,
+        { sudoAuthorization: operation.privilege === 'root', executionChannel: operation.executionChannel }).catch((error: unknown) => {
         this.receive(terminal, error instanceof Error ? error.message : 'Command transport failed');
         if (error instanceof CommandNotStartedError && terminal.pending === pending) {
           pending.failure = { failureKind: 'unsupported', effects: 'none' };
@@ -262,8 +263,10 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     this.events.command?.(terminal.id, terminal.generation, { phase: 'end', exitCode });
     pending.capture.finish();
     pending.completeRemote(exitCode === undefined ? 'unknown' : 'exited');
+    const notDispatched = exitCode === undefined && pending.failure?.failureKind === 'not-dispatched'
+      && pending.failure.effects === 'none';
     const result: OperationResult = { operationId: pending.operationId,
-      status: exitCode === undefined ? 'unknown' : exitCode === 0 ? 'succeeded' : 'failed',
+      status: notDispatched ? 'failed' : exitCode === undefined ? 'unknown' : exitCode === 0 ? 'succeeded' : 'failed',
       failureKind: exitCode === undefined ? 'unknown' : exitCode && /permission denied|operation not permitted/iu.test(pending.capture.text) ? 'permission-denied' : undefined,
       effects: exitCode === 0 || pending.readOnly ? undefined : 'possible', ...pending.failure,
       exitCode, ...pending.capture.snapshot(), logRef: terminal.id };

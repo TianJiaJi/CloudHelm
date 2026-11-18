@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { executeReview } from './review-execution.js';
 import {
-  ApprovalInterruptedError, ReviewInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, operationFingerprint, scriptFilePath, redactOutput,
+  ApprovalInterruptedError, ReviewInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, nativeCommandEligible, operationFingerprint, scriptFilePath, redactOutput,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
   type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
   type SafetyDecision, type SafetySettings, type ScriptInspector, type TerminalLease
@@ -64,6 +64,13 @@ export class SafetyGate {
           await this.deps.audit.decided(operation.id, safety, fingerprint);
           return { decision: safety };
         }
+      }
+      if (operation.kind === 'command' && operation.executionChannel === 'native-exec'
+        && (!analysis || !nativeCommandEligible(operation, analysis))) {
+        const decision = { verdict: 'error', ruleId: 'invalid-execution-channel',
+          reason: 'Backend execution channel no longer matches analyzed command; nothing sent' } as const;
+        await this.deps.audit.decided(operation.id, decision, fingerprint);
+        return { decision };
       }
       const impact = analyzeOperationImpact(operation, analysis);
       const readOnly = impact.mutation === 'none';

@@ -240,15 +240,16 @@ it.each([0o600, 0o4764])('does not infer absent ACL/xattr from ordinary mode/own
   } finally { ssh.close(); }
 });
 
-it('caches only successful Python preflight per SSH connection generation', async () => {
+it('validates the fixed placement program output before installing the command transport', async () => {
   const ssh = new SshTransport(); await ssh.connect(host, { password: 'synthetic-test' });
   sftpFixture(false, () => {});
-  const fixed = vi.spyOn(ssh, 'execFixed').mockImplementation(async (_host, command) => ({ exitCode: 0,
-    output: command.startsWith('python3') ? '' : '/usr/bin/python3\n/tmp/cloudhelm-run.fixture\n' }));
-  await ssh.prepareCommandProgram('host', 'fixed', () => {});
-  await ssh.prepareCommandProgram('host', 'fixed', () => {});
-  expect(fixed.mock.calls.filter(([, command]) => command.startsWith('python3'))).toHaveLength(1);
-  ssh.disconnect('host'); await ssh.connect(host, { password: 'synthetic-test' });
-  await ssh.prepareCommandProgram('host', 'fixed', () => {});
-  expect(fixed.mock.calls.filter(([, command]) => command.startsWith('python3'))).toHaveLength(2);
+  const fixed = vi.spyOn(ssh, 'execFixed');
+  expect(fixed).not.toHaveBeenCalled();
+  fixed.mockResolvedValueOnce({ exitCode: 0, output: 'python3\n/tmp/cloudhelm-run.ab12cd34\n' });
+  await expect(ssh.prepareCommandProgram('host', 'fixed', () => {})).rejects.toThrow('python3 且 /tmp 可写');
+  fixed.mockResolvedValueOnce({ exitCode: 0, output: '/usr/bin/python3\n/tmp/not-cloudhelm\n' });
+  await expect(ssh.prepareCommandProgram('host', 'fixed', () => {})).rejects.toThrow('python3 且 /tmp 可写');
+  fixed.mockResolvedValueOnce({ exitCode: 0, output: '/usr/bin/python3\n/tmp/cloudhelm-run.ab12cd34\n' });
+  await expect(ssh.prepareCommandProgram('host', 'fixed', () => {})).resolves.toBe('/tmp/cloudhelm-run.ab12cd34/process.py');
+  expect(fixed).toHaveBeenNthCalledWith(1, 'host', 'command -v python3 && mktemp -d /tmp/cloudhelm-run.XXXXXXXX');
 });

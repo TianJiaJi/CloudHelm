@@ -12,6 +12,13 @@ it('rejects a forged internal preflight marker on a non-command or unknown kind'
   expect(() => validateOperationView({ ...probe, internal: 'other' as never })).toThrow('Invalid internal preflight marker');
   expect(() => validateOperationView({ ...operation(), internal: 'identity-probe' })).toThrow('Invalid internal preflight marker');
 });
+it('persists only a command-bound native route, never a forged file or unknown transport', () => {
+  const command: OperationView = { id: 'native', taskId: 'task', hostId: 'host', kind: 'command',
+    preview: 'id -u', status: 'proposed', createdAt: 1, executionChannel: 'native-exec' };
+  expect(() => validateOperationView(command)).not.toThrow();
+  expect(() => validateOperationView({ ...command, kind: 'write-file' })).toThrow('Invalid execution channel projection');
+  expect(() => validateOperationView({ ...command, executionChannel: 'legacy' as never })).toThrow('Invalid execution channel projection');
+});
 it('accepts only a closed recovery receipt bound to the persisted file-write observation', () => {
   expect(() => validateOperationView(operation())).not.toThrow();
   for (const change of [{ path: '/different' }, { afterSha256: 'e'.repeat(64) }, { path: '/srv/config\n' }, { password: 'synthetic' }]) {

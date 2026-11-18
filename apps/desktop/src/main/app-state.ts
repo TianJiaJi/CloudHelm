@@ -2,6 +2,7 @@ import { AgentActivityStore } from './agent-activity-store.js';
 import { OperationImpactSchema } from '@cloudhelm/contracts';
 import { validateReadAudit } from './read-audit-validation.js';
 import { validateOperationView } from './operation-view-validation.js';
+import { attachArchivedCapability, persistHostCapability } from './host-capability-record.js';
 import { ConversationInputStore } from './conversation-input-store.js';
 import { ConversationThinking, taskWithModel } from './conversation-thinking.js';
 import { recoverOperation } from './operation-recovery.js';
@@ -24,11 +25,9 @@ import { verificationReason } from '../worker/verification-facts.js';
 import { createBudgetRequestHandler } from './request-budget-broker.js';
 import { TaskIntentStateSchema, isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
-
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number; credentialRevision?: string }
 interface StoredShortcuts { bindings: Record<string, string>; enabled: boolean }
 interface StoredReviewer { selection: ReviewSelection; revision: number }
-
 export class AppState {
   readonly requestBudgets: RequestBudgetAuthority;
   readonly thinkingPreferences: ConversationThinking;
@@ -284,10 +283,9 @@ export class AppState {
 
   runtimeHost(id: string): RuntimeHost {
     const host = this.getHost(id);
-    const riskDomainId = resolveHostRiskDomain(host, (id) => this.hosts.get(id));
     const credentials = readHostCredentials(host, (key) => this.secret(key));
-    return { ...host, riskDomainId,
-      credentials, secret: host.auth === 'password' ? credentials.password : host.auth === 'private-key' ? credentials.passphrase : undefined };
+    return attachArchivedCapability({ ...host, riskDomainId: resolveHostRiskDomain(host, (id) => this.hosts.get(id)), credentials,
+      secret: host.auth === 'password' ? credentials.password : host.auth === 'private-key' ? credentials.passphrase : undefined }, this.store);
   }
 
   saveSecret(id: string, value: string): void {
@@ -622,6 +620,7 @@ export class AppState {
       case 'input-open': this.inputs.set(event.value.id, event.value); break;
       case 'input-close': this.inputs.delete(event.id); break;
       case 'host-status': this.updateHost(event.hostId, { status: event.status }); break;
+      case 'host-capability-observed': persistHostCapability(this.store, this.hosts.get(event.value.hostId), event.value); break;
       case 'task-status': {
         const task = this.tasks.get(event.taskId);
         if (task) {

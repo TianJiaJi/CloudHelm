@@ -1,4 +1,5 @@
-import { analyzeOperationImpact, isSudoStatusProbe, operationIntentKey, sudoTarget, type CommandAnalyzer, type ProposedOperation } from '@cloudhelm/core';
+import { analyzeOperationImpact, HOST_ENVIRONMENT_MAX_AGE_MS, isSudoStatusProbe, nativeCommandEligible, operationIntentKey, sudoTarget,
+  type CommandAnalyzer, type HostEnvironmentAccess, type ProposedOperation } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
@@ -11,12 +12,18 @@ type Feedback = Awaited<ReturnType<RemoteToolDependencies['runOperation']>>;
 export async function taskOperationPreflight(operation: ProposedOperation, deps: {
   privileged?: PrivilegedTaskAccess;
   analyzer: CommandAnalyzer;
+  environment?: HostEnvironmentAccess;
   operations(): readonly OperationView[];
   replayProtected: ReadonlySet<string>;
   /** Known dispatch blockers (unresolved host outcomes) discovered before review. */
   hostBlocked?(hostId: string): string | undefined;
 }, manualReview = false): Promise<{ operation: ProposedOperation } | Feedback> {
     if (operation.kind !== 'command' || !operation.processControl) operation = await deps.privileged?.prepare?.(operation) ?? operation;
+    // Transport selection is backend-owned; never accept a model/tool-supplied route.
+    if (operation.kind === 'command') {
+      const { executionChannel: _untrusted, ...rest } = operation;
+      operation = rest;
+    }
     if (operation.kind === 'command' && !operation.scope.sessionId) {
       // Identity is derived before fingerprinting, never by the renderer or after approval.
       const analysis = await deps.analyzer.analyze(operation.command).catch(() => undefined);
@@ -26,6 +33,8 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
       }
     }
     const analysis = operation.kind === 'command' ? await deps.analyzer.analyze(operation.command).catch(() => undefined) : undefined;
+    if (analysis && nativeCommandEligible(operation, analysis) && operation.kind === 'command')
+      operation = { ...operation, executionChannel: 'native-exec' };
     // Replay protection answers one question: could repeating this request re-apply
     // effects that were already dispatched? Effect-free queries use exactly the safety
     // gate's own classification, so a repeated observation (ss, ip, ping, literal reads)
@@ -51,6 +60,21 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
       if (blocker) return blockedOperationFeedback(operation.id, 'unresolved-prior-operation',
         `Not executed; effects: none. ${blocker} Read-only inspection may continue; a new write needs its own review after the original outcome is verified.`);
     }
+    // A current connected-host observation can rule out an explicit PATH Python command.
+    // Missing/stale facts are not permission grants or evidence that Python is present.
+    const observed = deps.environment?.snapshot(operation.scope.hostId, operation.scope.loginAs ?? operation.scope.runAs);
+    const pythonAbsent = observed?.status === 'observed' && observed.connectionId
+      && observed.observedAt !== null && !observed.presenceStale
+      && Date.now() >= observed.observedAt && Date.now() - observed.observedAt <= HOST_ENVIRONMENT_MAX_AGE_MS
+      && observed.data?.toolPresence.python3 === false;
+    if (pythonAbsent && operation.kind === 'command' && analysis
+      && analysis.calls.some((call) => call.name === 'python3' && !call.dynamic))
+      return blockedOperationFeedback(operation.id, 'capability-blocked',
+        'No command sent; effects: none. Current host facts report no python3 on the fixed execution PATH. Use an appropriate Shell command or prepare Python through an independently reviewed and authorized operation; do not retry the same unsupported command.');
+    if (pythonAbsent && !operation.scope.sessionId && (operation.kind === 'command' && operation.executionMode === 'background'
+      || ['write-file', 'inspect-file', 'list-recovery', 'cleanup-recovery'].includes(operation.kind)))
+      return blockedOperationFeedback(operation.id, 'capability-blocked',
+        'No operation sent; effects: none. This supervised background or strict file transaction still needs the legacy remote Python driver. The plain native SSH path cannot safely replace its process or metadata guarantees yet; do not bypass with ordinary Shell writes or stops.');
     // Refuse sudo capability probes before review: they deserve no approval card and no pause.
     if (analysis && isSudoStatusProbe(analysis)) return blockedOperationFeedback(operation.id, 'unsupported-probe',
       'No command sent; effects: none. sudo 状态/权限探测（sudo -n true、sudo -l、sudo -v 等）不被支持，也不能证明下一条 sudo 命令可用。请直接提交实际的有界 sudo 命令，私有认证通道会在需要时提示输入。');

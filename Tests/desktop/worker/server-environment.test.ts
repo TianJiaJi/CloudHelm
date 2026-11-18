@@ -7,7 +7,7 @@ const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', 
   status: 'disconnected', defaultMode: 'ask', protectedPaths: [], policyRevision: 1 };
 const data: HostEnvironmentData = { os: 'Linux', distribution: 'debian', version: '12', kernel: '6', architecture: 'x86_64',
   architectureFamily: 'x86_64', uid: 1000, username: 'fixture', loginDirectory: '/home/fixture',
-  path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: {}, source: 'python' };
+  path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', toolPresence: {}, source: 'shell' };
 afterEach(() => vi.restoreAllMocks());
 it('collects login metadata after a successful explicit connection, never before authentication', async () => {
   let connected = false;
@@ -22,6 +22,16 @@ it('collects login metadata after a successful explicit connection, never before
   await server.dispatch({ method: 'connect', host });
   expect(read).toHaveBeenCalledOnce();
   expect(messages).toContainEqual({ event: { type: 'host-status', hostId: 'host', status: 'connected' } });
+});
+it('publishes a fingerprint-bound, successful capability observation for durable storage', async () => {
+  vi.spyOn(SshTransport.prototype, 'connect').mockResolvedValue();
+  vi.spyOn(SshTransport.prototype, 'connectionId').mockReturnValue('11111111-1111-4111-8111-111111111111:1');
+  vi.spyOn(SshTransport.prototype, 'readEnvironment').mockResolvedValue(data);
+  const messages: RuntimeMessage[] = [], server = new WorkerServer((event) => messages.push(event));
+  await server.dispatch({ method: 'connect', host: { ...host, fingerprint: 'SHA256:trusted-key' } });
+  expect(messages).toContainEqual({ event: { type: 'host-capability-observed', value: expect.objectContaining({
+    version: 1, hostId: 'host', hostFingerprint: 'SHA256:trusted-key', loginAs: 'fixture', data
+  }) } });
 });
 it('does not fail a valid SSH connection or publish private probe errors when metadata is unavailable', async () => {
   vi.spyOn(SshTransport.prototype, 'connect').mockResolvedValue();

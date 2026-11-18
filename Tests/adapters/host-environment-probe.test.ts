@@ -1,11 +1,12 @@
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { Client, ClientChannel } from 'ssh2';
 import { afterEach, expect, it, vi } from 'vitest';
-import { EXECUTION_PATH, HOST_ENVIRONMENT_PROBE, HOST_ENVIRONMENT_SHELL_PROBE, HostEnvironmentProbeError, parseHostEnvironment, probeHostEnvironment, readHostEnvironment } from '../../packages/adapters/src/host-environment-probe.js';
+import { EXECUTION_PATH, HOST_ENVIRONMENT_SHELL_PROBE, HostEnvironmentProbeError, parseShellHostEnvironment, probeHostEnvironment } from '../../packages/adapters/src/host-environment-probe.js';
 import { remoteCommandProgram } from '../../packages/adapters/src/remote-command-program.js';
 
-const metadata = { os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64', kernel: '6.1',
-  username: 'fixture', uid: 1000, directory: '/home/fixture', tools: { python3: true, docker: false } };
+const facts = ['os=Linux', 'architecture=x86_64', 'kernel=6.1', 'username=fixture', 'uid=1000',
+  'directory=/home/fixture', 'distribution=debian', 'version=12', 'tool.python3=1', 'tool.systemctl=0'].join('\n');
 function channel() {
   const stream = new EventEmitter() as EventEmitter & { stderr: EventEmitter; close: ReturnType<typeof vi.fn> };
   stream.stderr = new EventEmitter(); stream.close = vi.fn();
@@ -18,42 +19,50 @@ function fixture() {
   return { client, exec, deliver: (stream: ReturnType<typeof channel>) => callback(undefined, stream as unknown as ClientChannel) };
 }
 afterEach(() => { vi.useRealTimers(); });
-it('projects only bounded public fields, without arbitrary environment, cookies, tokens or error output', () => {
-  const facts = parseHostEnvironment(JSON.stringify({ ...metadata, secret: 'private-password', environment: { API_KEY: 'secret-key' },
-    tools: { ...metadata.tools, secretTool: true }, username: 'password=fixture-secret', kernel: 'bad\nvalue' }));
-  expect(facts).toMatchObject({ os: 'Linux', uid: 1000, username: null, kernel: null, toolPresence: metadata.tools,
-    architectureFamily: 'x86_64', path: EXECUTION_PATH });
-  expect(JSON.stringify(facts)).not.toMatch(/private-password|secret-key|secretTool|fixture-secret/u);
-  expect(parseHostEnvironment(JSON.stringify({ ...metadata, uid: -1, directory: 'relative' }))).toMatchObject({ uid: null, loginDirectory: null });
-  expect(() => parseHostEnvironment('x'.repeat(16385))).toThrow('limit');
+it('parses only the fixed shell vocabulary, dropping secrets, malformed lines and unknown keys', () => {
+  const parsed = parseShellHostEnvironment([facts, 'secret=private-password', 'API_KEY=secret-key', 'tool.unknown=1',
+    'username=password=fixture-secret', 'kernel=bad\u0001value', 'uid=not-a-number', 'directory=relative'].join('\n'));
+  expect(parsed).toMatchObject({ os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64',
+    architectureFamily: 'x86_64', kernel: null, username: null, uid: null, loginDirectory: null,
+    path: EXECUTION_PATH, toolPresence: { python3: true, systemctl: false }, source: 'shell' });
+  expect(JSON.stringify(parsed)).not.toMatch(/private-password|secret-key|fixture-secret|unknown/u);
+  expect(parseShellHostEnvironment('')).toMatchObject({ os: null, uid: null, toolPresence: {} });
+  expect(() => parseShellHostEnvironment('x'.repeat(16385))).toThrow('limit');
 });
 it('resolves tool presence against the same fixed PATH that command execution uses', () => {
   expect(EXECUTION_PATH).toBe('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
-  expect(HOST_ENVIRONMENT_PROBE).toContain('shutil.which(name, path=');
-  expect(HOST_ENVIRONMENT_PROBE).toContain(EXECUTION_PATH);
-  expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain('PATH=');
-  expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain(EXECUTION_PATH);
+  // The PATH literal is single-quoted inside the POSIX-escaped `sh -c '...'` wrapper.
+  expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain(`PATH='\\''${EXECUTION_PATH}'\\''`);
   expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain('command -v "$tool"');
   expect(remoteCommandProgram).toContain(`PATH='${EXECUTION_PATH}'`);
 });
-it('uses a fixed, isolated Python probe with no sudo, source or whole-environment access', () => {
-  expect(HOST_ENVIRONMENT_PROBE).toMatch(/^python3 -I -S -B -c /u);
-  expect(HOST_ENVIRONMENT_PROBE).not.toMatch(/sudo|\bsu\b|os\.environ|subprocess|source |XAUTHORITY|shadow/u);
-  expect(HOST_ENVIRONMENT_PROBE).toContain('O_NOFOLLOW');
-  expect(HOST_ENVIRONMENT_PROBE).toContain('O_NONBLOCK');
-  expect(HOST_ENVIRONMENT_PROBE).toContain('stat.S_ISREG');
+it('uses a fixed, isolated POSIX shell probe with no runtime, elevation, sourcing or environment enumeration', () => {
+  expect(HOST_ENVIRONMENT_SHELL_PROBE.startsWith("sh -c '")).toBe(true);
+  expect(HOST_ENVIRONMENT_SHELL_PROBE.endsWith("'")).toBe(true);
+  expect(HOST_ENVIRONMENT_SHELL_PROBE).not.toMatch(/sudo|\bsu\b|source |os\.environ|python3 -I|python3 -c|import |\.profile|\/etc\/shadow/u);
+  expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain('/etc/os-release');
+  expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain('/usr/lib/os-release');
+});
+(spawnSync('sh', ['-c', 'exit 0']).status === 0 ? it : it.skip)('runs the shell probe as an actual POSIX command', () => {
+  const result = spawnSync('sh', ['-c', HOST_ENVIRONMENT_SHELL_PROBE], { encoding: 'utf8', timeout: 5000 });
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain('os=');
+  expect(result.stdout).toContain('uid=');
+  expect(result.stdout).toContain('tool.python3=');
 });
 it('collects split UTF-8 only after a confirmed zero exit, ignoring stderr', async () => {
   const f = fixture(), stream = channel(), result = probeHostEnvironment(f.client);
-  expect(f.exec.mock.calls[0]?.[0]).toBe(HOST_ENVIRONMENT_PROBE);
+  expect(f.exec.mock.calls[0]?.[0]).toBe(HOST_ENVIRONMENT_SHELL_PROBE);
   f.deliver(stream);
-  const bytes = Buffer.from(JSON.stringify({ ...metadata, directory: '/home/测试' }));
-  for (const byte of bytes) stream.emit('data', Buffer.from([byte]));
+  const text = facts.replace('directory=/home/fixture', 'directory=/home/测试');
+  for (const byte of Buffer.from(text)) stream.emit('data', Buffer.from([byte]));
   stream.stderr.emit('data', Buffer.from('password=private-stderr'));
   stream.emit('exit', 0); stream.emit('close');
-  expect(await result).toMatchObject({ os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64',
+  const data = await result;
+  expect(data).toMatchObject({ os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64',
     architectureFamily: 'x86_64', kernel: '6.1', username: 'fixture', uid: 1000,
-    loginDirectory: '/home/测试', path: EXECUTION_PATH, toolPresence: { python3: true, docker: false } });
+    loginDirectory: '/home/测试', path: EXECUTION_PATH, toolPresence: { python3: true, systemctl: false }, source: 'shell' });
+  expect(JSON.stringify(data)).not.toContain('private-stderr');
 });
 it('starts the deadline before channel allocation and closes a late channel', async () => {
   vi.useFakeTimers();
@@ -79,56 +88,22 @@ it.each(['stdout', 'stderr'])('bounds total %s bytes and never publishes truncat
 it.each([undefined, 1])('requires a real zero exit, not merely a channel close (%s)', async (exit) => {
   const f = fixture(), stream = channel(), result = probeHostEnvironment(f.client);
   const failed = expect(result).rejects.toThrow('unavailable'); f.deliver(stream);
-  stream.emit('data', Buffer.from(JSON.stringify(metadata)));
+  stream.emit('data', Buffer.from(facts));
   if (exit !== undefined) stream.emit('exit', exit);
   stream.emit('close'); await failed;
+});
+it('classifies a missing shell carrier as a permanent limitation, not a retry hint', async () => {
+  const f = fixture(), stream = channel(), result = probeHostEnvironment(f.client);
+  f.deliver(stream);
+  stream.stderr.emit('data', Buffer.from('sh: not found'));
+  stream.emit('exit', 127); stream.emit('close');
+  const failure = await result.catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(HostEnvironmentProbeError);
+  expect(failure).toMatchObject({ reason: 'unsupported' });
+  expect((failure as Error).message).not.toContain('not found');
 });
 it('never starts an already cancelled observation', () => {
   const f = fixture(), controller = new AbortController(); controller.abort();
   expect(() => probeHostEnvironment(f.client, controller.signal)).toThrow();
   expect(f.exec).not.toHaveBeenCalled();
-});
-
-it('works without Python by degrading to a POSIX shell probe instead of failing', async () => {
-  const f = fixture();
-  const result = readHostEnvironment(f.client);
-  // First channel: the Python probe fails with "command not found" (127).
-  const python = channel(); f.deliver(python);
-  python.stderr.emit('data', Buffer.from('sh: python3: command not found'));
-  python.emit('exit', 127); python.emit('close');
-  // Second channel: shell facts, with only the fields the shell can observe.
-  await vi.waitFor(() => expect(f.exec).toHaveBeenCalledTimes(2), { timeout: 5000 });
-  expect(f.exec.mock.calls[1]?.[0]).toBe(HOST_ENVIRONMENT_SHELL_PROBE);
-  // No privileged or sourced bootstrap: the shell probe only observes.
-  expect(HOST_ENVIRONMENT_SHELL_PROBE).not.toMatch(/sudo|\bsu\b|source |os\.environ/u);
-  expect(HOST_ENVIRONMENT_SHELL_PROBE.startsWith("sh -c '")).toBe(true);
-  const shell = channel(); f.deliver(shell);
-  shell.emit('data', Buffer.from(['os=Linux', 'architecture=x86_64', 'kernel=6.1', 'username=fixture', 'uid=1000',
-    'directory=/home/fixture', 'distribution=debian', 'version=12', 'tool.python3=0', 'tool.systemctl=1'].join('\n')));
-  shell.emit('exit', 0); shell.emit('close');
-  expect(await result).toEqual({ os: 'Linux', distribution: 'debian', version: '12', architecture: 'x86_64',
-    architectureFamily: 'x86_64', kernel: '6.1',
-    username: 'fixture', uid: 1000, loginDirectory: '/home/fixture', path: EXECUTION_PATH,
-    // Only explicitly reported tools appear; python3=0 is reported as false, not omitted.
-    toolPresence: { python3: false, systemctl: true }, source: 'shell' });
-});
-
-it('reports why basic facts failed, never one undifferentiated reason', async () => {
-  const missing = fixture(), missingResult = readHostEnvironment(missing.client);
-  const first = channel(); missing.deliver(first); first.emit('exit', 127); first.emit('close');
-  await vi.waitFor(() => expect(missing.exec).toHaveBeenCalledTimes(2), { timeout: 5000 });
-  const second = channel(); missing.deliver(second); second.emit('exit', 1); second.emit('close');
-  const failure = await missingResult.catch((error: unknown) => error);
-  expect(failure).toBeInstanceOf(HostEnvironmentProbeError);
-  expect(failure).toMatchObject({ reason: 'unavailable' });
-  // Both causes are named without any server text.
-  expect((failure as Error).message).toContain('python python-missing');
-  expect((failure as Error).message).toContain('shell unavailable');
-});
-
-it('does not treat a cancelled observation as a reason to fall back', async () => {
-  const f = fixture(), controller = new AbortController(), result = readHostEnvironment(f.client, controller.signal);
-  const failed = expect(result).rejects.toMatchObject({ reason: 'cancelled' });
-  controller.abort(); await failed;
-  expect(f.exec).toHaveBeenCalledOnce();
 });
