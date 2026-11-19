@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { hasCodeExecution } from './command-code-execution.js';
 import { isSudo, sudoTarget, supportsSudo } from './sudo-plan.js';
+import { isSu } from './su-plan.js';
 import type { CommandAnalysis, ProposedOperation } from './model.js';
 
 /** Stage-one transport eligibility, not a safety verdict. Only a single,
@@ -36,4 +37,26 @@ export function nativePtySudoEligible(operation: ProposedOperation, analysis: Co
   return !!target && !call.dynamic && !call.redirects
     && !/(?:^|\/)(?:sudo|su)$/u.test(target.name) && supportsSudo(analysis)
     && !call.args.some((arg) => ['-p', '--prompt', '-A', '--askpass'].includes(arg));
+}
+
+/** Stage-one transport eligibility for the backend-built operation-level su wrap
+ * served by the credential-bound native PTY. Only privilege=root commands the
+ * backend itself wrapped take this route: agent-supplied sudo/su forms are
+ * refused before preflight (nested privilege), and a plain su without the
+ * backend privilege marker never qualifies. The analyzer flattens the wrap —
+ * the escaped single-quoted -c body is a concatenation, so the su call reads
+ * dynamic and literal steps stay undefined — so the route matches the collected
+ * su call plus the backend body shape instead. Not a safety verdict. */
+export function nativePtySuEligible(operation: ProposedOperation, analysis: CommandAnalysis): boolean {
+  if (operation.kind !== 'command' || operation.privilege !== 'root' || operation.executionMode
+    || operation.processControl || operation.scope.sessionId || analysis.hasError || analysis.hasExpansion
+    || analysis.hasPipeline || analysis.hasRedirection) return false;
+  const call = analysis.calls[0];
+  if (!call || !isSu(call) || call.redirects || call.args.length !== 6) return false;
+  const [login, shellFlag, shellPath, user, commandFlag, body] = call.args;
+  // The suPtyCommand body always embeds the quoted working directory guard before
+  // the reviewed action; a bare -c payload is an agent form, not this route.
+  return login === '-l' && shellFlag === '-s' && shellPath === '/bin/sh'
+    && user === 'root' && commandFlag === '-c' && typeof body === 'string'
+    && /^cd '.*' \|\| exit 125\n[\s\S]+$/u.test(body);
 }

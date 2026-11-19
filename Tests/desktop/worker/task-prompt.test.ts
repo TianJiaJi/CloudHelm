@@ -23,10 +23,11 @@ it('refreshes bounded backend applicability and file preview/commit hints withou
   const prompt = createTaskPrompt(current, [host], () => operations, () => operations, undefined, () => reported);
   const first = facts(prompt());
   expect(Object.keys(first.tools)).toEqual(expect.arrayContaining(['apply_remote_edit', 'restore_remote_edit', 'discard_remote_edit', 'check_remote_edit', 'list_remote_recovery', 'cleanup_remote_recovery']));
+  expect(first.tools).not.toHaveProperty('request_root_session');
   expect(first.tools).toMatchObject({ inspect_host_environment: true, query_operation_history: true,
     prepare_remote_edit: 'conditional', edit_remote_file: false, apply_remote_edit: 'conditional', restore_remote_edit: 'conditional', check_remote_edit: 'conditional' });
   expect(first).toMatchObject({ tools: { read_selected_text_file: false, list_selected_directory: false, upload_selected_file: false,
-    read_operation_log: true, submit_verification: false, record_reconciled_result: false, request_root_session: false }, reportCount: 0, unresolvedCount: 0 });
+    read_operation_log: true, submit_verification: false, record_reconciled_result: false }, reportCount: 0, unresolvedCount: 0 });
   // Recovery-safety guidance (C03/C05) legitimately grew the prompt; 9400 keeps the bound meaningful.
   expect(prompt().length).toBeLessThan(9400);
   current.localScopes = [{ path: 'C:/selected', kind: 'directory' }];
@@ -51,17 +52,17 @@ it('bounds confirmed session hints, drops foreign hosts and never forwards extra
   const privileged: PrivilegedTaskAccess = { request: async () => { throw new Error('not requested'); },
     terminal: () => 'terminal', scope: () => ({}), owns: () => false, close() {}, confirmed };
   const prompt = createTaskPrompt(task, [host], () => [], () => [], privileged, () => false, undefined, () => false,
-    undefined, true);
-  expect(facts(prompt())).toMatchObject({ omittedRootSessions: 4, tools: { request_root_session: 'conditional' } });
+    undefined);
+  expect(facts(prompt())).toMatchObject({ omittedRootSessions: 4 });
   expect(facts(prompt()).confirmedRootSessions).toHaveLength(8);
   expect(prompt()).not.toContain('must-not-be-projected');
   confirmed.mockReturnValue([]);
   expect(facts(prompt()).confirmedRootSessions).toEqual([]);
 });
-it('hides the legacy root session entry point unless explicitly enabled', () => {
+it('never exposes a root session entry point even with privileged access present', () => {
   const confirmed = vi.fn(() => []);
   const privileged: PrivilegedTaskAccess = { request: async () => { throw new Error('not requested'); },
     terminal: () => 'terminal', scope: () => ({}), owns: () => false, close() {}, confirmed };
   const prompt = createTaskPrompt(task, [host], () => [], () => [], privileged);
-  expect(facts(prompt())).toMatchObject({ tools: { request_root_session: false } });
+  expect(facts(prompt()).tools).not.toHaveProperty('request_root_session');
 });

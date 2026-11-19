@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { executeReview } from './review-execution.js';
 import {
-  ApprovalInterruptedError, ReviewInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, nativeCommandEligible, nativePtySudoEligible, operationFingerprint, scriptFilePath, redactOutput,
+  ApprovalInterruptedError, ReviewInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationFingerprint, scriptFilePath, redactOutput,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
   type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
   type SafetyDecision, type SafetySettings, type ScriptInspector, type TerminalLease
@@ -73,7 +73,7 @@ export class SafetyGate {
         return { decision };
       }
       if (operation.kind === 'command' && operation.executionChannel === 'native-pty'
-        && (!analysis || !nativePtySudoEligible(operation, analysis))) {
+        && (!analysis || (!nativePtySudoEligible(operation, analysis) && !nativePtySuEligible(operation, analysis)))) {
         const decision = { verdict: 'error', ruleId: 'invalid-execution-channel',
           reason: 'Backend execution channel no longer matches analyzed command; nothing sent' } as const;
         await this.deps.audit.decided(operation.id, decision, fingerprint);

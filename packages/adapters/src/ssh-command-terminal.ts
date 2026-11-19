@@ -1,7 +1,7 @@
 import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.js';
 import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { CommandNotStartedError, isSudo, nativeCommandEligible, nativePtySudoEligible, redactOutput, sudoMarkerPrompt, sudoPtyCommand, supportsSudo,
+import { CommandNotStartedError, isSudo, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, redactOutput, sudoMarkerPrompt, sudoPtyCommand, supportsSudo,
   type CommandAnalysis, type OperationResult, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
@@ -31,7 +31,7 @@ export class SshCommandTerminal implements RawTerminal {
   onCommand(listener: (event: ShellCommandEvent) => void): void { this.command = listener; }
   private data = (_text: string) => {};
   private display = (_text: string) => {};
-  private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege'>) => {};
+  private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>) => {};
   private exited = (_code: number | undefined) => {};
   private closedListener = () => {};
   private authentication = (_challenge: { id: string; prompt?: string }) => {};
@@ -88,11 +88,16 @@ export class SshCommandTerminal implements RawTerminal {
       return;
     }
     if (options?.executionChannel === 'native-pty') {
-      if (!nativePtySudoEligible({ id: '', kind: 'command', command, scope: { taskId: '', hostId: this.hostId,
+      const scope = { taskId: '', hostId: this.hostId,
         cwd, runAs: '', terminalId: '', terminalGeneration: 0, policyRevision: 0,
-        allowedWorkingRoots: [], protectedPaths: [], goal: '' } }, analysis))
-        throw new CommandNotStartedError('Native PTY review no longer matches command; nothing sent');
-      await this.executeNativePty(cwd, current, analysis);
+        allowedWorkingRoots: [], protectedPaths: [], goal: '' };
+      const sudo = nativePtySudoEligible({ id: '', kind: 'command', command, scope }, analysis);
+      // sudoAuthorization is terminal-manager's attestation of privilege=root: only
+      // the backend-built su wrap carries it, so an agent-supplied su never passes.
+      const su = !sudo && options.sudoAuthorization === true
+        && nativePtySuEligible({ id: '', kind: 'command', command, privilege: 'root', scope }, analysis);
+      if (!sudo && !su) throw new CommandNotStartedError('Native PTY review no longer matches command; nothing sent');
+      await this.executeNativePty(sudo ? 'sudo' : 'su', command, cwd, current, analysis);
       return;
     }
     const sudo = supportsSudo(analysis);
@@ -191,26 +196,31 @@ export class SshCommandTerminal implements RawTerminal {
     }
   }
 
-  /** sudo on the credential-bound native PTY: the password reaches only the
+  /** sudo/su on the credential-bound native PTY: the password reaches only the
    * client-owned marker window, never command text, output, or logs. */
-  private async executeNativePty(cwd: string, current: () => void, analysis: CommandAnalysis): Promise<void> {
+  private async executeNativePty(subform: 'sudo' | 'su', command: string, cwd: string, current: () => void, analysis: CommandAnalysis): Promise<void> {
     if (!this.ssh.runNativePty) {
       this.failure({ failureKind: 'not-dispatched', effects: 'none' });
       this.exited(undefined); this.busy = false; return;
     }
     current();
     const nonce = randomBytes(16).toString('hex');
-    const rebuilt = sudoPtyCommand(analysis, sudoMarkerPrompt(nonce));
-    if (!rebuilt) throw new CommandNotStartedError('Native PTY command cannot be rebuilt for this sudo form; nothing sent');
+    // The su wrap is dispatched verbatim as reviewed; only the one-time marker
+    // prefix is added at dispatch, mirroring sudo's -k -p rebuild.
+    const dispatch = subform === 'sudo'
+      ? sudoPtyCommand(analysis, sudoMarkerPrompt(nonce))
+      : `printf '%s' 'cloudhelm:${nonce}'; ${command}`;
+    if (!dispatch) throw new CommandNotStartedError('Native PTY command cannot be rebuilt for this sudo form; nothing sent');
     current(); this.clearStartup();
     const controller = new AbortController(); this.ptyAbort = controller;
     const session = this.ssh.runNativePty(this.hostId,
-      { command: rebuilt, cwd, envPath: '/usr/bin/env', shellPath: '/bin/sh', nonce, cols: this.cols, rows: this.rows },
+      { command: dispatch, cwd: subform === 'sudo' ? cwd : '/', envPath: '/usr/bin/env', shellPath: '/bin/sh', nonce, cols: this.cols, rows: this.rows,
+        window: subform === 'sudo' ? 'sudo-marker' : 'su-window' },
       () => { current(); return true; },
       { data: (text: string) => { if (text) { this.lineStart = text.endsWith('\n'); this.data(text); } },
         authentication: (event: { id: string; open: boolean }) => {
           if (!/^[a-f0-9]{32}$/u.test(event.id)) return;
-          if (event.open) { this.ptyChallenges.add(event.id); this.authentication({ id: event.id, prompt: 'sudo 身份验证' }); }
+          if (event.open) { this.ptyChallenges.add(event.id); this.authentication({ id: event.id, prompt: subform === 'sudo' ? 'sudo 身份验证' : 'su 身份验证' }); }
           else { this.ptyChallenges.delete(event.id); this.authentication({ id: event.id }); }
         } },
       controller.signal);
@@ -219,15 +229,27 @@ export class SshCommandTerminal implements RawTerminal {
       const outcome: NativePtyOutcome = await session.result;
       if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
       if (outcome.state === 'exited') {
-        if (outcome.exitCode === 127) {
-          // A shell-reported missing sudo differs from sudo's own child diagnostic:
-          // only the first can offer the reviewed su alternative.
+        if (subform === 'sudo') {
+          if (outcome.exitCode === 127) {
+            // A shell-reported missing sudo differs from sudo's own child diagnostic:
+            // only the first can offer the reviewed su alternative.
+            this.failure({ failureKind: 'unsupported', effects: 'none',
+              ...(outcome.sudoMissing ? { privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable',
+                source: 'transport', businessCommand: 'not-started', recovery: 'confirm-alternative' } as const } : {}) });
+          } else if (outcome.exitCode === 125 && !outcome.markerSeen) {
+            // The wrapper reports a failed directory change before sudo ever starts.
+            this.failure({ failureKind: 'permission-denied', effects: 'none' });
+          }
+        } else if (outcome.suAuthenticationFailed && outcome.exitCode === 1) {
+          // su rejects the password and exits without retrying: the task must
+          // pause for a human decision instead of silently re-dispatching.
+          this.failure({ failureKind: 'authentication-failed', effects: 'none', requiresUserAction: true,
+            privilege: { method: 'su', stage: 'authentication', code: 'authentication-rejected',
+              source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } as const });
+        } else if (outcome.suMissing || outcome.suUserMissing) {
           this.failure({ failureKind: 'unsupported', effects: 'none',
-            ...(outcome.sudoMissing ? { privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable',
-              source: 'transport', businessCommand: 'not-started', recovery: 'confirm-alternative' } as const } : {}) });
-        } else if (outcome.exitCode === 125 && !outcome.markerSeen) {
-          // The wrapper reports a failed directory change before sudo ever starts.
-          this.failure({ failureKind: 'permission-denied', effects: 'none' });
+            privilege: { method: 'su', stage: 'preparation', code: 'unsupported',
+              source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } as const });
         }
       }
       if (outcome.state === 'signaled') this.data(`远端命令收到 ${outcome.signal}；未观察到可确认的退出码。`);

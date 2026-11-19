@@ -9,6 +9,7 @@ const NONCE = '0123456789abcdef0123456789abcdef';
 const PROMPT = sudoMarkerPrompt(NONCE);
 const COMMAND = `sudo -k -p '${PROMPT}' 'id'`;
 const INPUT = { command: COMMAND, cwd: '/', envPath: '/usr/bin/env', shellPath: '/bin/sh', nonce: NONCE, cols: 120, rows: 30 };
+const SU_MARKER = `cloudhelm:${NONCE}`;
 
 class FakeChannel extends EventEmitter {
   readonly written: string[] = [];
@@ -59,6 +60,16 @@ const feed = (opened: Opened, text: string): void => { opened.client.channel?.em
 const written = (opened: Opened): string => opened.client.channel?.written.join('') ?? '';
 const recorded = (opened: Opened): string => opened.data.mock.calls.map((call) => call[0] as string).join('');
 const challenge = (opened: Opened): string => opened.authentication.mock.calls.at(-1)![0].id as string;
+
+function openSu(overrides: { signal?: AbortSignal; current?: () => boolean } = {}): Opened {
+  const client = new FakeClient();
+  const data = vi.fn(), authentication = vi.fn();
+  const handle = openNativeSshPty(client as unknown as Pick<Client, 'exec'>,
+    { command: `printf '%s' '${SU_MARKER}'; su -l -s /bin/sh root -c 'id'`, cwd: '/', envPath: '/usr/bin/env',
+      shellPath: '/bin/sh', nonce: NONCE, cols: 120, rows: 30, window: 'su-window' as const },
+    overrides.current ?? (() => true), { data, authentication }, overrides.signal);
+  return { client, handle, data, authentication };
+}
 
 it('dispatches on a dumb echo-off pty and injects the password only into the marker window', async () => {
   const opened = open({ cols: 40, rows: 0 });
@@ -289,4 +300,153 @@ it('reports authorization expiry when the generation ends before the stream clos
   opened.client.channel!.emit('close');
   const outcome: NativePtyOutcome = await opened.handle.result;
   expect(outcome).toStrictEqual({ state: 'unknown', reason: 'authorization-expired' });
+});
+
+it('opens the su window only after the marker and injects exactly one password', async () => {
+  const opened = openSu();
+  feed(opened, SU_MARKER);
+  feed(opened, 'Password: ');
+  expect(opened.data).not.toHaveBeenCalled();
+  expect(opened.authentication).toHaveBeenCalledExactlyOnceWith({ id: expect.stringMatching(/^[a-f0-9]{32}$/u), open: true });
+  const id = challenge(opened);
+  expect(opened.handle.answer(id, 'root-secret')).toBe(true);
+  expect(written(opened)).toBe('root-secret\n');
+  expect(opened.authentication).toHaveBeenCalledTimes(2);
+  feed(opened, 'uid=0(root) gid=0(root) groups=0(root)\n');
+  expect(opened.data).toHaveBeenCalledExactlyOnceWith('uid=0(root) gid=0(root) groups=0(root)\n');
+  opened.client.channel!.emit('exit', 0);
+  opened.client.channel!.emit('close');
+  expect(await opened.handle.result).toStrictEqual({ state: 'exited', exitCode: 0, markerSeen: true, sudoMissing: false });
+  expect(recorded(opened)).not.toContain('root-secret');
+  expect(recorded(opened)).not.toContain(SU_MARKER);
+});
+
+it('classifies pam su rejection, missing su and unknown target accounts from the raw stream', async () => {
+  const rejected = openSu();
+  feed(rejected, SU_MARKER);
+  feed(rejected, 'Password: ');
+  expect(rejected.handle.answer(challenge(rejected), 'wrong')).toBe(true);
+  feed(rejected, 'su: Authentication failure\n');
+  rejected.client.channel!.emit('exit', 1);
+  rejected.client.channel!.emit('close');
+  expect(await rejected.handle.result).toStrictEqual({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, suAuthenticationFailed: true });
+  expect(recorded(rejected)).toContain('su: Authentication failure');
+  expect(recorded(rejected)).not.toContain('wrong');
+
+  const missing = openSu();
+  feed(missing, SU_MARKER);
+  feed(missing, '/bin/sh: su: not found\n');
+  expect(missing.data).toHaveBeenCalledExactlyOnceWith('/bin/sh: su: not found\n');
+  expect(missing.authentication).not.toHaveBeenCalled();
+  missing.client.channel!.emit('exit', 127);
+  missing.client.channel!.emit('close');
+  expect(await missing.handle.result).toStrictEqual({ state: 'exited', exitCode: 127, markerSeen: true, sudoMissing: false, suMissing: true });
+
+  const busybox = openSu();
+  feed(busybox, SU_MARKER);
+  feed(busybox, 'su: applet not found\n');
+  busybox.client.channel!.emit('exit', 127);
+  busybox.client.channel!.emit('close');
+  expect(await busybox.handle.result).toStrictEqual({ state: 'exited', exitCode: 127, markerSeen: true, sudoMissing: false, suMissing: true });
+
+  const user = openSu();
+  feed(user, SU_MARKER);
+  feed(user, 'su: user ghost does not exist\n');
+  user.client.channel!.emit('exit', 1);
+  user.client.channel!.emit('close');
+  expect(await user.handle.result).toStrictEqual({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, suUserMissing: true });
+});
+
+it('disarms permanently on a forged marker, a passwordless su or any pre-prompt output', async () => {
+  const forged = openSu();
+  feed(forged, SU_MARKER);
+  feed(forged, `payload ${SU_MARKER} echo`);
+  expect(forged.authentication).not.toHaveBeenCalled();
+  expect(recorded(forged)).toContain(`payload ${SU_MARKER} echo`);
+  // A real su prompt arriving later is ordinary flow-through output, never a window.
+  feed(forged, 'Password: ');
+  expect(forged.authentication).not.toHaveBeenCalled();
+  expect(recorded(forged)).toContain('Password: ');
+  forged.client.channel!.emit('exit', 0);
+  forged.client.channel!.emit('close');
+  expect(await forged.handle.result).toStrictEqual({ state: 'exited', exitCode: 0, markerSeen: true, sudoMissing: false });
+
+  const passwordless = openSu();
+  feed(passwordless, SU_MARKER);
+  feed(passwordless, 'uid=0(root) gid=0(root)\n');
+  expect(passwordless.authentication).not.toHaveBeenCalled();
+  expect(passwordless.data).toHaveBeenCalledExactlyOnceWith('uid=0(root) gid=0(root)\n');
+  passwordless.client.channel!.emit('exit', 0);
+  passwordless.client.channel!.emit('close');
+  expect(await passwordless.handle.result).toStrictEqual({ state: 'exited', exitCode: 0, markerSeen: true, sudoMissing: false });
+});
+
+it('tolerates line breaks and split prompt chunks between marker and window', async () => {
+  const opened = openSu();
+  feed(opened, 'banner before\n');
+  expect(opened.data).toHaveBeenCalledExactlyOnceWith('banner before\n');
+  feed(opened, SU_MARKER);
+  feed(opened, '\r\n');
+  expect(opened.data).toHaveBeenCalledTimes(2);
+  feed(opened, 'Pass');
+  feed(opened, 'word: ');
+  expect(opened.authentication).toHaveBeenCalledExactlyOnceWith({ id: expect.stringMatching(/^[a-f0-9]{32}$/u), open: true });
+  const id = challenge(opened);
+  expect(opened.handle.answer(id, 'root-secret')).toBe(true);
+  feed(opened, 'uid=0(root)\n');
+  expect(recorded(opened)).toContain('uid=0(root)\n');
+  opened.client.channel!.emit('exit', 0);
+  opened.client.channel!.emit('close');
+  expect(await opened.handle.result).toMatchObject({ state: 'exited', exitCode: 0 });
+});
+
+it('consumes inert prompt-tail whitespace in the open window but cancels on anything else', async () => {
+  const tolerant = openSu();
+  feed(tolerant, SU_MARKER);
+  feed(tolerant, 'Password: ');
+  const id = challenge(tolerant);
+  feed(tolerant, '  ');
+  expect(tolerant.data).not.toHaveBeenCalled();
+  expect(tolerant.handle.answer(id, 'root-secret')).toBe(true);
+  expect(written(tolerant)).toBe('root-secret\n');
+
+  const cancelled = openSu();
+  feed(cancelled, SU_MARKER);
+  feed(cancelled, 'Password: ');
+  const openId = challenge(cancelled);
+  feed(cancelled, 'unexpected');
+  expect(cancelled.authentication).toHaveBeenLastCalledWith({ id: openId, open: false });
+  expect(recorded(cancelled)).toContain('su：密码窗口期间出现异常输出，密码未写入');
+  expect(cancelled.handle.answer(openId, 'root-secret')).toBe(false);
+  expect(written(cancelled)).toBe('');
+  feed(cancelled, 'later output\n');
+  expect(recorded(cancelled)).toContain('later output\n');
+  expect(cancelled.authentication).toHaveBeenCalledTimes(2);
+});
+
+it('cancels the su window without writing and settles unknown', async () => {
+  const opened = openSu();
+  feed(opened, SU_MARKER);
+  feed(opened, 'Password: ');
+  const id = challenge(opened);
+  expect(opened.handle.answer(id, null)).toBe(true);
+  expect(written(opened)).toBe('');
+  expect(opened.data).not.toHaveBeenCalled();
+  expect(await opened.handle.result).toStrictEqual({ state: 'unknown', reason: 'aborted' });
+  expect(opened.client.channel!.closed).toBe(true);
+  expect(opened.handle.answer(id, 'late')).toBe(false);
+});
+
+it('keeps su output ordinary after the single injection even on later prompts', async () => {
+  const opened = openSu();
+  feed(opened, SU_MARKER);
+  feed(opened, 'Password: ');
+  expect(opened.handle.answer(challenge(opened), 'root-secret')).toBe(true);
+  feed(opened, 'Password: ');
+  expect(opened.authentication).toHaveBeenCalledTimes(2);
+  expect(recorded(opened)).toContain('Password: ');
+  opened.client.channel!.emit('exit', 0);
+  opened.client.channel!.emit('close');
+  expect(await opened.handle.result).toMatchObject({ state: 'exited', exitCode: 0 });
+  expect(recorded(opened)).not.toContain('root-secret');
 });

@@ -5,7 +5,8 @@ import { renderNativeExecCommand } from './native-exec-command.js';
 
 export type NativePtyOutcome =
   | { state: 'not-dispatched'; reason: 'authorization-expired' }
-  | { state: 'exited'; exitCode: number; markerSeen: boolean; sudoMissing: boolean }
+  | { state: 'exited'; exitCode: number; markerSeen: boolean; sudoMissing: boolean;
+      suAuthenticationFailed?: boolean; suMissing?: boolean; suUserMissing?: boolean }
   | { state: 'signaled'; signal: string; coreDumped: boolean }
   | { state: 'unknown'; reason: 'allocation' | 'timeout' | 'aborted' | 'channel-error' | 'missing-exit' | 'authorization-expired' | 'output-limit' };
 
@@ -27,6 +28,19 @@ const SUDO_FAILURE = 'Sorry, try again.';
 /** Shell-reported sudo absence (dash, bash-as-sh, BusyBox), never sudo's own child
  * diagnostics; the busybox multi-call stub also means sudo is unavailable. */
 const SUDO_MISSING = /(?:^|[\r\n])(?:(?!sudo:)[^\r\n]{0,128}sudo: (?:command )?not found|sudo: applet not found)/u;
+/** pam's su password prompt; su reads the answer on the same line, no newline. */
+const SU_PROMPT = 'Password:';
+/** C-locale pam su failure notice; it follows the prompt without a line break
+ * and su exits instead of re-prompting. */
+const SU_FAILURE = /su: Authentication failure/u;
+/** Shell-reported su absence, mirroring the sudo diagnostic pattern; the shell
+ * diagnostic directly follows the printf marker with no line break. */
+const SU_MISSING = /(?:^|[\r\n])(?:(?!su:)[^\r\n]{0,128}su: (?:command )?not found|su: applet not found)/u;
+/** su rejects an unknown target account before prompting; the notice directly
+ * follows the printf marker with no line break. */
+const SU_USER_MISSING = /(?:^|[\r\n])su: user [^\r\n]{0,128} does not exist/u;
+export type PtyWindow = 'sudo-marker' | 'su-window';
+type SuState = 'idle' | 'armed' | 'open' | 'injected' | 'cancelled' | 'disarmed';
 
 /** One sudo command on a client-owned PTY. The password is injected only after the
  * unguessable per-dispatch marker appears and only into a suppressed window, so it
@@ -34,6 +48,7 @@ const SUDO_MISSING = /(?:^|[\r\n])(?:(?!sudo:)[^\r\n]{0,128}sudo: (?:command )?n
  * abort is never proof of process exit: an unknown outcome may still be running. */
 export function openNativeSshPty(client: Pick<Client, 'exec'> | undefined, input: {
   command: string; cwd: string; envPath: string; shellPath: string; nonce: string; cols: number; rows: number;
+  window?: PtyWindow;
 }, current: () => boolean, hooks: {
   data(text: string): void; authentication(event: { id: string; open: boolean }): void;
 }, signal?: AbortSignal, startupTimeoutMs = 15_000): NativePtyHandle {
@@ -46,7 +61,7 @@ export function openNativeSshPty(client: Pick<Client, 'exec'> | undefined, input
   const dead = { result: Promise.resolve({ state: 'not-dispatched', reason: 'authorization-expired' } as const),
     answer: () => false, write: () => {}, resize: () => {} };
   if (!client || signal?.aborted || !current()) return dead;
-  return new LiveNativePtySession(client, rendered, scanTarget, cols, rows, current, hooks, signal, startupTimeoutMs).handle;
+  return new LiveNativePtySession(client, rendered, scanTarget, input.window ?? 'sudo-marker', cols, rows, current, hooks, signal, startupTimeoutMs).handle;
 }
 
 /** Separate class so the dead handle above stays allocation-free. */
@@ -66,6 +81,10 @@ class LiveNativePtySession {
   private suppressedBytes = 0;
   private markerSeenOnce = false;
   private sudoMissing = false;
+  private suAuthenticationFailed = false;
+  private suMissing = false;
+  private suUserMissing = false;
+  private suState: SuState = 'idle';
   private carry = Buffer.alloc(0);
   private featureTail = '';
   private readonly decoder = new StringDecoder('utf8');
@@ -80,7 +99,8 @@ class LiveNativePtySession {
   };
 
   constructor(private readonly client: Pick<Client, 'exec'>, private readonly rendered: string,
-    private readonly scanTarget: string, private readonly cols: number, private readonly rows: number,
+    private readonly scanTarget: string, private readonly mode: PtyWindow,
+    private readonly cols: number, private readonly rows: number,
     private readonly current: () => boolean, private readonly hooks: {
       data(text: string): void; authentication(event: { id: string; open: boolean }): void;
     }, signal: AbortSignal | undefined, startupTimeoutMs: number) {
@@ -105,7 +125,12 @@ class LiveNativePtySession {
           stream.on('error', () => this.finish({ state: 'unknown', reason: 'channel-error' }));
           stream.on('exit', (code: number | null, name?: string, coreDumped?: boolean) => {
             this.exit = Number.isInteger(code) && code !== null && code >= 0 && code <= 255
-              ? { state: 'exited', exitCode: code, markerSeen: this.markerSeenOnce, sudoMissing: this.sudoMissing }
+              ? this.mode === 'su-window'
+                ? { state: 'exited', exitCode: code, markerSeen: this.markerSeenOnce, sudoMissing: false,
+                  ...(this.suAuthenticationFailed ? { suAuthenticationFailed: true } : {}),
+                  ...(this.suMissing ? { suMissing: true } : {}),
+                  ...(this.suUserMissing ? { suUserMissing: true } : {}) }
+                : { state: 'exited', exitCode: code, markerSeen: this.markerSeenOnce, sudoMissing: this.sudoMissing }
               : typeof name === 'string' && /^[A-Z0-9]{1,24}$/u.test(name)
                 ? { state: 'signaled', signal: name, coreDumped: coreDumped === true }
                 : undefined;
@@ -120,6 +145,21 @@ class LiveNativePtySession {
     if (this.settled || !this.windowOpen || id !== this.challengeId) return false;
     if (answer !== null && (answer.length > 4095 || /[\r\n\u0000]/u.test(answer))) return false;
     const closed = this.challengeId;
+    if (this.mode === 'su-window') {
+      this.windowOpen = false;
+      this.challengeId = '';
+      if (answer === null) {
+        // Cancel writes nothing and closes the channel: the outcome stays unknown.
+        this.notifyClosed(closed);
+        this.finish({ state: 'unknown', reason: 'aborted' });
+        return true;
+      }
+      // su never re-prompts, so exactly one injection is structurally guaranteed.
+      this.notifyClosed(closed);
+      this.suState = 'injected';
+      this.write(`${answer}\n`);
+      return true;
+    }
     this.windowOpen = false;
     this.challengeId = '';
     if (answer === null) {
@@ -170,6 +210,22 @@ class LiveNativePtySession {
     const buf = this.carry.length ? Buffer.concat([this.carry, chunk]) : chunk;
     this.carry = Buffer.alloc(0);
     const text = buf.toString('latin1');
+    if (this.mode === 'su-window') {
+      // Feature scans run on the raw stream so evidence survives regardless of
+      // what the span processor consumes. su's diagnostics directly follow the
+      // printf marker without a line break, so evidence starts at the marker,
+      // never at an arbitrary line boundary.
+      const features = this.featureTail + text;
+      const markerAt = this.markerSeenOnce ? 0 : features.indexOf(this.scanTarget);
+      const evidence = markerAt >= 0
+        ? features.slice(markerAt + (this.markerSeenOnce ? 0 : this.scanTarget.length)) : '';
+      if (!this.suAuthenticationFailed && SU_FAILURE.test(evidence)) this.suAuthenticationFailed = true;
+      if (!this.suMissing && SU_MISSING.test(evidence)) this.suMissing = true;
+      if (!this.suUserMissing && SU_USER_MISSING.test(evidence)) this.suUserMissing = true;
+      this.featureTail = (markerAt >= 0 ? evidence : '').slice(-256);
+      this.processSuSpan(buf, text);
+      return;
+    }
     // Feature scans run on the raw stream, before suppression: a swallowed retry
     // notice must still re-arm the window and sudo-missing evidence must survive
     // even when the prompt region is suppressed.
@@ -272,6 +328,90 @@ class LiveNativePtySession {
     try { this.hooks.authentication({ id: this.challengeId, open: true }); }
     catch { this.finish({ state: 'unknown', reason: 'channel-error' }); }
     return true;
+  }
+
+  /** su-window scan: the printf marker arms, only su's own password prompt may
+   * then open the window, and one answer is the only injection. Anything else
+   * between marker and prompt disarms permanently; passwordless su and payload
+   * echoes therefore finish as ordinary flow-through output. */
+  private processSuSpan(buf: Buffer, text: string): void {
+    let pos = 0;
+    while (pos < text.length && !this.settled) {
+      if (this.suState === 'injected' || this.suState === 'cancelled' || this.suState === 'disarmed') {
+        // Post-decision output is ordinary flow-through; su diagnostics such as
+        // the failure notice are evidence, never credentials.
+        this.emit(buf.subarray(pos));
+        return;
+      }
+      if (this.suState === 'open') {
+        // su blocks on the password read, so it cannot emit more prompt bytes;
+        // a prompt tail fragment is inert whitespace. Anything else means the
+        // window no longer has a trustworthy recipient: close it without writing.
+        const rest = text.slice(pos);
+        if (/^[\t ]{1,4}$/u.test(rest)) return;
+        this.cancelSuWindow();
+        continue;
+      }
+      if (this.suState === 'idle') {
+        const marker = text.indexOf(this.scanTarget, pos);
+        if (marker < 0) {
+          // Hold back only a suffix that could still grow into the marker.
+          const lookback = this.scanTarget.length - 1;
+          const hold = this.markerHoldback(text.slice(Math.max(pos, text.length - lookback)));
+          this.emit(buf.subarray(pos, text.length - hold));
+          this.carry = hold > 0 ? Buffer.from(buf.subarray(text.length - hold)) : Buffer.alloc(0);
+          return;
+        }
+        this.emit(buf.subarray(pos, marker));
+        this.markerSeenOnce = true;
+        this.suState = 'armed';
+        pos = marker + this.scanTarget.length;
+        continue;
+      }
+      // armed: between marker and su's prompt only line breaks may appear.
+      const rest = text.slice(pos);
+      const lineBreaks = /^[\r\n]*/u.exec(rest)![0].length;
+      if (lineBreaks > 0) { this.emit(buf.subarray(pos, pos + lineBreaks)); pos += lineBreaks; continue; }
+      if (rest.startsWith(SU_PROMPT)) {
+        pos += SU_PROMPT.length + (rest[SU_PROMPT.length] === ' ' ? 1 : 0);
+        this.openSuWindow();
+        continue;
+      }
+      const partial = this.promptHoldback(rest);
+      if (partial === rest.length) { this.carry = Buffer.from(buf.subarray(pos)); return; }
+      // First non-prompt byte: passwordless su or an echo. Never open a window
+      // again for this dispatch; everything from here is flow-through.
+      this.suState = 'disarmed';
+    }
+  }
+
+  private openSuWindow(): void {
+    this.windowOpen = true;
+    this.challengeId = randomUUID().replaceAll('-', '');
+    this.suState = 'open';
+    try { this.hooks.authentication({ id: this.challengeId, open: true }); }
+    catch { this.finish({ state: 'unknown', reason: 'channel-error' }); }
+  }
+
+  /** Unexpected output while the window is open: close without writing. su stays
+   * blocked on its password read until the user stops the operation. */
+  private cancelSuWindow(): void {
+    const id = this.challengeId;
+    this.windowOpen = false;
+    this.challengeId = '';
+    this.suState = 'cancelled';
+    if (id) this.notifyClosed(id);
+    try { this.hooks.data('\r\nsu：密码窗口期间出现异常输出，密码未写入；本次操作已失效，请停止并核验。\r\n'); }
+    catch { /* The hang still surfaces via the outcome. */ }
+  }
+
+  /** Longest suffix of text that could still grow into the su password prompt. */
+  private promptHoldback(text: string): number {
+    const limit = Math.min(text.length, SU_PROMPT.length);
+    for (let length = limit; length > 0; length--) {
+      if (text.endsWith(SU_PROMPT.slice(0, length))) return length;
+    }
+    return 0;
   }
 
   private finish(outcome: NativePtyOutcome): void {

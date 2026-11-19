@@ -6,7 +6,8 @@ export interface PrivilegedTaskAccess {
   request(host: RuntimeHost, command: string, cwd: string, reason: string, goal: string,
     gate: SafetyGate, signal?: AbortSignal, intent?: OperationScope['intent'], method?: PrivilegeMethod): Promise<
       { sessionId: string; method: 'ssh' | 'su'; runAs: 'root' }
-      | { sessionId: string; method: 'sudo'; state: 'prepared'; loginAs: string; targetRunAs: 'root'; identityVerified: false }>;
+      | { sessionId: string; method: 'sudo'; state: 'prepared'; loginAs: string; targetRunAs: 'root'; identityVerified: false }
+      | { method: 'su'; runAs: 'root' }>;
   prepare?(operation: ProposedOperation): Promise<ProposedOperation>;
   sudoContexts?(): Array<{ sessionId: string; hostId: string; state: 'prepared'; loginAs: string; targetRunAs: 'root' }>;
   terminal(sessionId: string, hostId: string): string;

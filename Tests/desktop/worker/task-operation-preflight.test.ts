@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { BashAnalyzer } from '@cloudhelm/adapters';
-import { operationIntentKey, type OperationScope, type ProposedOperation } from '@cloudhelm/core';
+import { operationIntentKey, suPtyCommand, type OperationScope, type ProposedOperation } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
 import { taskOperationPreflight } from '../../../apps/desktop/src/worker/task-operation-preflight.js';
 
@@ -115,4 +115,21 @@ it('keeps apt transactions on the reviewed legacy channel instead of native exec
     const result = await taskOperationPreflight(command('apt-static', text), deps([]));
     expect(result, text).toMatchObject({ operation: { command: text, executionChannel: 'native-exec' } });
   }
+});
+
+it('routes the backend-built privilege-root su wrap to the native PTY and refuses agent-supplied su', async () => {
+  const analyzer = new BashAnalyzer();
+  const wrapped = suPtyCommand(await analyzer.analyze('systemctl restart nginx'), '/srv');
+  expect(wrapped).toBeDefined();
+  const suOperation = { ...command('su-route', wrapped!), privilege: 'root' as const };
+  const routed = await taskOperationPreflight(suOperation, deps([]));
+  expect(routed).toMatchObject({ operation: { command: wrapped, executionChannel: 'native-pty', privilege: 'root' } });
+  // Agent-supplied su never gets the private channel, whatever it claims.
+  for (const text of ['su root', `su -l -s /bin/sh root -c 'id'`, wrapped!]) {
+    const result = await taskOperationPreflight(command('agent-su', text), deps([]));
+    expect(result, text).toMatchObject({ isError: true, details: { code: 'unsupported-authentication-form', effects: 'none' } });
+  }
+  // Background execution keeps the su wrap off the native PTY and is refused honestly.
+  const background = await taskOperationPreflight({ ...suOperation, executionMode: 'background' as const }, deps([]));
+  expect(background).toMatchObject({ isError: true, details: { code: 'unsupported-authentication-form', effects: 'none' } });
 });

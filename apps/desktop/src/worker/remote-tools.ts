@@ -5,7 +5,7 @@ import { createRemoteFileEditTool } from './remote-file-edit-tool.js';
 import { createRemoteFilePrepareTool } from './remote-file-prepare-tool.js';
 import { OperationPrivilege } from './operation-privilege.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { OutputRedactor, PrivilegeError, privilegeGuidance, redactOutput, type BusinessTool } from '@cloudhelm/core';
+import { OutputRedactor, redactOutput, type BusinessTool } from '@cloudhelm/core';
 import { Type, type Static } from 'typebox';
 import { createSelectedReadTool } from '@cloudhelm/adapters';
 import type { SafetyGate } from '@cloudhelm/application';
@@ -151,27 +151,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
         } catch (error) { return { content: [{ type: 'text' as const, text: String(error) }], details: undefined, isError: true }; }
       }
     };
-  const rootParameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.String(), reason: Type.String(),
-    method: Type.Optional(Type.Union([Type.Literal('sudo'), Type.Literal('ssh'), Type.Literal('su')])) }, { additionalProperties: false });
-  const rootTool: BusinessTool<Static<typeof rootParameters>> = {
-    name: 'request_root_session', label: 'Advanced explicit identity access (legacy)',
-    description: 'Advanced/legacy path only; normal root actions use run_remote privilege=root without a session. Root SSH requires explicit user selection, never automatic fallback. Default method=sudo: confirm a prepared context, no probe, password or business command runs. Each later literal command is sudo-elevated before review; this is NOT a verified root login. Prefer actual bounded sudo actions. Explicit ssh/su alternatives need user confirmation; su normally needs ROOT password, not login sudo password. Supply intended action/reason/cwd; this tool never executes it. Follow structured feedback; never switch identity after a control stop or replay work. Sudo/su do not elevate SFTP.',
-    parameters: rootParameters, replay: 'never',
-    execute: async (_id, params, signal) => {
-      const host = deps.hosts.find((candidate) => candidate.id === params.hostId);
-      if (!host) return outOfScope();
-      if (!deps.requestRoot) throw new Error('Root sessions unavailable');
-      try {
-        const session = await deps.requestRoot(host, params.command, params.cwd, params.reason, signal, params.method ?? 'sudo');
-        return { content: [{ type: 'text', text: JSON.stringify(session) }], details: undefined };
-      } catch (error) {
-        const privilege = error instanceof PrivilegeError ? error.feedback : undefined;
-        return { content: [{ type: 'text', text: JSON.stringify({ privilege, guidance: privilege ? privilegeGuidance(privilege)
-          : 'Privilege context unavailable; no intended business action was dispatched. Wait for explicit user instructions; no automatic fallback.' }) }], details: { privilege }, isError: true };
-      }
-    }
-  };
-  const tools = [createServiceTool(deps, gate), ...(deps.legacyRootSessions === true ? [rootTool] : []),
+  const tools = [createServiceTool(deps, gate),
     tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files), createRemoteFileEditTool(deps, gate),
     writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
   // Pre-dispatch refusals create no operation record, so surface a fixed reason code

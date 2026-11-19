@@ -11,12 +11,6 @@ export function observeProgressTools(tools: BusinessTool[], progress: TaskProgre
     const input = args as Record<string, unknown>;
     if (tool.name === 'read_selected_text_file' || tool.name === 'list_selected_directory') {
       progress.observe(tool.name, JSON.stringify([input.path, result.content]));
-    } else if (tool.name === 'request_root_session') {
-      let session: { runAs?: string; method?: string } | null;
-      try { session = JSON.parse(result.content[0]?.text ?? '') as typeof session; }
-      catch { return result; } // Unrecognized data is not evidence of progress.
-      if (session?.runAs === 'root' && ['ssh', 'su'].includes(session.method ?? ''))
-        progress.observe('root-identity', JSON.stringify([input.hostId, input.cwd, session.runAs, session.method]));
     } else if (tool.name === 'read_operation_log' && result.details && typeof result.details === 'object') {
       const details = result.details as Record<string, unknown>;
       const source = operations().find((operation) => operation.id === details.operationId);

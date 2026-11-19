@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { BashAnalyzer } from '../../packages/adapters/src/bash-analyzer.js';
-import { nativeCommandEligible, nativePtySudoEligible, operationFingerprint, operationIntentKey, type ProposedOperation } from '../../packages/core/src/index.js';
+import { nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationFingerprint, operationIntentKey, suPtyCommand, type ProposedOperation } from '../../packages/core/src/index.js';
 
 const base: ProposedOperation = { id: 'route', kind: 'command', command: 'id -u', scope: {
   taskId: 'task', hostId: 'host', cwd: '/', runAs: 'user', terminalId: 'terminal', terminalGeneration: 1,
@@ -41,4 +41,25 @@ it('routes one literal sudo command to the credential-bound PTY, never nested, p
   expect(nativePtySudoEligible({ ...base, command: 'sudo id', processControl: { kind: 'interrupt', jobId: 'job',
     targetOperationId: 'op', pid: 1, processSequence: 1, connectionId: 'conn' } }, sudo), 'process control').toBe(false);
   expect(nativePtySudoEligible({ ...base, command: 'sudo id', scope: { ...base.scope, sessionId: 'session' } }, sudo), 'session-bound').toBe(false);
+});
+
+it('routes only the backend-built privilege-root su wrap to the native PTY', async () => {
+  const wrapped = suPtyCommand(await analyzer.analyze('systemctl restart nginx'), '/srv');
+  expect(typeof wrapped).toBe('string');
+  const operation: ProposedOperation = { ...base, command: wrapped!, privilege: 'root' };
+  expect(nativePtySuEligible(operation, await analyzer.analyze(wrapped!)), 'backend wrap').toBe(true);
+  // Rebuilds with a different body are distinct reviewed operations, both eligible.
+  const other = suPtyCommand(await analyzer.analyze('systemctl restart postgresql'), '/srv');
+  expect(other).not.toBe(wrapped);
+  expect(nativePtySuEligible({ ...base, command: other!, privilege: 'root' }, await analyzer.analyze(other!)), 'second wrap').toBe(true);
+  // Agent-supplied or degenerate su forms never take this route.
+  for (const command of ['su root', 'su -c id root', `su -l -s /bin/sh root -c 'id'`, 'sudo su root', 'su', 'id -u']) {
+    expect(nativePtySuEligible({ ...base, command, privilege: 'root' }, await analyzer.analyze(command)), command).toBe(false);
+  }
+  // Without the backend privilege marker a literal backend wrap is just an agent command.
+  expect(nativePtySuEligible({ ...base, command: wrapped! }, await analyzer.analyze(wrapped!)), 'missing privilege marker').toBe(false);
+  expect(nativePtySuEligible({ ...base, command: wrapped!, privilege: 'root', executionMode: 'background' }, await analyzer.analyze(wrapped!)), 'background').toBe(false);
+  expect(nativePtySuEligible({ ...base, command: wrapped!, privilege: 'root', processControl: { kind: 'interrupt', jobId: 'job',
+    targetOperationId: 'op', pid: 1, processSequence: 1, connectionId: 'conn' } }, await analyzer.analyze(wrapped!)), 'process control').toBe(false);
+  expect(nativePtySuEligible({ ...base, command: wrapped!, privilege: 'root', scope: { ...base.scope, sessionId: 'session' } }, await analyzer.analyze(wrapped!)), 'session-bound').toBe(false);
 });

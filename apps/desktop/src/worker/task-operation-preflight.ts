@@ -1,4 +1,4 @@
-import { analyzeOperationImpact, HOST_ENVIRONMENT_MAX_AGE_MS, isSudoStatusProbe, nativeCommandEligible, nativePtySudoEligible, operationIntentKey, sudoTarget,
+import { analyzeOperationImpact, HOST_ENVIRONMENT_MAX_AGE_MS, isSudoStatusProbe, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationIntentKey, sudoTarget,
   type CommandAnalyzer, type HostEnvironmentAccess, type ProposedOperation } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
@@ -40,6 +40,8 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
     if (analysis && operation.kind === 'command' && !aptNeedsPtyStdin(analysis) && nativeCommandEligible(operation, analysis))
       operation = { ...operation, executionChannel: 'native-exec' };
     else if (analysis && operation.kind === 'command' && nativePtySudoEligible(operation, analysis))
+      operation = { ...operation, executionChannel: 'native-pty' };
+    else if (analysis && operation.kind === 'command' && nativePtySuEligible(operation, analysis))
       operation = { ...operation, executionChannel: 'native-pty' };
     // Replay protection answers one question: could repeating this request re-apply
     // effects that were already dispatched? Effect-free queries use exactly the safety
@@ -86,7 +88,8 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
       'No command sent; effects: none. sudo 状态/权限探测（sudo -n true、sudo -l、sudo -v 等）不被支持，也不能证明下一条 sudo 命令可用。请直接提交实际的有界 sudo 命令，私有认证通道会在需要时提示输入。');
     // The authentication bridge cannot execute these forms. Refuse them before showing
     // an approval card; an approval cannot make an unsupported transport safe to run.
-    if (analysis && operation.kind === 'command' && !operation.scope.sessionId && !inputPlan(analysis)
+    if (analysis && operation.kind === 'command' && !operation.scope.sessionId && operation.executionChannel !== 'native-pty'
+      && !inputPlan(analysis)
       && analysis.calls.some((call) => /(?:^|\/)(?:sudo|su)$/u.test(call.name))) return blockedOperationFeedback(operation.id, 'unsupported-authentication-form',
         'No command sent; effects: none. This sudo/su command form is unsupported by the private authentication channel (including sudo pipelines and redirections). Do not wrap or switch tools to bypass this limit. Submit the actual bounded sudo operation as one reviewed command, or explain that manual handling is required.');
 

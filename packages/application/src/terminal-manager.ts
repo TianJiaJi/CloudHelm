@@ -13,7 +13,7 @@ interface PendingCommand {
   isAuthorized(): boolean;
   onProcessStarted?: (event: { pid: number }) => void;
   capture: OperationOutputCapture;
-  failure?: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege'>;
+  failure?: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>;
   settle(result: OperationResult): void;
   remoteCompletion: Promise<'exited' | 'unknown'>;
   completeRemote(state: 'exited' | 'unknown'): void;

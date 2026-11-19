@@ -171,9 +171,9 @@ class PiConversationSession implements ConversationSession {
       if (!schema || !queryPolicy.allowed(call.toolCall.name)) return { block: true, reason: '工具不在当前授权注册表中，未执行。' };
       assertUnchangedToolArguments(schema, call.toolCall.arguments, call.args);
       const asks = call.assistantMessage.content.filter((part) => part.type === 'toolCall'
-        && ['ask_user', 'request_root_session'].includes(part.name));
+        && part.name === 'ask_user');
       if (asks.length > 1 || (asks.length && (asks[0]?.type !== 'toolCall' || call.toolCall.name !== asks[0].name))) {
-        return { block: true, reason: '需求澄清与 root 会话申请必须单独调用；等待回答后重新评估其他工具，禁止并行执行。' };
+        return { block: true, reason: '需求澄清必须单独调用；等待回答后重新评估其他工具，禁止并行执行。' };
       }
       return beforeTool?.(call, signal);
     };

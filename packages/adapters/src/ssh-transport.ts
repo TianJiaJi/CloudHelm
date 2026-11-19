@@ -3,7 +3,7 @@ import { withSftpSession } from './ssh-sftp-session.js';
 import { readBoundedSftpFile } from './sftp-read.js';
 import { runFixedSshCommand } from './ssh-fixed-exec.js';
 import { runNativeSshExec, type NativeExecOutcome } from './native-ssh-exec.js';
-import { openNativeSshPty, type NativePtyHandle } from './native-ssh-pty.js';
+import { openNativeSshPty, type NativePtyHandle, type PtyWindow } from './native-ssh-pty.js';
 import { probeHostEnvironment } from './host-environment-probe.js';
 import { onDemandAuthHandler, type SshLoginChallenge } from './ssh-authentication.js';
 export { SshAuthenticationError } from './ssh-authentication.js';
@@ -236,8 +236,8 @@ export class SshTransport {
     }, hooks, signal);
   }
 
-  /** Native PTY primitive for sudo credential delivery; never authorizes itself or retries an unknown dispatch. */
-  runNativePty(hostId: string, input: { command: string; cwd: string; envPath: string; shellPath: string; nonce: string; cols: number; rows: number },
+  /** Native PTY primitive for sudo/su credential delivery; never authorizes itself or retries an unknown dispatch. */
+  runNativePty(hostId: string, input: { command: string; cwd: string; envPath: string; shellPath: string; nonce: string; cols: number; rows: number; window?: PtyWindow },
     authorized: () => boolean, hooks: { data(text: string): void; authentication(event: { id: string; open: boolean }): void },
     signal?: AbortSignal): NativePtyHandle {
     const client = this.connections.get(hostId);

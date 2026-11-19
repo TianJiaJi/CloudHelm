@@ -26,7 +26,6 @@ import { taskPreparation, assertPreparedInput, type PreparationSnapshot } from '
 import { authorizeTaskInput } from './task-input-authorization.js';
 import { interruptionContext } from './task-input-context.js';
 import { taskContextSnapshot } from './task-context.js';
-import { legacyRootSessionsEnabled } from './legacy-root-sessions.js';
 import { TaskProgress } from './task-progress.js';
 import { observeProgressTools } from './task-progress-observer.js';
 import { RequestBudgetError, PrivilegeError, privilegeGuidance, operationIntentKey, safeDiagnostic, serialCall, type ConversationSession, type SessionStorage, type DiagnosticEvent, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
@@ -152,7 +151,6 @@ export class TaskRunner {
       taskId: this.task.id, controlledFiles: this.executor.supportsFileTransactions, fileBinding: () => this.requestGeneration(), fileOperations: () => this.operationViews(),
       refused: (tool, code) => this.diagnostic({ event: 'tool.refused', tool, errorCode: code }),
       background: (signal, run) => this.background.withLifetime(signal, run),
-      legacyRootSessions: legacyRootSessionsEnabled(),
       ensureTerminal: async (id, sessionId) => {
         this.assertRemoteActive();
         if (sessionId) {

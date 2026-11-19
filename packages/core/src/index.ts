@@ -24,6 +24,7 @@ export { analyzeQueryImpact, type QueryImpact } from './command-query-impact.js'
 export { describeCommandReview, type CommandReviewReasonCode } from './command-review-reasons.js';
 export * from './redaction.js';
 export * from './sudo-plan.js';
+export * from './su-plan.js';
 export * from './clarification.js';
 export * from './diagnostics.js';
 export * from './sudo-outcome.js';

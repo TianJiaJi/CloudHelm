@@ -1,6 +1,15 @@
 import { expect, it, vi } from 'vitest';
+import { BashAnalyzer } from '../../packages/adapters/src/bash-analyzer.js';
+import { suPtyCommand } from '../../packages/core/src/su-plan.js';
 import type { NativePtyOutcome } from '../../packages/adapters/src/native-ssh-pty.js';
 import { SshCommandTerminal, type CommandTransport } from '../../packages/adapters/src/ssh-command-terminal.js';
+
+const analyzer = new BashAnalyzer();
+const suWrap = async (): Promise<string> => {
+  const wrapped = suPtyCommand(await analyzer.analyze('systemctl restart nginx'), '/srv');
+  if (!wrapped) throw new Error('fixture wrap failed');
+  return wrapped;
+};
 
 function fixture(exitCode = 0) {
   const prepareCommandProgram = vi.fn(), openPipe = vi.fn();
@@ -158,4 +167,75 @@ it('aborts the in-flight PTY session when the terminal closes', async () => {
   f.settle({ state: 'unknown', reason: 'aborted' });
   await executing;
   expect(f.exited).toHaveBeenCalledExactlyOnceWith(undefined);
+});
+
+it('dispatches the backend-built su wrap on the su-window PTY with a one-time marker prefix', async () => {
+  const f = ptyFixture({ state: 'exited', exitCode: 0, markerSeen: true, sudoMissing: false });
+  const wrapped = await suWrap();
+  const executing = f.terminal.execute(wrapped, '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
+  await vi.waitFor(() => expect(f.runNativePty).toHaveBeenCalledOnce());
+  expect(f.runNativePty).toHaveBeenCalledExactlyOnceWith('host', expect.objectContaining({
+    command: expect.stringMatching(/^printf '%s' 'cloudhelm:[a-f0-9]{32}'; su -l -s \/bin\/sh root -c /u),
+    cwd: '/', envPath: '/usr/bin/env', shellPath: '/bin/sh', window: 'su-window',
+    nonce: expect.stringMatching(/^[a-f0-9]{32}$/u) }),
+  expect.any(Function), expect.any(Object), expect.any(AbortSignal));
+  const hooks = f.hooks();
+  const id = 'c'.repeat(32);
+  hooks.authentication({ id, open: true });
+  expect(f.authentication).toHaveBeenCalledExactlyOnceWith({ id, prompt: 'su 身份验证' });
+  hooks.data('uid=0(root)\n');
+  expect(f.output).toHaveBeenCalledExactlyOnceWith('uid=0(root)\n');
+  await executing;
+  expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
+  expect(f.failure).not.toHaveBeenCalled();
+});
+
+it('classifies su authentication rejection as a user-action failure, guarded by the exit code', async () => {
+  const rejected = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, suAuthenticationFailed: true });
+  await rejected.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
+  expect(rejected.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'none', requiresUserAction: true,
+    privilege: { method: 'su', stage: 'authentication', code: 'authentication-rejected', source: 'transport',
+      businessCommand: 'not-started', recovery: 'user-action' } });
+  expect(rejected.exited).toHaveBeenCalledExactlyOnceWith(1);
+
+  // A payload echoing the failure text but exiting 0 must never pause the task.
+  const echoed = ptyFixture({ state: 'exited', exitCode: 0, markerSeen: true, sudoMissing: false, suAuthenticationFailed: true });
+  await echoed.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
+  expect(echoed.failure).not.toHaveBeenCalled();
+  expect(echoed.exited).toHaveBeenCalledExactlyOnceWith(0);
+});
+
+it('classifies a missing su or unknown target account as unsupported, passing business exits through', async () => {
+  const missing = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: true, sudoMissing: false, suMissing: true });
+  await missing.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
+  expect(missing.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'none',
+    privilege: { method: 'su', stage: 'preparation', code: 'unsupported', source: 'transport',
+      businessCommand: 'not-started', recovery: 'user-action' } });
+  expect(missing.exited).toHaveBeenCalledExactlyOnceWith(127);
+
+  const user = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, suUserMissing: true });
+  await user.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
+  expect(user.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'none',
+    privilege: { method: 'su', stage: 'preparation', code: 'unsupported', source: 'transport',
+      businessCommand: 'not-started', recovery: 'user-action' } });
+  expect(user.exited).toHaveBeenCalledExactlyOnceWith(1);
+
+  // A business-level 127 without su diagnostics is an ordinary failed command.
+  const business = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: true, sudoMissing: false });
+  await business.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
+  expect(business.failure).not.toHaveBeenCalled();
+  expect(business.exited).toHaveBeenCalledExactlyOnceWith(127);
+});
+
+it('rejects agent-supplied su forms and unprivileged wraps on the native PTY route', async () => {
+  for (const command of [await suWrap(), 'su root', `su -l -s /bin/sh root -c 'id'`]) {
+    const f = ptyFixture();
+    await expect(f.terminal.execute(command, '/', () => true, { executionChannel: 'native-pty' }), command)
+      .rejects.toThrow('no longer matches');
+    expect(f.runNativePty, command).not.toHaveBeenCalled();
+  }
+  const wrongChannel = ptyFixture();
+  await expect(wrongChannel.terminal.execute(await suWrap(), '/srv', () => true,
+    { executionChannel: 'native-exec', sudoAuthorization: true })).rejects.toThrow('no longer matches');
+  expect(wrongChannel.runNativePty).not.toHaveBeenCalled();
 });

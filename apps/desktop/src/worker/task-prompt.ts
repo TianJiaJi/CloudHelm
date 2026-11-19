@@ -5,7 +5,6 @@ import { operationOutcomeResolvable } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { agentPrompt } from './agent-prompt.js';
-import { legacyRootSessionsEnabled } from './legacy-root-sessions.js';
 import { mergeOperationViews } from './runtime-facts.js';
 import { reportRequiredOperations } from './task-completion.js';
 import { encodeBusinessFacts, requestBusinessFacts } from './request-business-facts.js';
@@ -15,7 +14,7 @@ import { encodeBusinessFacts, requestBusinessFacts } from './request-business-fa
 export function createTaskPrompt(task: TaskView, hosts: RuntimeHost[], operations: () => OperationView[],
   roundOperations: () => OperationView[], privileged?: PrivilegedTaskAccess, _hasReport: () => boolean = () => false,
   intent: () => TaskIntentState | undefined = () => task.intent, _submissionClosed: () => boolean = () => false,
-  environment?: HostEnvironmentAccess, legacyRootSessions: boolean = legacyRootSessionsEnabled()): () => string {
+  environment?: HostEnvironmentAccess): () => string {
   return () => {
     const owned = mergeOperationViews(operations()).filter((operation) => operation.taskId === task.id);
     const unresolvedCount = owned.filter(operationOutcomeResolvable).length;
@@ -34,7 +33,7 @@ export function createTaskPrompt(task: TaskView, hosts: RuntimeHost[], operation
       apply_remote_edit: remote ? 'conditional' : false, restore_remote_edit: remote ? 'conditional' : false,
       discard_remote_edit: remote ? 'conditional' : false, check_remote_edit: remote ? 'conditional' : false,
       list_remote_recovery: remote ? 'conditional' : false, cleanup_remote_recovery: remote ? 'conditional' : false,
-      upload_selected_file: remote && local.length > 0, request_root_session: remote && !!privileged && legacyRootSessions ? 'conditional' : false,
+      upload_selected_file: remote && local.length > 0,
       list_selected_directory: local.some((scope) => scope.kind === 'directory'), read_selected_text_file: local.length > 0,
       update_plan: 'conditional', ask_user: 'conditional', read_operation_log: owned.length > 0,
       record_reconciled_result: unresolvedCount > 0, submit_verification: false
