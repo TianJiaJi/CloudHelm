@@ -6,34 +6,18 @@ AI 对一个具体字面命令设置 `run_remote(privilege="root")`，无需准�
 
 固定传输组件针对本次命令执行内部非交互 `sudo -n -l -- <精确argv>`，并在查询结束后再次等待后台复核；该阶段没有业务派发，也不索密。列表策略不能代替命令认证策略：查询因需密码等原因不确定时不授权身份后备，复核后由原已审核命令自行通过 sudo 策略与认证。实际派发仍执行原 sudo 目标程序，不用 root Shell 包装业务命令。sudo 不可用或该命令被 sudo 授权拒绝，且传输证明未启动、无影响时，可提出受控 su，用户确认后新身份／新操作重新审核。没有 sudo 时建议配置而非强制安装，安装与 sudoers 修改必须另行授权。root SSH 仅显式选择，取消／拒绝／未知／部分影响不触发后备。
 
-密码不根据登录方式推测：免密路径不弹窗，认证仅接受可信通道事件。sudo 每个命令最多三次可信挑战，非交互列表查询不会消耗认证次数。root SSH 先完成指纹验证、认证协商；只有服务端认证请求或解析器确认的加密私钥需求才索密。无口令私钥及免密认证无需提问；密码／私钥口令最多三次尝试，失效后的回答不提交。隔离 su 最多三次，只有可信认证失败才重启尚未建立业务通道的认证进程。受控 su 依赖远端 Python、su/PAM及账户配置，未宣称所有平台可用。
+密码不根据登录方式推测：免密路径不弹窗，认证仅接受可信通道事件。sudo 每个命令最多三次可信挑战，非交互列表查询不会消耗认证次数。root SSH 先完成指纹验证、认证协商；只有服务端认证请求或解析器确认的加密私钥需求才索密。无口令私钥及免密认证无需提问；密码／私钥口令最多三次尝试，失效后的回答不提交。受控 su 每次派发只有单次密码窗口（注入上限 1）；认证失败由上层呈现，用户决定是否发起新派发，禁止 agent 盲试。受控 su 不再依赖远端 Python，依赖 su/PAM 及账户配置，未宣称所有平台可用。
 
-## 高级兼容上下文流程（非正常操作前置）
+## 受控 su 备选（legacy 上下文入口已移除）
 
-`request_root_session`保留工具名及历史兼容，显示为“申请受控提权上下文”。默认推荐sudo；root SSH、直接su只是用户明确确认的备选，不自动尝试。
+legacy `request_root_session` 工具与 `CLOUDHELM_LEGACY_ROOT_SESSIONS` 开关已随 P1a（2026-11-19）移除；模型侧正常入口只有 `run_remote(privilege="root")`。root SSH 仍仅显式选择，不自动尝试。
 
-```mermaid
-flowchart TD
-    A[申请提权上下文] --> B[用户确认，sudo排在首位]
-    B --> C[返回prepared sudo上下文，不运行命令或索取密码]
-    C --> D[AI提交具体业务命令]
-    D --> E[审核前规范化为实际sudo命令]
-    E --> F[SafetyGate审核实际内容、root目标身份、目录和代次]
-    F --> G[原普通SSH连接执行，sudo按需私密认证]
-    G --> H{反馈}
-    H -->|再次挑战| I[同一操作有界重输，最多3次]
-    I --> G
-    H -->|成功| J[返回真实结果]
-    H -->|授权限制或能力缺失| K[说明原因，用户确认其他方案]
-    H -->|取消、超时、次数耗尽| L[暂停，显式继续入口]
-    H -->|结果未知| M[保留未决，先核验，不重放]
-```
-
-- 默认sudo不等于自动批准；申请时的command只是用途说明，不会执行，也不运行sudo -l/-v/-n true探测。
-- sudo上下文返回`method=sudo,state=prepared,loginAs,targetRunAs=root,identityVerified=false`，不是已经登录root。每条命令在审核前规范化为`sudo -- <literal command>`；已有合法的root sudo命令不重复包装。
-- 不启动sudo bash、sudo su或sudo Python通用root代理。仅允许单条字面命令；复杂命令链、展开、管道、重定向、其他目标用户、嵌套认证及权限探测在该上下文中拒绝。
-- 目录仍必须可由登录用户访问，不悄悄更改cwd或使用额外root Shell；需要访问/root下文件时可从可访问目录使用绝对路径。
-- sudo/su不提升SFTP；文件需沿普通账户非秘密暂存、受审核安装等既有流程，或用户明确确认root SSH。不会无声降级成其他身份。
+- 受控 su 由结构化反馈触发：sudo 失败且传输证明业务未启动、无影响时，后端提出 su 备选，用户确认后本次业务命令被包装为单条字面 `su -c` 形态，经独立 SafetyGate 审核后在凭据绑定的 native PTY 上派发。无会话、无持久凭据、每次派发一个密码窗口。
+- 开窗条件：客户端生成的 nonce 标记（wrapper printf 前导、PTY ECHO=0、业务代码尚未运行，不可被 payload 伪造复现）＋ LC_ALL=C 下 `Password: ` 提示，双条件按序满足才开窗；状态机一次进出，注入后窗口立即关闭。
+- 失败分类：`su: Authentication failure` 为认证失败（pam_unix），BusyBox 变体同口径处理；用户不存在特征明确拒绝；超时／缺 exit-status 一律 unknown，不冒充认证失败，写锁不自动解除、不自动重放。
+- 不启动 sudo bash、sudo su 或通用 root Shell 代理。仅允许单条字面命令；复杂命令链、展开、管道、重定向、其他目标用户、嵌套认证及权限探测在 su 备选中拒绝。
+- 目录仍必须可由登录用户访问，不悄悄更改 cwd 或使用额外 root Shell；需要访问/root 下文件时可从可访问目录使用绝对路径。
+- sudo/su 不提升 SFTP；文件写入走操作级受控文件事务，或用户明确确认 root SSH。不会无声降级成其他身份。
 
 ## 认证与恢复
 
@@ -42,7 +26,7 @@ flowchart TD
 - 缓存只复用已验证凭据，最多5分钟且绑定任务、账户、主机、连接、终端、代次和策略；再次挑战时清除被拒缓存，暂停/断线/结束清除。
 - 每个单sudo操作最多3次挑战（包含缓存尝试），超时/取消/失效/晚到回答不会变成业务输入。到达上限就暂停，不能靠AI重开工具自动清零。
 - root SSH沿已选择认证方式建立独立连接，并重新验证主机身份；直接su弹窗明确说明通常需要root密码，不是登录账户的sudo密码。
-- 备选模式仍须验证root通道及`id -u`结果，成功才登记为已确认root会话；sudo prepared上下文不进入已确认root会话列表。
+- root SSH 会话仍须验证 root 通道及`id -u`结果，成功才登记为已确认root会话；受控 su 不再登记会话——每次派发独立审核、独立认证，成功仅绑定该次操作，不创建全主机持久能力标志。
 - 认证停止提供明确resumeReason和继续入口，但不会自动换身份、刷新请求预算或重放成功操作。产品SafetyGate拒绝不能通过其他身份绕过。
 
 ## 结构化反馈与证据边界
@@ -73,7 +57,7 @@ flowchart TD
 - `apps/desktop/src/worker/operation-input-bridge.ts`：复用私密认证、重输、凭据缓存及交互协调。
 - `packages/core/src/sudo-outcome.ts`：唯一sudo结果解释入口；`privilege.ts`只定义安全反馈类型和文字，不另造认证分类器。
 - `packages/adapters/src/ssh-command-terminal.ts`、`remote-command-program.ts`：固定执行协议、启动前错误与私密认证事件。
-- `packages/adapters/src/su-session.ts`、`su-session-program.ts`：su协议与有界错误码，保留密码/业务通道隔离。
+- `packages/adapters/src/native-ssh-pty.ts`、`packages/core/src/su-plan.ts`：su 窗口模式（双条件开窗、单次注入、一次进出）与 su 命令包装；`su-session.ts`／`su-session-program.ts` 生产路径已不引用，保留至 P3 统一删除。
 - Renderer只展示后端元数据，不决定是否换身份、清锁或执行。
 
 ## 验证边界
