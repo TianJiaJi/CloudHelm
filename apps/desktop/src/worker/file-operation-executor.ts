@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { FileTransactionRunner, RemoteFileError, RemoteFileMissingError, type FileSecretInput, type SshTransport } from '@cloudhelm/adapters';
+import { FileTransactionRunner, RemoteFileError, RemoteFileMissingError, type SshTransport } from '@cloudhelm/adapters';
 import { operationFingerprint, type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 import type { TerminalManager } from '@cloudhelm/application';
 import { LocalFileAccess } from './local-file-access.js';
@@ -11,10 +11,10 @@ export class FileOperationExecutor implements OperationExecutor {
   readonly supportsFileTransactions = true;
   private fileDriver?: FileTransactionRunner;
   constructor(private readonly terminal: TerminalManager, private readonly ssh: SshTransport,
-    private readonly commands: OperationExecutor, private readonly secret?: FileSecretInput) {}
+    private readonly commands: OperationExecutor) {}
   /** Built only for a controlled file operation, so ordinary, legacy and privileged
    * command paths never depend on the file driver being present. */
-  private driver(): FileTransactionRunner { return this.fileDriver ??= new FileTransactionRunner(this.ssh, this.secret); }
+  private driver(): FileTransactionRunner { return this.fileDriver ??= new FileTransactionRunner(this.ssh); }
 
   async execute(operation: ProposedOperation, fingerprint: string, signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
     if (operation.kind === 'command') return this.commands.execute(operation, fingerprint, signal, options);

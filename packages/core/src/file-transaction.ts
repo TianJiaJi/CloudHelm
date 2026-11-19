@@ -1,7 +1,21 @@
+/** v2: the digest set is the stat field summary only (size, mode, uid, gid,
+ * mtimeSec). It deliberately carries no ACL/xattr/device/inode promise; a v1
+ * digest from the retired Python driver never matches and is conservatively
+ * rejected instead of compared across formats. */
+import { createHash } from 'node:crypto';
+
 export interface FileInspection {
-  version: 1; path: string; content: string; sha256: string; metadataDigest: string; attributeDigest: string;
+  version: 2; path: string; content: string; sha256: string; metadataDigest: string; attributeDigest: string;
   executionUid: number; uid: number; gid: number; mode: number; size: number;
-  device: string; inode: string; commitSupported: boolean; limitation: string;
+  commitSupported: boolean; limitation: string;
+}
+/** Versioned stat summary: size, mode, uid, gid, mtimeSec. */
+export function fileMetadataDigest(input: { size: number; mode: number; uid: number; gid: number; mtimeSec: number }): string {
+  return createHash('sha256').update(JSON.stringify([2, input.size, input.mode, input.uid, input.gid, input.mtimeSec])).digest('hex');
+}
+/** Versioned attribute summary: owner, group, mode only. */
+export function fileAttributeDigest(input: { uid: number; gid: number; mode: number }): string {
+  return createHash('sha256').update(JSON.stringify([2, input.uid, input.gid, input.mode])).digest('hex');
 }
 export interface FileEditCommit {
   version: 1; action: 'apply' | 'restore'; transactionId: string;

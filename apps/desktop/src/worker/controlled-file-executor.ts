@@ -4,13 +4,16 @@ import type { ExecutionOptions, OperationResult, ProposedOperation } from '@clou
 
 type Operation = Extract<ProposedOperation, { kind: 'inspect-file' | 'write-file' | 'list-recovery' | 'cleanup-recovery' }>;
 export async function executeControlledFile(driver: FileTransactionRunner, operation: Operation, current: () => boolean,
-  signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
-  const reply = await driver.run(operation, current, signal);
+  _signal?: AbortSignal, options?: ExecutionOptions): Promise<OperationResult> {
+  const reply = await driver.run(operation, current);
   const readOnly = operation.kind === 'inspect-file' || operation.kind === 'list-recovery';
   const recovery = reply.recovery;
-  const location = recovery ? path.posix.join(path.posix.dirname(operation.path), `.cloudhelm-edit-${recovery.directoryId}`, 'entry')
-    : operation.kind === 'write-file' && operation.fileEdit ? path.posix.join(path.posix.dirname(operation.path),
-      `.cloudhelm-edit-${operation.fileEdit.backupTransactionId ?? operation.fileEdit.transactionId}`, 'entry') : undefined;
+  // Recovery material is the hard-linked backup file named by the transaction
+  // that created it; staging directories are removed once a commit settles.
+  const backupId = recovery?.directoryId ?? (operation.kind === 'write-file' ? operation.fileEdit?.transactionId
+    : operation.kind === 'inspect-file' ? operation.recoveryDirectoryId : undefined);
+  const location = backupId ? path.posix.join(path.posix.dirname(operation.path),
+    `${path.posix.basename(operation.path)}.cloudhelm-backup-${backupId}`) : undefined;
   if (reply.status === 'inspected' && reply.snapshot && current()) {
     options?.onFileInspection?.(reply.snapshot);
     return { operationId: operation.id, status: 'succeeded', exitCode: 0, effects: 'none', stdoutTail: 'Private file inspection completed; content is delivered only to the bound read handler.' };
@@ -35,7 +38,7 @@ export async function executeControlledFile(driver: FileTransactionRunner, opera
       stdoutTail: JSON.stringify({ status: 'cleaned', path: operation.path, removed, items: reply.items }) };
   }
   if (reply.status === 'committed' && recovery && current()) return { operationId: operation.id, status: 'succeeded', exitCode: 0,
-    fileRecovery: recovery, stdoutTail: `Exact content and owner/group/mode/ACL/xattr verified after atomic publication. Private metadata-preserving recovery entry: ${location}. Restore requires a new exact approval; this is not a service rollback.` };
+    fileRecovery: recovery, stdoutTail: `Exact content and owner/group/mode verified after atomic publication. Private metadata-preserving recovery backup: ${location}. Restore requires a new exact approval; this is not a service rollback.` };
   const effects = readOnly || reply.status === 'refused' && reply.effects === 'none' ? 'none' : 'possible';
   return { operationId: operation.id, status: effects === 'none' ? 'failed' : 'unknown', effects,
     failureKind: reply.authenticationFailed ? 'authentication-failed' : effects === 'none' ? 'not-dispatched' : 'unknown',

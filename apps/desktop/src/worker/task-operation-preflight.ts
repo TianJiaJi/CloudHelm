@@ -79,10 +79,9 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
       && analysis.calls.some((call) => call.name === 'python3' && !call.dynamic))
       return blockedOperationFeedback(operation.id, 'capability-blocked',
         'No command sent; effects: none. Current host facts report no python3 on the fixed execution PATH. Use an appropriate Shell command or prepare Python through an independently reviewed and authorized operation; do not retry the same unsupported command.');
-    if (pythonAbsent && !operation.scope.sessionId && (operation.kind === 'command' && operation.executionMode === 'background'
-      || ['write-file', 'inspect-file', 'list-recovery', 'cleanup-recovery'].includes(operation.kind)))
+    if (pythonAbsent && !operation.scope.sessionId && operation.kind === 'command' && operation.executionMode === 'background')
       return blockedOperationFeedback(operation.id, 'capability-blocked',
-        'No operation sent; effects: none. This supervised background or strict file transaction still needs the legacy remote Python driver. The plain native SSH path cannot safely replace its process or metadata guarantees yet; do not bypass with ordinary Shell writes or stops.');
+        'No command sent; effects: none. This supervised background command still needs the legacy remote Python driver. The plain native SSH path cannot safely replace its process guarantees yet; do not bypass it with ordinary Shell writes or stops.');
     // Refuse sudo capability probes before review: they deserve no approval card and no pause.
     if (analysis && isSudoStatusProbe(analysis)) return blockedOperationFeedback(operation.id, 'unsupported-probe',
       'No command sent; effects: none. sudo 状态/权限探测（sudo -n true、sudo -l、sudo -v 等）不被支持，也不能证明下一条 sudo 命令可用。请直接提交实际的有界 sudo 命令，私有认证通道会在需要时提示输入。');

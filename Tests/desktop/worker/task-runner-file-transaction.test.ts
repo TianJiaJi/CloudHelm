@@ -12,9 +12,9 @@ import { fixtureMessageText, openAiFixture } from './openai-sse-fixture.js';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 afterEach(() => vi.restoreAllMocks());
 it('uses native discovery and the production task/gate/file executor chain for reviewed apply and explicit restore', async () => {
-  let state: FileInspection = { version: 1, path: '/srv/config', content: 'port=80\n', sha256: hash('port=80\n'), metadataDigest: 'a'.repeat(64),
+  let state: FileInspection = { version: 2, path: '/srv/config', content: 'port=80\n', sha256: hash('port=80\n'), metadataDigest: 'a'.repeat(64),
     attributeDigest: 'f'.repeat(64), executionUid: 0, uid: 37, gid: 42, mode: 0o640, size: 8,
-    device: '10', inode: '1', commitSupported: true, limitation: '' };
+    commitSupported: true, limitation: '' };
   let backup: FileInspection | undefined;
   const driver = vi.spyOn(FileTransactionRunner.prototype, 'run').mockImplementation(async (operation) => {
     if (operation.kind === 'inspect-file') return { status: 'inspected', snapshot: structuredClone(operation.recoveryDirectoryId ? backup! : state) };

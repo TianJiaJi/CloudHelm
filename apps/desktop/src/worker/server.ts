@@ -96,11 +96,7 @@ export class WorkerServer {
         text: `已审核的安装操作在主机 ${hostId} 上需要普通继续确认，APT 报告 0 项删除，已自动回答 y。`, createdAt: Date.now() } }),
       (taskId, hostId, operationId) => this.post({ diagnostic: { event: 'authentication.reused', taskId, hostId, operationId } }));
     this.privileged = new PrivilegedRuntime({ terminal: this.terminal, ssh: this.ssh,
-      ordinary: new FileOperationExecutor(this.terminal, this.ssh, this.commands, (operation, signal, attempt) => this.requestPrivateInput({
-        taskId: operation.scope.taskId, hostId: operation.scope.hostId, operationId: operation.id, kind: 'secret',
-        title: `文件事务 sudo 身份验证（${attempt}/3）`,
-        explanation: `接收方：当前主机上本次文件事务的独立 sudo 认证进程；登录账号 ${operation.scope.loginAs ?? operation.scope.runAs}，终端代次 ${operation.scope.terminalGeneration}。密码不进入模型、文件正文、普通输入或日志；取消不会切换身份或重放。`
-      }, signal)),
+      ordinary: new FileOperationExecutor(this.terminal, this.ssh, this.commands),
       jump: (host) => host.jumpHostId ? this.hosts.get(host.jumpHostId) : undefined,
       input: (request, signal) => this.requestPrivateInput(request, signal) });
     this.executor = new HostSerialExecutor(new PermissionAwareExecutor(this.privileged, new BashAnalyzer(), Date.now,

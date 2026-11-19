@@ -13,9 +13,9 @@ import type { RemoteToolDependencies } from '../../../apps/desktop/src/worker/re
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 afterEach(() => vi.restoreAllMocks());
 function fixture() {
-  let state: FileInspection = { version: 1, path: '/srv/config', content: 'port=80\n', sha256: hash('port=80\n'),
+  let state: FileInspection = { version: 2, path: '/srv/config', content: 'port=80\n', sha256: hash('port=80\n'),
     metadataDigest: 'a'.repeat(64), attributeDigest: 'f'.repeat(64), executionUid: 0, uid: 37, gid: 42, mode: 0o640,
-    size: 8, device: '10', inode: '1', commitSupported: true, limitation: '' };
+    size: 8, commitSupported: true, limitation: '' };
   let backup: FileInspection | undefined, generation = 'initial', allowed = true, unknown = false;
   const operations: OperationView[] = [], dispatched: ProposedOperation[] = [];
   const terminal = new TerminalManager({ data() {}, state() {} });
@@ -32,7 +32,7 @@ function fixture() {
     if (unknown) return { status: 'unknown', effects: 'possible', code: 'private-channel-interrupted' };
     const before = structuredClone(state);
     state = { ...(operation.fileEdit.action === 'restore' ? backup! : state), content: operation.content,
-      sha256: hash(operation.content), metadataDigest: 'b'.repeat(64), inode: operation.fileEdit.action === 'restore' ? '1' : '2' };
+      sha256: hash(operation.content), metadataDigest: 'b'.repeat(64) };
     backup = { ...before, metadataDigest: 'c'.repeat(64) };
     return { status: 'committed', snapshot: state, recovery: { version: 1, directoryId: operation.fileEdit.backupTransactionId ?? operation.fileEdit.transactionId,
       path: state.path, beforeSha256: before.sha256, beforeMetadataDigest: backup.metadataDigest,

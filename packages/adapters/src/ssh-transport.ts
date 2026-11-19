@@ -425,6 +425,12 @@ export class SshTransport {
     return withSftpSession(client, action, { signal, isCurrent: () => this.connections.get(hostId) === client });
   }
 
+  /** Client-side SFTP scope for controlled file transactions; expiry or a
+   * connection change revokes all later I/O inside the action. */
+  async withSftpSession<T>(hostId: string, action: (sftp: SFTPWrapper, assertActive: () => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    return this.withSftp(hostId, action, signal);
+  }
+
   private async checkSafeParent(sftp: SFTPWrapper, absolutePath: string): Promise<void> {
     if (!path.posix.isAbsolute(absolutePath) || absolutePath === '/') throw new Error('An absolute file path is required');
     const parts = path.posix.dirname(absolutePath).split('/').filter(Boolean);

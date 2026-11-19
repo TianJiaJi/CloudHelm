@@ -38,8 +38,10 @@ it('refuses a PATH python3 command before review when a current connection prove
     .toMatchObject({ operation: { command: '/opt/python3 -c "print(1)"' } });
   expect(await taskOperationPreflight({ ...command('job', 'sleep 30'), executionMode: 'background' }, { ...deps([]), environment }))
     .toMatchObject({ isError: true, details: { code: 'capability-blocked', effects: 'none' } });
-  expect(await taskOperationPreflight({ id: 'inspect', kind: 'inspect-file', path: '/srv/config', scope: scope() }, { ...deps([]), environment }))
-    .toMatchObject({ isError: true, details: { code: 'capability-blocked', effects: 'none' } });
+  // Strict file transactions no longer need the legacy Python driver: without
+  // python3 they stay dispatchable through SFTP/shell routes.
+  await expect(taskOperationPreflight({ id: 'inspect', kind: 'inspect-file', path: '/srv/config', scope: scope() }, { ...deps([]), environment }))
+    .resolves.toMatchObject({ operation: { kind: 'inspect-file' } });
 });
 
 it('treats a repeated effect-free observation as a new observation, not a replayed change', async () => {

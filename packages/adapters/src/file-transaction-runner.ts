@@ -1,37 +1,16 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { FILE_TRANSACTION_HASH, FILE_TRANSACTION_UUID, validRecoveryEntryName,
-  type FileInspection, type FileRecovery, type ProposedOperation, type RecoveryCleanupResult, type RecoveryEntry } from '@cloudhelm/core';
+import { randomUUID } from 'node:crypto';
+import { FILE_TRANSACTION_HASH, FILE_TRANSACTION_UUID, type FileRecovery } from '@cloudhelm/core';
 import { SshCommandTerminal } from './ssh-command-terminal.js';
 import type { SshTransport } from './ssh-transport.js';
-import { remoteFileProgram } from './remote-file-program.js';
+import { runFileCommand } from './file-native-command.js';
+import { sftpFileTransaction } from './sftp-file-transaction.js';
+import { shellFileInspection } from './shell-file-inspection.js';
+import { fileActionOf, refused, validEditFor, FileRefused,
+  type FileDriverReply, type FileOperation } from './file-transaction-protocol.js';
 
-type FileOperation = Extract<ProposedOperation, { kind: 'write-file' | 'inspect-file' | 'list-recovery' | 'cleanup-recovery' }>;
-export type FileSecretInput = (operation: FileOperation, signal: AbortSignal, attempt: number) => Promise<string | null>;
-export interface FileDriverReply { status: 'inspected' | 'committed' | 'listed' | 'cleaned' | 'refused' | 'unknown';
-  snapshot?: FileInspection; recovery?: FileRecovery; entries?: RecoveryEntry[]; truncated?: boolean; items?: RecoveryCleanupResult[];
-  code?: string; effects?: 'none' | 'possible'; authenticationFailed?: boolean }
-const quote = (text: string) => `'${text.replace(/'/gu, `'"'"'`)}'`;
-const hash = (value: Buffer) => createHash('sha256').update(value).digest('hex');
-const REPLY_CODE = /^[a-z0-9-]{1,120}$/u;
+export type { FileDriverReply, FileOperation } from './file-transaction-protocol.js';
 
-function inspection(raw: any, path: string, root: boolean): FileInspection {
-  if (!raw || raw.version !== 1 || raw.path !== path || !FILE_TRANSACTION_HASH.test(raw.sha256)
-    || !FILE_TRANSACTION_HASH.test(raw.metadataDigest) || !FILE_TRANSACTION_HASH.test(raw.attributeDigest)
-    || typeof raw.contentBase64 !== 'string' || raw.contentBase64.length > 1_398_104
-    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(raw.contentBase64)
-    || !['uid', 'gid', 'mode', 'executionUid', 'size'].every((key) => Number.isSafeInteger(raw[key]) && raw[key] >= 0)
-    || raw.size > 1_048_576 || raw.mode > 0o7777 || root && raw.executionUid !== 0
-    || !['device', 'inode'].every((key) => typeof raw[key] === 'string' && /^\d{1,24}$/u.test(raw[key]))
-    || typeof raw.commitSupported !== 'boolean' || typeof raw.limitation !== 'string' || raw.limitation.length > 128
-    || raw.commitSupported && (raw.executionUid !== 0 || raw.limitation !== '' || (raw.mode & 0o7000) !== 0))
-    throw new Error('Invalid private inspection receipt');
-  const bytes = Buffer.from(raw.contentBase64, 'base64'), content = bytes.toString('utf8');
-  if (bytes.length !== raw.size || hash(bytes) !== raw.sha256 || !Buffer.from(content).equals(bytes) || content.includes('\0'))
-    throw new Error('File is not complete UTF-8 text');
-  return { version: 1, path, content, sha256: raw.sha256, metadataDigest: raw.metadataDigest, attributeDigest: raw.attributeDigest,
-    uid: raw.uid, gid: raw.gid, mode: raw.mode, executionUid: raw.executionUid, size: raw.size,
-    device: raw.device, inode: raw.inode, commitSupported: raw.commitSupported, limitation: raw.limitation };
-}
+/** Structural guard for recovery receipts persisted with the operation record. */
 export function validFileRecovery(value: any, path?: string): value is FileRecovery {
   const fields = ['version', 'directoryId', 'path', 'beforeSha256', 'beforeMetadataDigest', 'afterSha256', 'afterMetadataDigest'];
   return !!value && Object.keys(value).length === fields.length && Object.keys(value).every((key) => fields.includes(key))
@@ -39,130 +18,81 @@ export function validFileRecovery(value: any, path?: string): value is FileRecov
     && value.path.startsWith('/') && value.path.length <= 4096 && !/[\u0000-\u001f\u007f]/u.test(value.path)
     && (!path || value.path === path) && fields.slice(3).every((key) => typeof value[key] === 'string' && FILE_TRANSACTION_HASH.test(value[key]));
 }
-/** Bounded listing receipt; metadata rows only, content is never included. */
-function recoveryEntries(raw: any): RecoveryEntry[] {
-  if (!Array.isArray(raw) || raw.length > 128) throw new Error('Invalid recovery listing');
-  return raw.map((item: any) => {
-    if (!item || typeof item !== 'object' || typeof item.name !== 'string' || !validRecoveryEntryName(item.name)
-      || (item.kind !== 'edit-directory' && item.kind !== 'backup-file')
-      || !Number.isSafeInteger(item.size) || item.size < 0 || item.size > 1_048_576
-      || !Number.isSafeInteger(item.mtimeMs) || item.mtimeMs < 0) throw new Error('Invalid recovery listing');
-    return { name: item.name, kind: item.kind, size: item.size, mtimeMs: item.mtimeMs };
-  });
-}
-/** Per-name cleanup receipt; every requested name must have exactly one definitive row. */
-function recoveryItems(raw: any): RecoveryCleanupResult[] {
-  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 16) throw new Error('Invalid cleanup receipt');
-  return raw.map((item: any) => {
-    if (!item || typeof item !== 'object' || typeof item.name !== 'string' || !validRecoveryEntryName(item.name)
-      || !['removed', 'missing', 'refused'].includes(item.result)
-      || (item.result !== 'refused' && item.code !== undefined)
-      || (typeof item.code === 'string' && !REPLY_CODE.test(item.code))) throw new Error('Invalid cleanup receipt');
-    return { name: item.name, result: item.result, ...(typeof item.code === 'string' ? { code: item.code } : {}) };
-  });
-}
 
-/** Private supervised process: stdout and launch argv never enter terminal/audit
- * logs. Only the SDK's trusted sudo challenge reaches the operation-bound UI. */
+const UID_PATTERN = /^\d{1,10}\n?$/u;
+
+/** Routes controlled file operations onto the SFTP transaction (route A) or the
+ * shell-only degraded inspection set (route B). Probes are cached per
+ * connection generation: a reconnect re-probes, a stable connection does not. */
 export class FileTransactionRunner {
-  constructor(private readonly ssh: SshTransport, private readonly secret?: FileSecretInput,
-    private readonly factory = (host: string) => new SshCommandTerminal(ssh, host)) {}
-  async run(operation: FileOperation, current: () => boolean, signal?: AbortSignal): Promise<FileDriverReply> {
-    const edit = operation.kind === 'write-file' ? operation.fileEdit : undefined;
-    const action = operation.kind === 'inspect-file' ? operation.recoveryDirectoryId ? 'inspect-backup' : 'inspect'
-      : operation.kind === 'list-recovery' ? 'list-recovery'
-      : operation.kind === 'cleanup-recovery' ? 'cleanup-recovery' : edit?.action;
-    if (!action || !current()) return { status: 'refused', effects: 'none', code: 'authorization-expired' };
-    const root = operation.privilege === 'root', nonce = randomUUID().replaceAll('-', '');
-    const transactionId = edit?.transactionId ?? randomUUID();
-    const request = { version: 1, nonce, action, path: operation.path, root, transactionId,
-      ...(operation.kind === 'inspect-file' ? { backupTransactionId: operation.recoveryDirectoryId }
-        : operation.kind === 'list-recovery' ? {} : operation.kind === 'cleanup-recovery' ? { names: operation.names } : {
-        expectedSha256: operation.expectedSha256, expectedMetadataDigest: edit!.expectedMetadataDigest,
-        expectedExecutionUid: edit!.expectedExecutionUid, backupTransactionId: edit!.backupTransactionId,
-        expectedBackupMetadataDigest: edit!.expectedBackupMetadataDigest, contentBase64: Buffer.from(operation.content).toString('base64') }) };
-    const payload = JSON.stringify(request) + '\n';
-    if (Buffer.byteLength(payload) > 2 * 1_048_576) return { status: 'refused', effects: 'none', code: 'request-too-large' };
-    const raw = this.factory(operation.scope.hostId), controller = new AbortController();
-    const sudo = root && operation.scope.loginAs !== 'root';
-    const command = `${sudo ? 'sudo -- ' : ''}/usr/bin/python3 -I -S -B -c ${quote(remoteFileProgram)} ${quote(nonce)}`;
-    let sent = false, active = true, buffer = '', reply: FileDriverReply | undefined, attempts = 0;
-    let challenge: { id: string; controller: AbortController } | undefined;
-    let failure: { effects?: 'none' | 'possible'; failureKind?: string } | undefined;
-    let finish!: (value: FileDriverReply) => void;
-    const done = new Promise<FileDriverReply>((resolve) => { finish = (value) => { if (!active) return; active = false; resolve(value); }; });
-    const unknown = (): FileDriverReply => ({ status: sent && !['inspect', 'inspect-backup', 'list-recovery'].includes(action) ? 'unknown' : 'refused',
-      effects: sent && !['inspect', 'inspect-backup', 'list-recovery'].includes(action) ? 'possible' : 'none', code: 'private-channel-interrupted', ...(!sent && (sudo && attempts > 0 || failure?.failureKind === 'authentication-failed') ? { authenticationFailed: true } : {}) });
-    const stop = () => { controller.abort(); finish(unknown()); raw.close(); };
-    signal?.addEventListener('abort', stop, { once: true });
-    const timer = setTimeout(stop, 180_000);
-    const lease = setInterval(() => { if (!current()) stop(); }, 100);
-    raw.onDisplay(() => {});
-    raw.onExecutionFailure((value) => { failure = value; });
-    raw.onAuthentication((value) => {
-      if (!active) return;
-      if (!value.prompt) { if (challenge?.id === value.id) { challenge.controller.abort(); challenge = undefined; } return; }
-      if (!sudo || !this.secret || challenge || ++attempts > 3 || !current()) {
-        raw.answerAuthentication(value.id, null);
-        finish(sent ? unknown() : { status: 'refused', effects: 'none', code: 'authentication-stopped', authenticationFailed: true }); stop(); return;
-      }
-      const entry = { id: value.id, controller: new AbortController() }; challenge = entry;
-      const authSignal = AbortSignal.any([controller.signal, entry.controller.signal]);
-      void Promise.resolve().then(() => this.secret!(operation, authSignal, attempts)).then((answer) => {
-        if (challenge !== entry || !active || !current() || authSignal.aborted) return;
-        challenge = undefined;
-        if (answer === null || !raw.answerAuthentication(entry.id, answer)) {
-          finish(sent ? unknown() : { status: 'refused', effects: 'none', code: 'authentication-canceled', authenticationFailed: true }); stop();
-        }
-      }).catch(() => { if (challenge === entry && active) { finish(sent ? unknown() : { status: 'refused', effects: 'none', code: 'authentication-unavailable', authenticationFailed: true }); stop(); } });
-    });
-    raw.onData((text) => {
-      if (!active) return;
-      buffer += text;
-      if (Buffer.byteLength(buffer) > 2 * 1_048_576) { stop(); return; }
-      let newline: number;
-      while ((newline = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
-        try {
-          const value = JSON.parse(line);
-          if (value.ready === nonce && !sent && Object.keys(value).length === 1) {
-            if (!current()) { stop(); return; }
-            sent = true;
-            for (let i = 0; i < payload.length; i += 1024) raw.write(payload.slice(i, i + 1024));
-          } else if (value.nonce === nonce && sent && ['inspected', 'committed', 'listed', 'cleaned', 'refused', 'unknown'].includes(value.status)) {
-            if (reply) throw new Error('Duplicate receipt');
-            if (value.status === 'inspected' || value.status === 'committed') {
-              const snapshot = inspection(value.snapshot, operation.path, root);
-              if (value.status === 'committed' && (operation.kind !== 'write-file' || snapshot.sha256 !== hash(Buffer.from(operation.content))
-                || snapshot.attributeDigest !== edit!.expectedAttributeDigest || snapshot.executionUid !== edit!.expectedExecutionUid || !validFileRecovery(value.recovery, operation.path)
-                || value.recovery.beforeSha256 !== operation.expectedSha256 || value.recovery.afterSha256 !== snapshot.sha256
-                || value.recovery.afterMetadataDigest !== snapshot.metadataDigest
-                || value.recovery.directoryId !== (edit!.backupTransactionId ?? edit!.transactionId))) throw new Error('Commit receipt does not match approved content');
-              reply = { status: value.status, snapshot, ...(value.recovery ? { recovery: value.recovery } : {}) };
-            } else if (value.status === 'listed') {
-              reply = { status: 'listed', entries: recoveryEntries(value.entries), ...(value.truncated === true ? { truncated: true } : {}) };
-            } else if (value.status === 'cleaned') {
-              const items = recoveryItems(value.items);
-              if (operation.kind !== 'cleanup-recovery' || items.length !== operation.names.length
-                || !operation.names.every((name) => items.some((item) => item.name === name))) throw new Error('Cleanup receipt does not match approved names');
-              reply = { status: 'cleaned', items };
-            } else reply = { status: value.status, effects: value.status === 'refused' && value.effects === 'none' ? 'none' : 'possible',
-              code: typeof value.code === 'string' && REPLY_CODE.test(value.code) ? value.code : 'file-operation-refused' };
-          } else throw new Error('Invalid private file protocol');
-        } catch { stop(); }
-      }
-    });
-    raw.onExit((code) => finish(code === 0 && reply ? reply : !sent && failure?.effects === 'none'
-      ? { status: 'refused', effects: 'none', code: 'file-helper-not-started', authenticationFailed: failure.failureKind === 'authentication-failed' } : unknown()));
-    raw.onClose(() => finish(unknown()));
+  private readonly sftpProbes = new Map<string, { generation: number; available: boolean }>();
+  private readonly uidProbes = new Map<string, { generation: number; uid: number }>();
+
+  constructor(private readonly ssh: SshTransport,
+    private readonly factory = (hostId: string) => new SshCommandTerminal(this.ssh, hostId)) {}
+
+  async run(operation: FileOperation, current: () => boolean): Promise<FileDriverReply> {
+    const action = fileActionOf(operation);
+    if (!action || !current()) return refused('authorization-expired');
+    const write = action === 'apply' || action === 'restore';
+    if (write && !validEditFor(action, operation.kind === 'write-file' ? operation.fileEdit : undefined))
+      return refused('invalid-commit');
+    const hostId = operation.scope.hostId;
+    const generation = this.ssh.connectionGeneration(hostId);
+    const sftpAvailable = await this.probeSftp(hostId, generation);
+    if (write && !sftpAvailable) return refused('sftp-required-for-controlled-writes');
+    // One private terminal per run: every literal file command shares it and it
+    // is revoked once the transaction settles, whatever the outcome.
+    const terminal = this.factory(hostId);
     try {
-      if (signal?.aborted || !current()) stop();
-      else void raw.execute(command, operation.scope.cwd, current, { sudoAuthorization: sudo }).catch(() => finish(sent ? unknown()
-        : { status: 'refused', effects: 'none', code: 'file-helper-unavailable' }));
-      return await done;
+      const executionUid = await this.probeExecutionUid(terminal, operation, hostId, generation, current);
+      if (executionUid === undefined) return refused('execution-identity-unavailable');
+      if (operation.privilege === 'root' && executionUid !== 0) return refused('root-identity-unconfirmed');
+      const runCommand = (command: string, timeoutMs?: number) =>
+        runFileCommand(terminal, command, operation.scope.cwd, current, timeoutMs);
+      const context = { operation, action,
+        edit: operation.kind === 'write-file' ? operation.fileEdit : undefined,
+        transactionId: operation.kind === 'write-file' ? operation.fileEdit?.transactionId ?? randomUUID() : randomUUID(),
+        executionUid, runCommand };
+      const reply = sftpAvailable
+        ? sftpFileTransaction({ ...context, sftp: (work) => this.ssh.withSftpSession(hostId, work) })
+        : shellFileInspection(context);
+      return reply;
+    } catch (error) {
+      if (error instanceof FileRefused) return refused(error.code);
+      // A channel death the route could not settle: a write may have partially
+      // applied, a read-only route provably changed nothing.
+      return { status: 'unknown', effects: write ? 'possible' : 'none', code: 'file-transaction-interrupted' };
     } finally {
-      active = false; clearTimeout(timer); clearInterval(lease); signal?.removeEventListener('abort', stop);
-      controller.abort(); challenge?.controller.abort(); raw.close();
+      terminal.close();
     }
+  }
+
+  /** SFTP availability is structural per connection: subsystem support does not
+   * appear mid-connection, so one probe per generation settles the route. */
+  private async probeSftp(hostId: string, generation: number): Promise<boolean> {
+    const cached = this.sftpProbes.get(hostId);
+    if (cached?.generation === generation) return cached.available;
+    let available = false;
+    try {
+      await this.ssh.withSftpSession(hostId, async (_sftp, assertActive) => { assertActive(); });
+      available = true;
+    } catch { available = false; }
+    this.sftpProbes.set(hostId, { generation, available });
+    return available;
+  }
+
+  /** The effective identity of the execution channel; every ownership decision
+   * in both routes is bound to this one observed value. */
+  private async probeExecutionUid(terminal: SshCommandTerminal, operation: FileOperation,
+    hostId: string, generation: number, current: () => boolean): Promise<number | undefined> {
+    const cached = this.uidProbes.get(hostId);
+    if (cached?.generation === generation) return cached.uid;
+    const outcome = await runFileCommand(terminal, 'id -u', operation.scope.cwd, current, 15_000);
+    if (outcome.state !== 'exited' || outcome.exitCode !== 0) return undefined;
+    const uid = Number(outcome.output.trim());
+    if (!UID_PATTERN.test(outcome.output) || !Number.isSafeInteger(uid) || uid < 0) return undefined;
+    this.uidProbes.set(hostId, { generation, uid });
+    return uid;
   }
 }
