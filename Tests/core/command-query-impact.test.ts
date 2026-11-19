@@ -8,6 +8,7 @@ const scope: OperationScope = { taskId: 'task', hostId: 'host', cwd: '/srv/app',
 
 it.each(['ss -ltnp', 'ip -br addr show', 'lsblk -o NAME,SIZE,TYPE', 'lscpu --json', 'nproc --all',
   'ping -c 1 -W 2 example.test', 'df -h && free -m', 'id; ls -ld /srv/app',
+  'du -xsh /var/lib/docker', 'du -sh /srv/app', 'du /srv/app/data',
   'ping -c 1 -W 1 192.0.2.1 || ping -c 1 -W 1 192.0.2.2'])('uses the same effect proof to permit bounded query %s', async (command) => {
   const parsed = await analyzer.analyze(command);
   expect(analyzeQueryImpact(parsed)).toMatchObject({ effects: 'none', autoApproval: 'eligible' });
@@ -31,6 +32,7 @@ it.each(['timeout 10s df -h', 'timeout -k 5s 10s df -h', 'timeout --foreground 1
 it.each(['nohup uptime', 'setsid df -h', 'xargs ls', 'command -p df -h', 'exec df -h',
   'env FOO=bar df -h', 'env -S "A=1" df -h',
   'env -C /tmp df -h', 'time -o /tmp/timing.txt ls', 'exec -a custom df -h',
+  'du --apparent-size -sh /srv/app', 'du -xsh /var/lib/docker > /tmp/usage.txt',
   'timeout 10s rm -rf /tmp/x', 'timeout 10s df -h; touch /tmp/changed'])('keeps unproven launchers and wrapper options out of auto-approval: %s', async (command) => {
   expect(analyzeQueryImpact(await analyzer.analyze(command))).toMatchObject({ effects: 'unknown', autoApproval: 'review-required' });
 });

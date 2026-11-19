@@ -7,7 +7,7 @@ import { DIAGNOSTIC_QUERY_PROGRAMS, isBoundedDiagnosticCall } from './diagnostic
 import { queryPipelineStatus, type QueryPipelineStatus } from './query-pipeline-policy.js';
 import { commandReviewReasons, type CommandReviewReasonCode } from './command-review-reasons.js';
 
-const QUERY_COMMANDS = new Set(['pwd', 'whoami', 'id', 'uname', 'uptime', 'date', 'df', 'free', 'hostname', 'ls', 'stat', 'cat']);
+const QUERY_COMMANDS = new Set(['pwd', 'whoami', 'id', 'uname', 'uptime', 'date', 'df', 'du', 'free', 'hostname', 'ls', 'stat', 'cat']);
 export const BAD_DISK_TOOLS: ReadonlySet<string> = new Set(['mkfs', 'mkfs.ext4', 'mkfs.xfs', 'mkswap', 'wipefs', 'sfdisk', 'fdisk', 'parted', 'blkdiscard']);
 export const PROJECT_CODE_COMMANDS: ReadonlySet<string> = new Set(['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'pip', 'pip3', 'make', 'gmake', 'cmake', 'ninja', 'meson']);
 
