@@ -3,7 +3,6 @@ import { EventEmitter } from 'node:events';
 import type { Client, ClientChannel } from 'ssh2';
 import { afterEach, expect, it, vi } from 'vitest';
 import { EXECUTION_PATH, HOST_ENVIRONMENT_SHELL_PROBE, HostEnvironmentProbeError, parseShellHostEnvironment, probeHostEnvironment } from '../../packages/adapters/src/host-environment-probe.js';
-import { remoteCommandProgram } from '../../packages/adapters/src/remote-command-program.js';
 
 const facts = ['os=Linux', 'architecture=x86_64', 'kernel=6.1', 'username=fixture', 'uid=1000',
   'directory=/home/fixture', 'distribution=debian', 'version=12', 'tool.python3=1', 'tool.systemctl=0'].join('\n');
@@ -34,7 +33,6 @@ it('resolves tool presence against the same fixed PATH that command execution us
   // The PATH literal is single-quoted inside the POSIX-escaped `sh -c '...'` wrapper.
   expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain(`PATH='\\''${EXECUTION_PATH}'\\''`);
   expect(HOST_ENVIRONMENT_SHELL_PROBE).toContain('command -v "$tool"');
-  expect(remoteCommandProgram).toContain(`PATH='${EXECUTION_PATH}'`);
 });
 it('uses a fixed, isolated POSIX shell probe with no runtime, elevation, sourcing or environment enumeration', () => {
   expect(HOST_ENVIRONMENT_SHELL_PROBE.startsWith("sh -c '")).toBe(true);

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PrivilegedSessions, type SafetyGate, type TerminalManager } from '@cloudhelm/application';
-import { BashAnalyzer, SshAuthenticationError, SshCommandTerminal, SshTransport } from '@cloudhelm/adapters';
+import { BashAnalyzer, SshAuthenticationError, SshTransport } from '@cloudhelm/adapters';
+import { NativeSessionTerminal } from '@cloudhelm/adapters';
 import { PrivilegeError, sudoContextCommand, type PrivilegeMethod } from '@cloudhelm/core';
 import type { ExecutionOptions, OperationExecutor, OperationResult, OperationIntent, ProposedOperation, RawTerminal } from '@cloudhelm/core';
 import type { InputRequestView } from '@cloudhelm/contracts';
@@ -8,6 +9,7 @@ import { runtimeSshCredentials } from '@cloudhelm/contracts/runtime';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { FileOperationExecutor } from './file-operation-executor.js';
+import { SudoSessionCredentials } from './privileged-sudo-credentials.js';
 
 class DeferredTerminal implements RawTerminal {
   target?: RawTerminal;
@@ -54,6 +56,7 @@ interface Entry {
   id: string; taskId: string; host: RuntimeHost; mode: PrivilegeMethod; terminalId: string;
   raw: DeferredTerminal; controller: AbortController; sourceGeneration: number;
   ssh?: SshTransport; executor?: OperationExecutor; probeId: string;
+  credentials?: SudoSessionCredentials;
 }
 interface Dependencies {
   terminal: TerminalManager; ssh: SshTransport; ordinary: OperationExecutor;
@@ -132,11 +135,22 @@ export class PrivilegedRuntime implements OperationExecutor {
       const grant = this.grants.begin(taskId, host.id, choice === '使用 sudo（推荐）' ? 'sudo' : choice === 'SSH 登录 root' ? 'ssh' : 'su');
       const raw = new DeferredTerminal(() => this.close(grant.id));
       const terminalId = this.deps.terminal.open(host.id, raw, taskId, cwd);
-      entry = { id: grant.id, taskId, host, mode: grant.mode, raw, terminalId, controller: grant.controller, sourceGeneration, probeId };
+      const created: Entry = { id: grant.id, taskId, host, mode: grant.mode, raw, terminalId, controller: grant.controller, sourceGeneration, probeId };
+      entry = created;
       this.entries.set(entry.id, entry);
       if (entry.mode === 'sudo') {
         entry.executor = this.deps.ordinary;
-        raw.attach(new SshCommandTerminal(this.deps.ssh, host.id));
+        // Native session dispatch: the reviewed command is rebuilt as
+        // `sudo -k -S` and the password travels only through the exec
+        // channel's stdin. Nothing is placed on the host.
+        entry.credentials = new SudoSessionCredentials({ input: this.deps.input });
+        raw.attach(new NativeSessionTerminal(this.deps.ssh, host.id, {
+          credential: ({ command }) => created.credentials!.obtain({
+            taskId, hostId: host.id, hostLabel: host.label, sessionId: created.id, command,
+            signal: created.controller.signal
+          }),
+          rejected: () => created.credentials?.reject()
+        }));
         controller.signal.throwIfAborted();
         return { sessionId: entry.id, method: 'sudo', state: 'prepared', loginAs: host.username, targetRunAs: 'root', identityVerified: false };
       }
@@ -248,13 +262,16 @@ export class PrivilegedRuntime implements OperationExecutor {
     const transport = ssh;
     entry.executor = new FileOperationExecutor(this.deps.terminal, ssh, this.deps.terminal);
     current();
-    entry.raw.attach(new SshCommandTerminal(transport, entry.host.id));
+    // Root-login identity is inherited from the transport; commands dispatch
+    // verbatim over the native exec channel with zero remote placement.
+    entry.raw.attach(new NativeSessionTerminal(transport, entry.host.id));
   }
 
   private close(id: string): void {
     const entry = this.entries.get(id);
     if (!entry) return;
     this.entries.delete(id); this.grants.close(id);
+    entry.credentials?.close();
     if (this.deps.terminal.hostOf(entry.terminalId)) this.deps.terminal.close(entry.terminalId);
     entry.ssh?.close();
   }

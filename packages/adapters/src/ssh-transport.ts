@@ -1,4 +1,3 @@
-import { openSshControlPipe } from './ssh-control-pipe.js';
 import { withSftpSession } from './ssh-sftp-session.js';
 import { readBoundedSftpFile } from './sftp-read.js';
 import { runFixedSshCommand } from './ssh-fixed-exec.js';
@@ -225,7 +224,7 @@ export class SshTransport {
 
   /** Native exec primitive; never authorizes itself or retries an unknown dispatch. */
   async runNativeExec(hostId: string, input: { command: string; cwd: string; envPath: string; shellPath: string },
-    authorized: () => boolean, hooks: { stdout(data: Buffer): void; stderr(data: Buffer): void }, signal?: AbortSignal): Promise<NativeExecOutcome> {
+    authorized: () => boolean, hooks: { stdout(data: Buffer): void; stderr(data: Buffer): void; stdin?(write: (data: Buffer) => void, end: () => void): void }, signal?: AbortSignal): Promise<NativeExecOutcome> {
     const client = this.connections.get(hostId);
     if (!client) return { state: 'not-dispatched', reason: 'authorization-expired' };
     const generation = this.connectionGeneration(hostId);
@@ -247,39 +246,6 @@ export class SshTransport {
         && this.connectionGeneration(hostId) === generation; }
       catch { return false; }
     }, hooks, signal);
-  }
-
-  async openPipe(hostId: string, command: string): Promise<ClientChannel> {
-    const client = this.connections.get(hostId);
-    if (!client) throw new Error('Host is not connected');
-    const generation = this.connectionGeneration(hostId);
-    return openSshControlPipe(client, command, () => this.connections.get(hostId) === client && this.connectionGeneration(hostId) === generation);
-  }
-
-  /** Installs only the fixed process transport, never model-authored scripts or secrets. */
-  async prepareCommandProgram(hostId: string, source: string, assertAuthorized: () => void): Promise<string> {
-    assertAuthorized();
-    const result = await this.execFixed(hostId, 'command -v python3 && mktemp -d /tmp/cloudhelm-run.XXXXXXXX');
-    const lines = result.output.trim().split(/\r?\n/u);
-    const directory = lines[1];
-    if (result.exitCode !== 0 || lines.length !== 2 || !lines[0]?.startsWith('/')
-      || !directory || !/^\/tmp\/cloudhelm-run\.[A-Za-z0-9]+$/u.test(directory)) {
-      const detail = redactOutput(result.output).trim().slice(-300);
-      throw new Error(`远端命令通道准备失败（exit ${result.exitCode}）：需要可解析的 python3 且 /tmp 可写${detail ? `；远端输出：${detail}` : ''}`);
-    }
-    const script = `${directory}/process.py`;
-    try {
-      await this.withSftp(hostId, (sftp) => this.writeSftpFile(sftp, script, Buffer.from(source), 0o700, assertAuthorized));
-      return script;
-    } catch (error) {
-      await this.removeCommandProgram(hostId, script).catch(() => {});
-      throw error;
-    }
-  }
-
-  async removeCommandProgram(hostId: string, script: string): Promise<void> {
-    if (!/^\/tmp\/cloudhelm-run\.[A-Za-z0-9]+\/process\.py$/u.test(script)) throw new Error('Invalid command transport path');
-    await this.execFixed(hostId, `rm -f -- ${script}; rmdir -- ${path.posix.dirname(script)}`);
   }
 
   startManualKeepalive(hostId: string, options: ManualShellOptions, canRun: () => boolean, notice: (message: string) => void): () => void {

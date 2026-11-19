@@ -4,6 +4,8 @@
 
 > **状态更新（2026-11-19）**：本文件为暂停交接时的快照。此后修正指令已裁决并实施：P0-A 已提交（`cb6476a`），P0-B（native-pty 通道、sudo 密码客户端 PTY 注入、apt 提示分流）已实施并通过串行全量回归与构建；实施记录见 [NATIVE_SSH_DIRECTIVE_REVIEW.md](NATIVE_SSH_DIRECTIVE_REVIEW.md) 第七、八节，下文"尚未完成"条目以各期实施记录为准。
 
+> **状态更新（2026-11-20）**：P1a／P1b（`84d4bd8`／`4410002`，su native-pty 派发与 SFTP／纯 shell 文件事务）、P2（`c0cdb84`，原生后台作业模块）与 P3（本提交）已完成。远端 Python 基础设施（process.py 放置、内联驱动、su-session、文件程序）全部删除，sessionId 提权会话派发原生化，sudo 会话凭据仅存 worker 内存并经专用 stdin 注入；前台路由收编旧驱动前台域，残余不合格形式派发前 fail-closed。实施记录见 DIRECTIVE_REVIEW 第九节。下文快照条目除 H03 真机验收外均已由各期记录覆盖；H03 三链真机验收仍待隔离 VM。
+
 ## 已落地（未提交）
 
 - Agent 普通、非特权、单步、可解析的前台命令：`task-operation-preflight.ts` 选择 `native-exec`；SafetyGate 重分析验证；通道写入 `operationFingerprint` 与 `OperationView`；`TerminalManager` 经 `SshCommandTerminal` 使用 `SshTransport.runNativeExec`，固定 `/usr/bin/env -i`、`/bin/sh` 和受控 PATH/cwd。启动前以固定只读 SSH 命令检查工具，不再为这类命令放置 `process.py`。输出有上限；channel 关闭、信号、撤权或未观察到退出码维持 unknown，不自动重放。

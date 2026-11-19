@@ -22,11 +22,11 @@ vi.mock('@cloudhelm/adapters', async (importOriginal) => ({
     }
     close() { state.close(); }
   },
-  SshCommandTerminal: class {
-    data = (_value: string) => {}; exit = (_code: number) => {};
+  NativeSessionTerminal: class {
+    data = (_value: string) => {}; exit = (_code: number | undefined) => {};
     onData(callback: typeof this.data) { this.data = callback; }
     onExit(callback: typeof this.exit) { this.exit = callback; }
-    onClose() {} onDisplay() {} resize() {} write() {} close() {}
+    onClose() {} onExecutionFailure() {} resize() {} write() {} close() {}
     async execute(command: string, _cwd: string, current: () => boolean) {
       if (!current()) throw new Error('expired');
       state.commands.push(command); this.data(command === 'id -u' ? `${state.uid}\n` : 'done\n'); this.exit(0);

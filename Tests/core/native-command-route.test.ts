@@ -8,15 +8,28 @@ const base: ProposedOperation = { id: 'route', kind: 'command', command: 'id -u'
 } };
 const analyzer = new BashAnalyzer();
 
-it('routes only a literal foreground single command without privileged or opaque execution', async () => {
+it('routes every analyzable literal foreground form to native exec and refuses opaque or hidden forms', async () => {
   expect(nativeCommandEligible(base, await analyzer.analyze(base.command))).toBe(true);
+  // The old Python driver's foreground domain moves to native exec unchanged:
+  // compounds, pipelines, redirections and interpreter invocations stay
+  // reviewable call by call instead of losing their only transport.
+  for (const command of ['id -u | cat', 'id -u; whoami', 'df -h && free -m', 'ss -ltnp | grep -F nginx',
+    'ps aux | grep nginx | head -n 20', 'test -e /tmp && echo ok', 'sleep 300 > /tmp/out',
+    'python3 /srv/test.py', 'python3 -c "print(1)"', 'docker build .', 'apt list --installed']) {
+    expect(nativeCommandEligible({ ...base, command }, await analyzer.analyze(command)), command).toBe(true);
+  }
+  // Expansions, opaque syntax, detached launches, wrappers and packager
+  // transactions keep their own channel or none at all.
   for (const command of ['sudo id', 'env sudo id', 'busybox sh -c "sudo id"', 'nohup sleep 30',
-    'sh -c "id -u"', 'python3 -c "print(1)"', 'id -u | cat',
-    'id -u; whoami', 'id -u &', 'echo "$HOME"']) {
+    'id -u &', 'echo "$HOME"', 'sleep $(printf 300)', 'apt-get install -y docker.io',
+    'sudo id; sudo whoami']) {
     expect(nativeCommandEligible({ ...base, command }, await analyzer.analyze(command)), command).toBe(false);
   }
   expect(nativeCommandEligible({ ...base, executionMode: 'background' }, await analyzer.analyze(base.command))).toBe(false);
-  expect(nativeCommandEligible({ ...base, privilege: 'root' }, await analyzer.analyze(base.command))).toBe(false);
+  // A bare root marker survives the route: preflight only sees privilege-root
+  // operations after the privilege planner proved the login identity, and the
+  // sudo/su rewrites it produces are caught by the wrapper check above.
+  expect(nativeCommandEligible({ ...base, privilege: 'root' }, await analyzer.analyze(base.command)), 'proved root identity').toBe(true);
 });
 
 it('binds the reviewed route but not replay intent to the transport choice', () => {
@@ -32,9 +45,16 @@ it('routes only one literal background command to the native background launch',
   // The mode is mandatory: foreground commands never take this channel.
   expect(nativeBackgroundEligible(base, await analyzer.analyze('sleep 300')), 'foreground').toBe(false);
   for (const command of ['nohup sleep 300', 'setsid sleep 300', 'timeout 30 sleep 300', 'nice sleep 300',
-    'sh -c "sleep 300"', 'python3 -c "import time; time.sleep(300)"', 'sleep 300 &', 'sleep 300; id',
-    'sleep 300 | cat', 'sleep 300 > /tmp/out', 'sleep "$DURATION"', 'sudo sleep 300']) {
+    'sleep 300 &', 'sleep 300; id',
+    'sleep 300 | cat', 'sleep 300 > /tmp/out', 'sleep "$DURATION"', 'sudo sleep 300',
+    'apt-get install -y docker.io']) {
     expect(nativeBackgroundEligible({ ...background, command }, await analyzer.analyze(command)), command).toBe(false);
+  }
+  // Single literal interpreter launches keep the native background channel:
+  // the reviewed text is embedded into the setsid launch unchanged and the
+  // code-execution review treats them as writes, exactly like the foreground.
+  for (const command of ['python3 -c "import time; time.sleep(300)"', 'python3 -m http.server 8080']) {
+    expect(nativeBackgroundEligible({ ...background, command }, await analyzer.analyze(command)), command).toBe(true);
   }
   expect(nativeBackgroundEligible({ ...background, privilege: 'root' }, await analyzer.analyze('sleep 300')), 'root request').toBe(false);
   expect(nativeBackgroundEligible({ ...background, processControl: { kind: 'interrupt', jobId: 'job',

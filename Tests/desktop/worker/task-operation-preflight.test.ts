@@ -29,12 +29,10 @@ it('routes only a single literal background command to the native background cha
   await expect(taskOperationPreflight(command('foreground', 'sleep 300'), deps([]))).resolves.toMatchObject({ operation: { executionChannel: 'native-exec' } });
   for (const text of ['nohup sleep 300', 'sleep 300; id -u', 'sleep 300 > /tmp/out', 'sleep $(printf 300)']) {
     const result = await taskOperationPreflight({ ...command('ineligible', text), executionMode: 'background' as const }, deps([]));
-    expect(result, text).toMatchObject({ operation: { command: text } });
-    expect(result, text).not.toHaveProperty('operation.executionChannel');
+    expect(result, text).toMatchObject({ isError: true, details: { code: 'native-channel-unavailable', effects: 'none' } });
   }
   const apt = await taskOperationPreflight({ ...command('apt', 'apt update'), executionMode: 'background' as const }, deps([]));
-  expect(apt).toMatchObject({ operation: { command: 'apt update' } });
-  expect(apt).not.toHaveProperty('operation.executionChannel');
+  expect(apt).toMatchObject({ isError: true, details: { code: 'native-channel-unavailable', effects: 'none' } });
 });
 
 it('refuses a PATH python3 command before review when a current connection proves it absent', async () => {
@@ -48,6 +46,8 @@ it('refuses a PATH python3 command before review when a current connection prove
     .toMatchObject({ isError: true, details: { code: 'capability-blocked', effects: 'none' } });
   expect(await taskOperationPreflight(command('shell', 'id -u'), { ...deps([]), environment }))
     .toMatchObject({ operation: { executionChannel: 'native-exec' } });
+  // An explicit-path python3 is a literal analyzable command: without observed
+  // absence it routes through native exec like any other foreground command.
   expect(await taskOperationPreflight(command('explicit', '/opt/python3 -c "print(1)"'), { ...deps([]), environment }))
     .toMatchObject({ operation: { command: '/opt/python3 -c "print(1)"' } });
   expect(await taskOperationPreflight({ ...command('job', 'sleep 30'), executionMode: 'background' as const }, { ...deps([]), environment }))
@@ -113,26 +113,28 @@ it('binds one literal sudo command to the credential-bound native PTY', async ()
   }
   const prompted = await taskOperationPreflight(command('prompted', 'sudo -p "x" id'), deps([]));
   expect(prompted).toMatchObject({ isError: true, details: { code: 'unsupported-authentication-form' } });
+  // Compound sudo has no native channel anymore; the legacy Python driver is gone.
   const compound = await taskOperationPreflight(command('compound', 'sudo id; sudo whoami'), deps([]));
-  expect(compound).toMatchObject({ operation: { command: 'sudo id; sudo whoami' } });
-  expect(compound).not.toHaveProperty('operation.executionChannel');
+  expect(compound).toMatchObject({ isError: true, details: { code: 'native-channel-unavailable', effects: 'none' } });
 });
 
-it('keeps apt transactions on the reviewed legacy channel instead of native exec', async () => {
-  // A prompting transaction would strand its [Y/n] on a stdin-less channel, and
-  // -y transactions or apt update still run package maintainer scripts, which the
-  // static review treats as code execution; neither ever takes native exec.
+it('refuses channel-less apt transactions before review while static apt queries stay native', async () => {
+  // The legacy remote Python driver is gone, so an apt transaction without a
+  // native channel is refused before review: packager maintainer scripts keep
+  // apt off native exec, and a prompting transaction would strand its [Y/n].
   for (const text of ['apt install docker.io', 'apt-get remove nano', 'apt upgrade', 'apt full-upgrade',
     'apt-get dist-upgrade', 'apt autoremove', 'apt purge nano', 'apt reinstall curl',
     'apt-get install -y docker.io', 'apt update']) {
     const result = await taskOperationPreflight(command('apt-transaction', text), deps([]));
-    expect(result, text).toMatchObject({ operation: { command: text } });
-    expect(result, text).not.toHaveProperty('operation.executionChannel');
+    expect(result, text).toMatchObject({ isError: true, details: { code: 'native-channel-unavailable', effects: 'none' } });
   }
   for (const text of ['apt list --installed', 'apt-cache policy nginx']) {
     const result = await taskOperationPreflight(command('apt-static', text), deps([]));
     expect(result, text).toMatchObject({ operation: { command: text, executionChannel: 'native-exec' } });
   }
+  // The compliant privileged form keeps its single-literal native PTY channel.
+  const privileged = await taskOperationPreflight(command('apt-sudo', 'sudo apt-get install -y docker.io'), deps([]));
+  expect(privileged).toMatchObject({ operation: { executionChannel: 'native-pty' } });
 });
 
 it('routes the backend-built privilege-root su wrap to the native PTY and refuses agent-supplied su', async () => {

@@ -94,7 +94,14 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
     if (analysis && operation.kind === 'command' && !operation.scope.sessionId && operation.executionChannel !== 'native-pty'
       && !inputPlan(analysis)
       && analysis.calls.some((call) => /(?:^|\/)(?:sudo|su)$/u.test(call.name))) return blockedOperationFeedback(operation.id, 'unsupported-authentication-form',
-        'No command sent; effects: none. This sudo/su command form is unsupported by the private authentication channel (including sudo pipelines and redirections). Do not wrap or switch tools to bypass this limit. Submit the actual bounded sudo operation as one reviewed command, or explain that manual handling is required.');
+        'No command sent; effects: none. This sudo/su command form is unsupported by the private authentication channel (including sudo pipelines and redirections). Do not wrap it or switch tools to bypass this result. Submit the actual bounded sudo operation as one reviewed command, or explain that manual handling is required.');
+    // The legacy remote Python driver is gone; every dispatched command needs a
+    // native channel or a confirmed privileged session. Any remaining form is
+    // refused before review with concrete alternatives, never silently routed
+    // to a fallback transport.
+    if (operation.kind === 'command' && !operation.scope.sessionId && !operation.processControl && !operation.executionChannel)
+      return blockedOperationFeedback(operation.id, 'native-channel-unavailable',
+        'No command sent; effects: none. 此命令形式没有原生执行通道：远端 Python 驱动已移除。改写为不含变量/命令展开或 env/nohup/timeout/setsid 等包装器的字面量命令，apt 事务添加 --yes，多条或复合 sudo 拆成逐条已审核命令，或改用已确认的提权会话。Do not wrap or reformat the command to bypass this limit.');
 
   return { operation };
 }

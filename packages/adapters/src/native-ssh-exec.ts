@@ -16,6 +16,10 @@ export function runNativeSshExec(client: Pick<Client, 'exec'>, input: {
   command: string; cwd: string; envPath: string; shellPath: string;
 }, current: () => boolean, hooks: {
   stdout(data: Buffer): void; stderr(data: Buffer): void;
+  /** Optional one-shot stdin handoff, invoked after the channel is open and
+   * re-authorized and before any output is delivered. The writer stays valid
+   * until the outcome settles; later writes are dropped. */
+  stdin?(write: (data: Buffer) => void, end: () => void): void;
 }, signal?: AbortSignal, startupTimeoutMs = 15_000): Promise<NativeExecOutcome> {
   const rendered = renderNativeExecCommand(input);
   if (signal?.aborted || !current()) return Promise.resolve({ state: 'not-dispatched', reason: 'authorization-expired' });
@@ -56,6 +60,12 @@ export function runNativeSshExec(client: Pick<Client, 'exec'>, input: {
         stream.stderr.on('data', (data: Buffer) => deliver(data, hooks.stderr));
         stream.stderr.on('error', () => finish({ state: 'unknown', reason: 'channel-error' }));
         stream.on('error', () => finish({ state: 'unknown', reason: 'channel-error' }));
+        if (hooks.stdin) {
+          try {
+            hooks.stdin((data) => { if (!settled) { try { stream.write(data); } catch { finish({ state: 'unknown', reason: 'channel-error' }); } } },
+              () => { if (!settled) { try { stream.end(); } catch { /* The close outcome stays authoritative. */ } } });
+          } catch { finish({ state: 'unknown', reason: 'channel-error' }); }
+        }
         stream.on('exit', (code: number | null, name?: string, coreDumped?: boolean) => {
           exit = Number.isInteger(code) && code !== null && code >= 0 && code <= 255
             ? { state: 'exited', exitCode: code }

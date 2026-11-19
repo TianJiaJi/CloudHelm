@@ -24,6 +24,22 @@ export function sudoTarget(call: CommandCall): { name: string; args: string[]; r
   return { name: args[index]!, args: args.slice(index + 1), runAs };
 }
 
+/** Options of the sudo process itself: only the flags before the target command
+ * (or `--`) can override the prompt or move the password to another helper.
+ * Target arguments like `mkdir -p` must not disqualify the whole command. */
+export function sudoOwnOptions(call: CommandCall): string[] {
+  if (!isSudo(call)) return [];
+  const args = call.args;
+  let index = 0;
+  while (index < args.length) {
+    const option = args[index]!;
+    if (['-n', '--non-interactive', '-k', '--reset-timestamp', '-H', '--set-home', '-A', '--askpass', '-S', '--stdin'].includes(option)) { index++; continue; }
+    if (['-p', '--prompt', '-u', '--user', '-g', '--group'].includes(option) && index + 1 < args.length) { index += 2; continue; }
+    break;
+  }
+  return args.slice(0, index);
+}
+
 /** Prepare the exact operation BEFORE approval; never add elevation in an executor. */
 export function sudoContextCommand(analysis: CommandAnalysis): string {
   const step = analysis.steps?.[0]?.call;
@@ -57,6 +73,33 @@ export function sudoMarkerPrompt(nonce: string): string {
   return `\rcloudhelm:${nonce} password: `;
 }
 
+/** Fixed, client-chosen prompt for the session stdin channel. sudo -S writes it
+ * to stderr once per authentication attempt; the session terminal counts
+ * occurrences to fail fast on a rejected password instead of blocking. */
+export const SUDO_SESSION_PROMPT = '[sudo] CloudHelm password: ';
+
+/** Rebuild one literal sudo command for the session stdin-injection channel:
+ * `sudo -k -S -p <fixed prompt> <reviewed args>`. The password itself is never
+ * part of the rendered text — it is written once to the exec channel's stdin by
+ * the dispatching terminal. Returns undefined when the parsed form carries an
+ * option that would defeat stdin injection (non-interactive, askpass, a
+ * caller-supplied prompt or stdin selector); the caller must then not dispatch
+ * on this route. */
+export function sudoSessionCommand(analysis: CommandAnalysis): string | undefined {
+  const call = analysis.steps?.[0]?.call;
+  if (!call || !isSudo(call) || call.dynamic || call.redirects) return undefined;
+  if (analysis.hasError || analysis.hasPipeline || analysis.hasRedirection || analysis.steps?.length !== 1) return undefined;
+  if (sudoOwnOptions(call).some((arg) => ['-p', '--prompt', '-A', '--askpass', '-S', '--stdin', '-n', '--non-interactive'].includes(arg))) return undefined;
+  const target = sudoTarget(call);
+  if (!target || target.runAs !== 'root' || !supportsSudo(analysis)
+    || ['true', '/bin/true', '/usr/bin/true'].includes(target.name)
+    || /(?:^|\/)(?:sudo|su)$/u.test(target.name)) return undefined;
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  if (/[\u0000\u000a]/u.test(SUDO_SESSION_PROMPT) || SUDO_SESSION_PROMPT.length > 128) return undefined;
+  const reset = call.args.includes('-k') || call.args.includes('--reset-timestamp') ? '' : '-k ';
+  return `sudo ${reset}-S -p ${quote(SUDO_SESSION_PROMPT)}${call.args.length ? ` ${call.args.map(quote).join(' ')}` : ''}`;
+}
+
 /** Rebuild one literal sudo command for the credential-bound native PTY with the
  * client-owned marker prompt. Returns undefined when the parsed form carries an
  * option that would override the marker or move the password to another helper;
@@ -67,7 +110,7 @@ export function sudoPtyCommand(analysis: CommandAnalysis, markerPrompt: string):
   // A rebuild that silently dropped pipe or redirection content would dispatch a
   // different command than the one reviewed; such forms never take this route.
   if (analysis.hasError || analysis.hasPipeline || analysis.hasRedirection || analysis.steps?.length !== 1) return undefined;
-  if (call.args.some((arg) => ['-p', '--prompt', '-A', '--askpass'].includes(arg))) return undefined;
+  if (sudoOwnOptions(call).some((arg) => ['-p', '--prompt', '-A', '--askpass'].includes(arg))) return undefined;
   if (/[\u0000\u000a]/u.test(markerPrompt) || markerPrompt.length > 128) return undefined;
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   const reset = call.args.includes('-k') || call.args.includes('--reset-timestamp') ? '' : '-k ';

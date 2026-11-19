@@ -182,3 +182,32 @@
 | su 认证失败 | `su: Authentication failure`（随发行版/PAM 配置） | — | 失败分类按窗口子串匹配，实测后定稿 |
 | BusyBox su | `Password: ` 简化形态，非 PAM | — | 无 Python 主机典型环境，实测补证 |
 | doas | `doas: password for <user>:` | — | 不在通道范围（wrappers 黑名单已含） |
+
+## 九、P3 实施记录（2026-11-20）
+
+### A. 落地改动
+
+1. **零放置收口（C17 口径：删除全部"我方放置物"）**：删除 `remote-command-program.ts`、`remote-file-program.ts`、`su-session-program.ts`、`su-session.ts`、`ssh-control-pipe.ts`、`ssh-process-signal.ts` 及 `ssh-transport.ts` 的 process.py 放置逻辑；SFTP 仅保留 P1b 文件事务路线 A 使用。零放置核验只排除系统自身写入（sudo `/var/db/sudo/ts`、lastlog/wtmp 等）。默认 Python 驱动、内联程序、临时放置目录至此全部清除，无兼容开关、无自动回退。
+2. **sessionId 提权会话派发原生化（`native-session-terminal.ts` 新增 + `privileged-runtime.ts` 切换）**：sudo 会话以 `sudoSessionCommand` 重建为 `sudo -k -S -p <固定提示>`，密码经 exec channel stdin 单次注入；root 登录会话继承传输身份逐字执行；每次派发前固定只读工具检查；授权过期、连接代次变化、终端关闭一律不派发。
+3. **sudo 会话凭据缓存（`privileged-sudo-credentials.ts` 新增）**：密钥仅存 worker 进程内存（单一零填充 Buffer＋15 分钟 TTL）；一次用户确认（绑定主机、会话、具体命令的 secret 输入）后仅在本会话复用；被拒、断线、会话结束、任务停止立即清除。密钥只进入会话专用 stdin 注入通道，不进命令文本、argv、日志、审计正文或模型上下文（B11 红线不变）。
+4. **前台路由加宽（本轮核心决策）**：旧 Python 驱动的前台域——复合列表、管道、重定向与单字面量解释器调用——收编入 native-exec。依据：P3 阻断清单不含这些形式；迁移契约验收切片明确 `python3 -c` "有能力时仍按写入／不确定性路由审核"，路由若直接拒绝则切断该契约；查询证明功能与约 28 个既有测试依赖这些形式。审查语义不变：查询证明仍证只读，解释器／代码执行仍按写入审核（`isPackagerTransaction` 导出复用，apt maintainer 脚本仍排除）。排除项不变：变量／命令展开、不透明语法、`&` 脱离、wrapper 黑名单、包管理事务、sessionId、processControl。`privilege='root'` 标记不再被路由排除：preflight 只在特权规划器改写后（sudo/su 包装被 wrapper 检查拦截）或 root 登录身份已证时见到该标记，保留标记维持 safety.ts 的 high-impact 审查严格度。
+5. **`sudoOwnOptions` 位置感知检查**：原朴素 `-p` 参数检查把目标命令自身选项（`mkdir -p`）误判为 sudo 提示符覆盖；新增 helper 只检查目标（或 `--`）之前 sudo 自身的选项，`sudoPtyCommand`／`sudoSessionCommand`／`nativePtySudoEligible` 三处统一改用。
+6. **后台通道收编解释器**：`nativeBackgroundEligible` 以 `isPackagerTransaction` 取代 `hasCodeExecution` 排除——`python3 -m http.server 8080` 等单字面量解释器后台命令走 native-background（审核文本原样单次嵌入 setsid 启动），仍按写入审核。
+7. **preflight fail-closed 阻断块**：远端 Python 驱动删除后，无原生通道的残余形式（wrapper、展开、脱离、复合 sudo、apt 交互不合规等）在审核卡之前以 `native-channel-unavailable`（effects:none）阻断并给出具体替代（字面量改写、apt 加 `--yes`、拆分逐条、已确认提权会话）。
+8. **契约与镜像同步**：`executionChannel` 通道集合、SafetyGate gate 内镜像复核、`ssh-command-terminal` 分派分支随路由更新。
+
+### B. 测试同步
+
+- 删除 12 个针对已删模块／放置协议的测试文件（remote-program-syntax、remote-command-program、remote-file-program、su-session-protocol、su-session.integration、ssh-control-pipe、ssh-process-signal、ssh-process-start、ssh-startup-deadline、sudo-command-authorization、sudo-terminal.integration、file-transaction-fixture.py）。
+- 新增 `Tests/adapters/native-session-terminal.test.ts` 与 `Tests/core/sudo-plan.test.ts` 扩展共 17 例（会话身份继承、`-S` stdin 注入、被拒清除、`--` 后选项归属）；新增 `Tests/desktop/worker/privileged-sudo-credentials.test.ts` 6 例（TTL、拒绝、畸形应答、绑定展示）。
+- 适配既有断言：`native-command-route.test.ts`（加宽正反例、后台解释器、root 标记）、`task-operation-preflight.test.ts`（阻断分类）、`privileged-runtime.test.ts`（原生会话）、`task-runner-*`、`ssh-command-terminal.test.ts`、`ssh-transport.test.ts`、`host-environment-probe.test.ts`。
+
+### C. 验证结果
+
+- 按目录串行全覆盖（`--no-file-parallelism`）：core 28 文件／376 项；desktop/worker 108 文件／640 项（638 通过／2 跳过）；adapters＋application 101 文件／1103 项（1099 通过／4 跳过）；contracts／evaluation／scripts／smoke 20 文件／137 项；desktop 非 worker 66 文件／600 项。合计 **323 文件／2856 项：2850 通过／6 跳过，零失败**。
+- `pnpm typecheck`、`pnpm lint`、`pnpm lint:lines`、`pnpm lint:tests`、`pnpm lint:deps`（801 模块／3288 依赖零违规）、`pnpm version:check`（0.2.4）、`pnpm changelog:check`、`pnpm build` 全部通过。
+
+### D. 残余与后续
+
+- H03 三链真机验收（含 P2 后台启动→观察→精确停止链）与 su/sudo 提示特征表 VM 实测定稿待用户隔离 VM；本地证据不替代真机验收。
+- 已知限制如实记录：apt 交互事务不进 native-exec（`--yes` 走 native-exec，提示型经 native-pty 桥答复）；复合／多步 sudo 派发前阻断（拆成逐条已审核命令）；sudo 会话凭据缓存限单 worker 进程内存，断线／会话结束即清除。
