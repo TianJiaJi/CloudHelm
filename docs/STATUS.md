@@ -22,7 +22,11 @@
 
 明确降级边界（写入 [CONTROLLED_FILE_EDITS.md](CONTROLLED_FILE_EDITS.md)）：无 `renameat2 RENAME_EXCHANGE`（POSIX rename 原子性＋先行硬链接备份）；v2 摘要为 stat 字段集，不再含 xattr/inode flags，不冒充完整属性指纹；无内核级 O_NOFOLLOW 全程防护（SFTP stat 前后一致＋极简字面提交命令＋读回复核承担）；SFTP 禁用主机 apply/restore capability-blocked（effects:none）。
 
-后续待验收：H03 三链真机验收（含 P2 后台启动→观察→精确停止链）与 su/sudo 提示特征表 VM 实测定稿待用户隔离 VM；本地测试通过不代表真实主机验收。本轮未访问生产主机／真实模型／个人凭据；无依赖、数据库迁移或 PROMPT_VERSION 变化。
+### H03 真机验收状态（2026-11-20，UI 重构期间冻结）
+
+用户隔离 VM（无 python3 最小 Linux，用户 `tian`）真机验收已开始：**链 1（前台诊断）通过**——`uname -r`/`df -hT`/`free -h`/`ss -tuln`/`ss -tulnp` 全部零放置 native-exec、low-risk-command 直过、exit 0；`du` 白名单修复 `f1bdeec` 同机验证。**链 2（配置→校验→服务健康）中断**于 VM sudo 认证 3 次拒绝（疑 VM 账户密码未设置，待控制台 `sudo -k && sudo -v` 人工复验）；staging 文件经 structured-file 规则写入且读回哈希一致，目标未创建，无系统目录写入。**链 3（后台→观察→精确停止）未开始**。
+
+真机暴露安全缺口 **SG-1（已记录未修复）**：`sudo install … /etc/systemd/system/*.service` 被 `ordinary-command` 规则自动放行（securityConfiguration 不覆盖 `/etc/systemd/system`；`systemctl`/`install` 在 ORDINARY_COMMANDS 白名单内 sudo 包装后无条件放行，含 `sudo systemctl stop sshd` 类服务可用性操作）；修复方向与接续清单见 [NATIVE_SSH_HANDOFF.md](NATIVE_SSH_HANDOFF.md) 的「H03 真机验收中断交接」节。UI 重构完毕后按该节接续，三链全过前 H03 不结项。
 
 ## 本轮最终验收与隔离预览
 

@@ -28,8 +28,52 @@
 - 最新一次完整回归 `b84419315` 已依用户要求主动停止；它的部分输出不可当作全量通过证据。更早迁移回归 `b98aa9b96` 退出 0，发生于上述后续小改动之前。
 - 未执行 VM 真机和付费模型验收；没有提交、推送或重置工作树。继续前先运行 `git status --short`，区分既有未提交修改与本次新增文件。
 
-## 下一位建议顺序
+## H03 真机验收中断交接（2026-11-20，UI 重构期间冻结，完毕后接续）
 
-1. 先复核工作树 diff、安全门/原生通道/能力归档边界；对当前代码跑局部测试、串行全量、类型、静态门禁与构建，修复任何实际回归。重点测试 `Tests/application/native-ssh-gate.test.ts`、`Tests/adapters/native-*.test.ts`、`Tests/desktop/worker/task-operation-preflight.test.ts`、`Tests/desktop/main/host-capability-record.test.ts`、SQLite 升级与回滚。
-2. 在私密认证边界获明确设计决定前，不要删 Python sudo；保留 `capability-blocked`。优先实现可证明等价的文件事务能力探测与后台协议；受限主机不满足条件时失败关闭。
-3. 有合规私密输入入口、用户允许的隔离 VM 和明确授权后，先验收无 Python 的真实只读原生命令，再按文件/服务及后台能力逐段验收 H03；未知结果先核验不重放。最后更新旧进度账并按用户要求做中文本地提交，不自动推送。
+用户已提供隔离 VM 并授权真机验收；链 1 通过后转入 UI 重构，验收在链 2 中断点冻结。接续人从本节起步，不需要回溯聊天记录。
+
+### 环境
+
+- 隔离 VM：无 python3 的最小 Linux，SSH 用户 `tian`（在 sudoers 内），主机已录入应用、指纹经用户独立核对（应用内 hostId `a7f1eda4-3855-4152-bd08-06148d74575f`）。凭据只在应用私密输入内，不在任何文档/源码/聊天。
+- 模型：deepseek-flash（已配置可用）；任务走 `run_remote` 等远端工具。
+- 桌面开发态启动：仓库根 `pnpm dev`（后台启动可用 `pnpm dev *> <临时日志>`）。
+- 诊断日志：`%APPDATA%\@cloudhelm\desktop\logs\dev\runtime.jsonl`（JSON 每行一条，`operation.proposed`/`operation`/`review.result`/`authentication.open|close`；命令正文不进日志——防泄露设计）。会话转录：`%APPDATA%\@cloudhelm\desktop\pi-sessions\<taskId>\<时间戳>.jsonl`（含工具调用的 `command` 字段，可用于核对实际派发命令）。
+
+### 已完成与证据
+
+1. **`f1bdeec`**：`QUERY_COMMANDS` 白名单纳入 `du`（packages/core/src/command-query-impact.ts:10），只读磁盘查询免人工批准、失败 effects=none 不触发 unresolved-prior-operation 写锁；正反例测试在同文件测试已补。core 28 文件/381 项通过，全套静态门禁+build 通过。
+2. **链 1（前台诊断）真机通过**：无 Python 主机上任务「检查这台服务器的系统概况…」5 条命令 `uname -r`/`df -hT`/`free -h`/`ss -tuln`/`ss -tulnp` 全部零放置 native-exec、`low-risk-command` 直过、exit 0、任务 26.3 秒结算 answered。日志时间窗 2026-11-19T18:30:31Z–18:30:55Z（UTC）。
+3. 同轮真机复核了此前分析：`du -shx /var /usr 2>/dev/null` 因模型自带重定向失去白名单资格→人工批准→permission denied 失败→effects possible→verify 暂停→用户 resume 后正常回答。机制按设计工作，但提示 `2>/dev/null` 类噪声会持续制造批准摩擦（可后续在模型提示词或分类器层面考虑，未立项）。
+
+### 中断点：链 2（配置→校验→服务健康）卡在 VM sudo 认证
+
+- 任务文本（已用）：「在这台服务器上部署一个最小演示服务：创建 /etc/systemd/system/demo-h03.service（运行 /bin/sleep 600），校验配置后启动它，并确认服务处于 active (running) 状态」。
+- 实际进展：`prepare_remote_edit` 对不存在的目标文件正确 `not-dispatched`；staging 文件 `/home/tian/demo-h03.service.staging` 经 `structured-file` 规则写入成功、读回哈希一致；`sudo install -m 0644 -o root -g root <staging> /etc/systemd/system/demo-h03.service` 的 sudo 认证 3 次拒绝（`authenticationAttempts=3`、`authentication-rejected`，VM 输出 "sudo: 3 incorrect password attempts"）→ 任务正确 paused，Agent 未重试未绕过。目标文件未创建，无系统目录写入。
+- **接续第一步（先做这个）**：请用户在 VM 控制台（不经应用）执行 `sudo -k && sudo -v` 手动输密码。3 次拒绝说明账户在 sudoers 内、纯密码不匹配——最可能是建 VM 时未执行 `passwd`（账户密码锁定），则用 root 控制台 `passwd tian` 设置后重试；若控制台手动 sudo 能过而应用内仍拒，则怀疑 native-pty 密码注入通道，转查 `packages/adapters/src/ssh-command-terminal.ts`（executeNativePty，sudo 标记提示与 stdin 注入）与 `apps/desktop/src/worker/privileged-sudo-credentials.ts`，并用 `authentication.open/close` 时序对照输入次数。
+- 认证通过后：Agent 提议的接续动作序列已明确（`systemd-analyze verify` → `daemon-reload` → `start demo-h03.service` → 确认 active）。注意 `/bin/sleep 600` 到期后服务转 inactive 是单元语义，不是部署失败。
+
+### 发现的安全缺口（已记录未修复，接续时优先修）
+
+**SG-1：ordinary-command 规则自动放行 root 写系统目录与服务管理命令。** 真机证据：上述 `sudo install … /etc/systemd/system/demo-h03.service` 被自动放行（`proposed`→`review.result allow` 仅 5ms，零人工审核，任意审查模式；日志 2026-11-19T18:35:49.396Z–.403Z，操作 ID `25cd681f-c737-4c84-8d9d-e72c430f8997`）。三层根因：
+
+1. `securityConfiguration`（packages/core/src/safety.ts:213）只覆盖 `/etc/ssh/`、`sudoers(.d)`、`/etc/sysctl.d/`、`/etc/iptables/`、`/root/.ssh/`、`authorized_keys`——不含 `/etc/systemd/system/`（systemd 单元是服务持久化载体）与 `/usr/lib/systemd/system/`。
+2. `install`、`systemctl`、`docker` 等在 `ORDINARY_COMMANDS`（safety.ts:15）；sudo 包装后 `ordinaryCommand()`（safety.ts:247）无条件放行（safety.ts:405），不区分审查模式。推论：`sudo systemctl stop sshd`、`sudo systemctl disable --now <unit>` 等影响主机/连接可用性的操作同样免审（`systemctl` 不在 `HIGH_IMPACT_COMMANDS` safety.ts:19）。
+3. 风险排序倒置：同轮只读 `du` 变体需人工批准，root 写系统目录免审。
+
+修复方向（未实施，实施时补正反例测试进 Tests/core/safety 相关用例）：`/etc/systemd/system`、`/usr/lib/systemd/system` 写入目标纳入 securityConfiguration/high-impact 路径；`systemctl` 的 `enable/disable/mask/stop/restart`（至少影响连接与服务可用性的子集）纳入 high-impact；重估 ordinary-command 快速路径对 sudo 包装命令的适用边界。修复会改变链 2 的审批路径（`sudo install` 应转为人工审核），属预期行为，同步更新测试期望。
+
+### 接续清单（按序）
+
+1. 修 SG-1（含测试与门禁），中文提交。
+2. VM sudo 密码按上文排查通过后，重发链 2 任务文本，验收配置→校验→服务健康全链（预期出现人工审核卡——SG-1 修复后 `sudo install` 应需批准）。
+3. 链 3（后台启动→观察→精确停止）任务文本参考：「在后台启动一个 sleep 300 的任务，观察它正在运行，然后精确停止它」（走 P2 原生后台模块 setsid 路径）。
+4. su/sudo 提示特征表 VM 实测定稿（P0-B 遗留项）。
+5. 三链全过后：更新 REPAIR_PROGRESS.md（H03 行与最新记录）、STATUS.md、本文件状态头，H03 结项；中文提交，不自动推送。
+
+### 边界提醒
+
+- 未修复 SG-1 前，不要把本 VM 之外的主机接入应用（ordinary-command 免审缺口在真实环境同样生效）。
+- 密码/指纹/私密配置不写入任何文档、源码、命令或日志；本节 hostId 为应用内非秘密标识。
+- 本节不改变迁移契约四不变量；H03 保持“进行中”，不因链 1 通过而提前结项。
+
+
