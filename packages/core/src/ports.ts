@@ -30,6 +30,15 @@ export interface ApprovalRequester {
   cancelApproval?(requestId: string): void;
 }
 
+/** Trusted supervised-process observation. Not proof of target authentication or readiness. */
+export interface ProcessStartedEvent {
+  pid: number;
+  /** Native-background launch facts, backend-rendered; absent on other channels. */
+  logPath?: string;
+  /** /proc/<pid>/stat starttime (field 22), bound to the observed PID against reuse. */
+  processStartTime?: number;
+}
+
 export interface ExecutionOptions {
   /** Private backend callback: never serialize file contents into ordinary logs. */
   onFileInspection?: (snapshot: import('./file-transaction.js').FileInspection) => void;
@@ -40,7 +49,7 @@ export interface ExecutionOptions {
   /** Synchronous final authorization check; adapters call it before each new side effect. */
   isAuthorized?: () => boolean;
   /** Trusted supervised-process observation. Not proof of target authentication or readiness. */
-  onProcessStarted?: (event: { pid: number }) => void;
+  onProcessStarted?: (event: ProcessStartedEvent) => void;
 }
 
 export interface OperationExecutor {
@@ -70,14 +79,14 @@ export interface TerminalLease {
 
 export interface RawTerminal {
   /** Trusted process-transport event, never inferred from command output or model settlement. */
-  onProcessStarted?(listener: (event: { pid: number }) => void): void;
+  onProcessStarted?(listener: (event: ProcessStartedEvent) => void): void;
   /** Dedicated control protocol for the currently observed process, never ordinary stdin. */
   interrupt?(expectedPid: number): Promise<'sent' | 'already-exited'>;
   /** Manual-shell directory projection; never grants an Agent lease. */
   onCwd?(listener: (directory: string) => void): void;
   onCommand?(listener: (event: { phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }) => void): void;
   /** Separate process/control channel; command text is never rewritten as terminal input. */
-  execute?(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' | 'native-pty' }): Promise<void>;
+  execute?(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' | 'native-pty' | 'native-background' }): Promise<void>;
   onExecutionFailure?(listener: (failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>) => void): void;
   onExit?(listener: (exitCode: number | undefined) => void): void;
   /** Prompt/command echo for the terminal only, separate from captured command output. */

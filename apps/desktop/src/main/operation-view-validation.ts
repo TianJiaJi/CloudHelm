@@ -9,7 +9,7 @@ export function validateOperationView(operation: OperationView): void {
   if (operation.internal !== undefined && (operation.internal !== 'identity-probe' || operation.kind !== 'command'))
     throw new Error('Invalid internal preflight marker');
   if (operation.executionChannel !== undefined && (operation.kind !== 'command'
-    || (operation.executionChannel !== 'native-exec' && operation.executionChannel !== 'native-pty')))
+    || !['native-exec', 'native-pty', 'native-background'].includes(operation.executionChannel)))
     throw new Error('Invalid execution channel projection');
   const receipt = operation.fileRecovery;
   if (receipt && (!Value.Check(schema, receipt) || /[\u0000-\u001f\u007f]/u.test(receipt.path)

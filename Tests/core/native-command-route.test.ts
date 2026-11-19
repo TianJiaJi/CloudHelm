@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { BashAnalyzer } from '../../packages/adapters/src/bash-analyzer.js';
-import { nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationFingerprint, operationIntentKey, suPtyCommand, type ProposedOperation } from '../../packages/core/src/index.js';
+import { nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationFingerprint, operationIntentKey, suPtyCommand, type ProposedOperation } from '../../packages/core/src/index.js';
 
 const base: ProposedOperation = { id: 'route', kind: 'command', command: 'id -u', scope: {
   taskId: 'task', hostId: 'host', cwd: '/', runAs: 'user', terminalId: 'terminal', terminalGeneration: 1,
@@ -23,6 +23,23 @@ it('binds the reviewed route but not replay intent to the transport choice', () 
   const selected: ProposedOperation = { ...base, executionChannel: 'native-exec' };
   expect(operationFingerprint(selected)).not.toBe(operationFingerprint(base));
   expect(operationIntentKey(selected)).toBe(operationIntentKey(base));
+});
+
+it('routes only one literal background command to the native background launch', async () => {
+  const background: ProposedOperation = { ...base, executionMode: 'background' };
+  expect(nativeBackgroundEligible(background, await analyzer.analyze('sleep 300')), 'literal background').toBe(true);
+  expect(nativeBackgroundEligible(background, await analyzer.analyze('id -u')), 'command text is irrelevant to the route').toBe(true);
+  // The mode is mandatory: foreground commands never take this channel.
+  expect(nativeBackgroundEligible(base, await analyzer.analyze('sleep 300')), 'foreground').toBe(false);
+  for (const command of ['nohup sleep 300', 'setsid sleep 300', 'timeout 30 sleep 300', 'nice sleep 300',
+    'sh -c "sleep 300"', 'python3 -c "import time; time.sleep(300)"', 'sleep 300 &', 'sleep 300; id',
+    'sleep 300 | cat', 'sleep 300 > /tmp/out', 'sleep "$DURATION"', 'sudo sleep 300']) {
+    expect(nativeBackgroundEligible({ ...background, command }, await analyzer.analyze(command)), command).toBe(false);
+  }
+  expect(nativeBackgroundEligible({ ...background, privilege: 'root' }, await analyzer.analyze('sleep 300')), 'root request').toBe(false);
+  expect(nativeBackgroundEligible({ ...background, processControl: { kind: 'interrupt', jobId: 'job',
+    targetOperationId: 'op', pid: 1, processSequence: 1, connectionId: 'conn' } }, await analyzer.analyze('sleep 300')), 'process control').toBe(false);
+  expect(nativeBackgroundEligible({ ...background, scope: { ...background.scope, sessionId: 'session' } }, await analyzer.analyze('sleep 300')), 'session-bound').toBe(false);
 });
 
 it('routes one literal sudo command to the credential-bound PTY, never nested, prompted or compound forms', async () => {

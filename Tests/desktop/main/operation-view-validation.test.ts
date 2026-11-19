@@ -19,6 +19,13 @@ it('persists only a command-bound native route, never a forged file or unknown t
   expect(() => validateOperationView({ ...command, kind: 'write-file' })).toThrow('Invalid execution channel projection');
   expect(() => validateOperationView({ ...command, executionChannel: 'legacy' as never })).toThrow('Invalid execution channel projection');
 });
+it('persists the backend-owned native background route only on a command projection', () => {
+  const command: OperationView = { id: 'background', taskId: 'task', hostId: 'host', kind: 'command',
+    preview: 'sleep 300', status: 'proposed', createdAt: 1, executionChannel: 'native-background' };
+  expect(() => validateOperationView(command)).not.toThrow();
+  expect(() => validateOperationView({ ...command, kind: 'inspect-file' })).toThrow('Invalid execution channel projection');
+  expect(() => validateOperationView({ ...command, executionChannel: 'native-exec-2' as never })).toThrow('Invalid execution channel projection');
+});
 it('accepts only a closed recovery receipt bound to the persisted file-write observation', () => {
   expect(() => validateOperationView(operation())).not.toThrow();
   for (const change of [{ path: '/different' }, { afterSha256: 'e'.repeat(64) }, { path: '/srv/config\n' }, { password: 'synthetic' }]) {

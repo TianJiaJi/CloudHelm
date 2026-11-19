@@ -1,4 +1,4 @@
-import { analyzeOperationImpact, HOST_ENVIRONMENT_MAX_AGE_MS, isSudoStatusProbe, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationIntentKey, sudoTarget,
+import { analyzeOperationImpact, HOST_ENVIRONMENT_MAX_AGE_MS, isSudoStatusProbe, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationIntentKey, sudoTarget,
   type CommandAnalyzer, type HostEnvironmentAccess, type ProposedOperation } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
@@ -39,6 +39,9 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
     // stdin-capable channel instead of the stdin-less native exec.
     if (analysis && operation.kind === 'command' && !aptNeedsPtyStdin(analysis) && nativeCommandEligible(operation, analysis))
       operation = { ...operation, executionChannel: 'native-exec' };
+    else if (analysis && operation.kind === 'command' && operation.executionMode === 'background'
+      && !aptNeedsPtyStdin(analysis) && nativeBackgroundEligible(operation, analysis))
+      operation = { ...operation, executionChannel: 'native-background' };
     else if (analysis && operation.kind === 'command' && nativePtySudoEligible(operation, analysis))
       operation = { ...operation, executionChannel: 'native-pty' };
     else if (analysis && operation.kind === 'command' && nativePtySuEligible(operation, analysis))
@@ -79,7 +82,8 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
       && analysis.calls.some((call) => call.name === 'python3' && !call.dynamic))
       return blockedOperationFeedback(operation.id, 'capability-blocked',
         'No command sent; effects: none. Current host facts report no python3 on the fixed execution PATH. Use an appropriate Shell command or prepare Python through an independently reviewed and authorized operation; do not retry the same unsupported command.');
-    if (pythonAbsent && !operation.scope.sessionId && operation.kind === 'command' && operation.executionMode === 'background')
+    if (pythonAbsent && !operation.scope.sessionId && operation.kind === 'command' && operation.executionMode === 'background'
+      && operation.executionChannel !== 'native-background')
       return blockedOperationFeedback(operation.id, 'capability-blocked',
         'No command sent; effects: none. This supervised background command still needs the legacy remote Python driver. The plain native SSH path cannot safely replace its process guarantees yet; do not bypass it with ordinary Shell writes or stops.');
     // Refuse sudo capability probes before review: they deserve no approval card and no pause.

@@ -32,6 +32,17 @@ it('returns startup separately while the audited execution stays alive beyond mo
   expect(f.runtime.snapshot()[0]).toMatchObject({ status: 'exited', exitObserved: true, exitCode: 0 });
 });
 
+it('records the private log path and process identity observed with a native background start', async () => {
+  const f = fixture();
+  const logPath = '/tmp/.cloudhelm-bg-68bc578f-ad82-4194-8d50-ca55d477ed44.log';
+  f.runtime.started(op.id, { pid: 42, logPath, processStartTime: 999 });
+  const result = await f.tool;
+  expect(result.details).toMatchObject({ executionJob: { pid: 42, logPath, processStartTime: 999, status: 'running' } });
+  expect(f.runtime.snapshot()[0]).toMatchObject({ pid: 42, logPath, processStartTime: 999 });
+  expect(() => f.runtime.started(op.id, { pid: 43, logPath: '/tmp/agent-chosen.log' })).toThrow('Invalid background log observation');
+  f.finish(feedback({ operationId: op.id, status: 'succeeded', exitCode: 0, stdoutTail: '' }));
+});
+
 it('does not lend a background lease to another operation, identity, generation, or mode', async () => {
   const f = fixture(); f.runtime.started(op.id, { pid: 42 }); await f.tool;
   expect(f.runtime.hasOperationLease(op)).toBe(true);

@@ -6,20 +6,21 @@
 
 项目处于 0.2.4 开发阶段。当前产品是单主机 AI SSH 客户端，界面不要求创建任务。本页区分已经接通的代码、自动验证、原生界面检查和仍待完成的产品验收。
 
-## 本轮 NATIVE_SSH 执行层迁移（P0–P1，2026-11-18/19）
+## 本轮 NATIVE_SSH 执行层迁移（P0–P2，2026-11-18/19）
 
-迁移契约与分期依据 [NATIVE_SSH_DIRECTIVE_REVIEW.md](NATIVE_SSH_DIRECTIVE_REVIEW.md)、[NATIVE_SSH_EXECUTION_MIGRATION.md](NATIVE_SSH_EXECUTION_MIGRATION.md)，四段独立提交：
+迁移契约与分期依据 [NATIVE_SSH_DIRECTIVE_REVIEW.md](NATIVE_SSH_DIRECTIVE_REVIEW.md)、[NATIVE_SSH_EXECUTION_MIGRATION.md](NATIVE_SSH_EXECUTION_MIGRATION.md)，五段独立提交：
 
 - **P0-A `cb6476a`**：native-exec 接线（`native-ssh-exec.ts` 单次 exec 四态、1 MiB 上限），删除远端 Python 预检门禁，主机探测 shell 原生化。
 - **P0-B `a0c1de5`**：native-pty 接线（`native-ssh-pty.ts`：nonce 标记窗口、注入上限 3、dumb/ECHO=0、输出抑制），sudo 密码改客户端受控 PTY 注入，apt 交互安装分流。
 - **P1a `84d4bd8`**：su 特权链改 native-pty 无会话逐操作派发（printf 标记＋LC_ALL=C `Password: ` 双条件开窗、单次注入、状态机一次进出）；legacy `request_root_session` 工具与 `CLOUDHELM_LEGACY_ROOT_SESSIONS` 入口移除；`SuSession`／`su-session-program` 生产引用切断（文件保留至 P3）。
 - **P1b `4410002`**：文件事务改 SFTP 客户端路线 A（私有 0700 暂存目录、字面 `ln` 同目录硬链接备份、字面 `mv` 原子发布、发布前后读回复核）＋纯 shell 只读降级路线 B（`stat -c`/`sha256sum`/`head -c`/`ls`，apply/restore 派发前 capability-blocked）；`FileInspection` 元数据摘要 v2（stat 字段集），v1 摘要跨格式保守拒绝；文件事务 sudo 密码 secret 通道删除；preflight 能力封锁收窄为仅后台命令。
+- **P2（本次提交）**：原生后台作业模块（`native-background`）。后端渲染 setsid 脱离启动：审核文本单次嵌入 `/bin/sh -c` 体、umask 077 私有 0600 日志、stdin 接 `/dev/null`；启动后 `/proc/<pid>/stat` 核验 pid==pgrp==session 并以字段 22 starttime 绑定身份，`started` 事件携带 pid/logPath/processStartTime 入快照并持久化；分离 watcher 观察通道（`while [ -d /proc/<pid> ]` + `tail -c 256`），仅日志尾 `__CLOUDHELM_EXIT__` 标记判定退出码，标记缺失/通道中断一律 unknown 不冒充退出；停止前 stat 复核（组、会话、starttime 一致）后发 `/bin/kill -INT -- -<pid>` 精确组信号，复核失败不发送。preflight 路由：单字面非特权后台命令（排除 wrapper、管道、重定向、展开、apt 交互）→ `native-background`；pythonAbsent 后台封锁收窄为非 native-background 形式；SafetyGate 增加 native-background 镜像（`invalid-execution-channel`）。已知边界如实记录：zombie 未 reap 时 watcher 挂起；业务含 `exec` 时无退出标记按 unknown；停止后任务停留 stop-requested 待模型查日志核验。
 
-回归与门禁：P0 基线 324 文件／2862 项通过／27 跳过零失败；P1b 后串行全量 **331 文件／2911 项：2884 通过／27 跳过、零失败**（`pnpm vitest run --no-file-parallelism`）；typecheck、ESLint、依赖边界（812 模块／3334 依赖）、800 行、测试布局、版本／更新日志与构建全部通过。并行全量出现的 9 文件／17 项失败经串行复跑确认为负载型超时假失败（失败文件串行重跑 33 项全过），不记回归；后续全量一律串行执行。
+回归与门禁：P0 基线 324 文件／2862 项通过／27 跳过零失败；P1b 后串行全量 **331 文件／2911 项：2884 通过／27 跳过、零失败**（`pnpm vitest run --no-file-parallelism`）；typecheck、ESLint、依赖边界（812 模块／3334 依赖）、800 行、测试布局、版本／更新日志与构建全部通过。并行全量出现的 9 文件／17 项失败经串行复跑确认为负载型超时假失败（失败文件串行重跑 33 项全过），不记回归；后续全量一律串行执行。P2 按用户指示不跑全量、仅局部验证：新增／受影响测试 `native-background` 14、`execution-jobs` 19、`native-ssh-gate` 3、`task-operation-preflight` 11、`background-operations` 11、`operation-view-validation` 5、`task-runner-background` 5、`ssh-command-terminal` 30 全部通过；typecheck、ESLint、依赖边界（814 模块／3345 依赖）、行数、测试布局、版本／更新日志与构建通过。
 
 明确降级边界（写入 [CONTROLLED_FILE_EDITS.md](CONTROLLED_FILE_EDITS.md)）：无 `renameat2 RENAME_EXCHANGE`（POSIX rename 原子性＋先行硬链接备份）；v2 摘要为 stat 字段集，不再含 xattr/inode flags，不冒充完整属性指纹；无内核级 O_NOFOLLOW 全程防护（SFTP stat 前后一致＋极简字面提交命令＋读回复核承担）；SFTP 禁用主机 apply/restore capability-blocked（effects:none）。
 
-后续批次待开工：P2 原生后台作业模块（后台命令仍走默认 Python 分支并保持 pythonAbsent capability-blocked）；P3 删除 `remote-command-program`／`su-session`／`su-session-program`／`remote-file-program` 及 ssh-transport 放置逻辑（生产引用已切断，文件暂留）。H03 三链真机验收与 su/sudo 提示特征表 VM 实测定稿待用户隔离 VM。本轮未访问生产主机／真实模型／个人凭据；无依赖、数据库迁移或 PROMPT_VERSION 变化。
+后续批次待开工：P3 删除 `remote-command-program`／`su-session`／`su-session-program`／`remote-file-program` 及 ssh-transport 放置逻辑（生产引用已切断，文件暂留），残余不合格形式派发前 fail-closed，文档收口（DIRECTIVE_REVIEW 第九节、HANDOFF 状态头、本页与 CHANGELOG）。H03 三链真机验收（含 P2 后台启动→观察→精确停止链）与 su/sudo 提示特征表 VM 实测定稿待用户隔离 VM。本轮未访问生产主机／真实模型／个人凭据；无依赖、数据库迁移或 PROMPT_VERSION 变化。
 
 ## 本轮最终验收与隔离预览
 

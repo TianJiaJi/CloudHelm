@@ -1,6 +1,6 @@
 import { CommandNotStartedError } from '@cloudhelm/core';
 import { randomUUID } from 'node:crypto';
-import type { ExecutionOptions, OperationExecutor, OperationResult, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
+import type { ExecutionOptions, OperationExecutor, OperationResult, ProcessStartedEvent, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
 import { operationFingerprint, validProcessControl } from '@cloudhelm/core';
 import { OperationOutputCapture } from './operation-output-capture.js';
 
@@ -11,7 +11,7 @@ interface PendingCommand {
   pid?: number;
   readOnly?: boolean;
   isAuthorized(): boolean;
-  onProcessStarted?: (event: { pid: number }) => void;
+  onProcessStarted?: (event: ProcessStartedEvent) => void;
   capture: OperationOutputCapture;
   failure?: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>;
   settle(result: OperationResult): void;

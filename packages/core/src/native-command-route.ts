@@ -4,6 +4,12 @@ import { isSudo, sudoTarget, supportsSudo } from './sudo-plan.js';
 import { isSu } from './su-plan.js';
 import type { CommandAnalysis, ProposedOperation } from './model.js';
 
+/** Wrapper commands can hide authentication or a detached child behind one
+ * syntactic call. They never qualify for a native channel: the foreground
+ * planner must inspect the actual recipient, and never route an `env sudo ...`
+ * through ordinary stdin or a detached launch. */
+const wrappers = ['sudo', 'su', 'doas', 'pkexec', 'runuser', 'env', 'busybox', 'nice', 'nohup', 'setsid', 'timeout'];
+
 /** Stage-one transport eligibility, not a safety verdict. Only a single,
  * literal, non-privileged foreground command may use native SSH exec. */
 export function nativeCommandEligible(operation: ProposedOperation, analysis: CommandAnalysis): boolean {
@@ -11,12 +17,25 @@ export function nativeCommandEligible(operation: ProposedOperation, analysis: Co
     || operation.scope.sessionId || analysis.hasError || analysis.hasCompound || analysis.hasExpansion
     || analysis.hasPipeline || analysis.hasRedirection || analysis.calls.length !== 1 || analysis.steps?.length !== 1) return false;
   const call = analysis.steps[0]?.call;
-  // Wrapper commands can hide authentication or a detached child behind one
-  // syntactic call. Defer them until the foreground/privilege planner can inspect
-  // the actual recipient; never route an `env sudo ...` through ordinary stdin.
-  const wrappers = ['sudo', 'su', 'doas', 'pkexec', 'runuser', 'env', 'busybox', 'nice', 'nohup', 'setsid', 'timeout'];
   return !!call && !call.dynamic && !analysis.calls[0]?.dynamic
     && call.name === analysis.calls[0]?.name && JSON.stringify(call.args) === JSON.stringify(analysis.calls[0]?.args)
+    && !wrappers.includes(path.posix.basename(call.name)) && !hasCodeExecution(call);
+}
+
+/** Stage-one transport eligibility for the backend-rendered detached background
+ * launch. Only a single literal, non-privileged background command may use the
+ * native background channel: the reviewed text is embedded once into a
+ * backend-built setsid launch, and stop stays bound to the exact process group
+ * created by that launch. Wrapper commands stay off because they can hide a
+ * second session or defeat the group bound. Not a safety verdict. */
+export function nativeBackgroundEligible(operation: ProposedOperation, analysis: CommandAnalysis): boolean {
+  if (operation.kind !== 'command' || operation.executionMode !== 'background' || operation.processControl
+    || operation.privilege === 'root' || operation.scope.sessionId || analysis.hasError || analysis.hasCompound
+    || analysis.hasExpansion || analysis.hasPipeline || analysis.hasRedirection
+    || analysis.calls.length !== 1 || analysis.steps?.length !== 1) return false;
+  const call = analysis.steps[0]!.call;
+  return !!call && !call.dynamic && !analysis.calls[0]!.dynamic
+    && call.name === analysis.calls[0]!.name && JSON.stringify(call.args) === JSON.stringify(analysis.calls[0]!.args)
     && !wrappers.includes(path.posix.basename(call.name)) && !hasCodeExecution(call);
 }
 

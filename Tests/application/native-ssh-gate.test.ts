@@ -58,3 +58,20 @@ it('refuses a native PTY channel that does not match an eligible literal sudo co
   expect(decided).toHaveBeenCalledExactlyOnceWith('misrouted-pty',
     expect.objectContaining({ verdict: 'error', ruleId: 'invalid-execution-channel' }), expect.any(String));
 });
+
+it('refuses a native background channel that does not match an eligible detached command', async () => {
+  const decided = vi.fn(async () => {});
+  const gate = new SafetyGate({ analyzer: new BashAnalyzer(),
+    audit: { proposed: vi.fn(async () => {}), decided, completed: vi.fn(async () => {}) },
+    executor: {} as unknown as OperationExecutor, lease: {} as unknown as TerminalLease,
+    settings: () => ({ mode: 'permissive', revision: 1 }),
+    evaluator: { evaluate: async () => { throw new Error('a misrouted channel must not be evaluated'); } },
+    approvals: { requestApproval: async () => { throw new Error('a misrouted channel must not be approved'); } } });
+  const outcome = await gate.execute({ id: 'misrouted-background', kind: 'command', command: 'nohup sleep 300',
+    executionMode: 'background', executionChannel: 'native-background', scope: {
+      taskId: 'task', hostId: 'host', cwd: '/', runAs: 'user', terminalId: 'terminal', terminalGeneration: 1,
+      policyRevision: 1, allowedWorkingRoots: [], protectedPaths: [], goal: 'detached sleep' } });
+  expect(outcome.decision).toMatchObject({ verdict: 'error', ruleId: 'invalid-execution-channel' });
+  expect(decided).toHaveBeenCalledExactlyOnceWith('misrouted-background',
+    expect.objectContaining({ verdict: 'error', ruleId: 'invalid-execution-channel' }), expect.any(String));
+});

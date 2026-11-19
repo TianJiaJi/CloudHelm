@@ -20,7 +20,21 @@ it('binds native transport only for eligible foreground operations and strips un
   const forged = { ...command('forged', 'sudo id'), executionChannel: 'native-exec' as const };
   expect(await taskOperationPreflight(forged, deps([]))).not.toMatchObject({ operation: { executionChannel: 'native-exec' } });
   const background = { ...command('background', 'id -u'), executionMode: 'background' as const };
-  expect(await taskOperationPreflight(background, deps([]))).not.toMatchObject({ operation: { executionChannel: 'native-exec' } });
+  expect(await taskOperationPreflight(background, deps([]))).toMatchObject({ operation: { executionChannel: 'native-background' } });
+});
+
+it('routes only a single literal background command to the native background channel', async () => {
+  const detached = { ...command('detached', 'sleep 300'), executionMode: 'background' as const };
+  await expect(taskOperationPreflight(detached, deps([]))).resolves.toMatchObject({ operation: { executionChannel: 'native-background' } });
+  await expect(taskOperationPreflight(command('foreground', 'sleep 300'), deps([]))).resolves.toMatchObject({ operation: { executionChannel: 'native-exec' } });
+  for (const text of ['nohup sleep 300', 'sleep 300; id -u', 'sleep 300 > /tmp/out', 'sleep $(printf 300)']) {
+    const result = await taskOperationPreflight({ ...command('ineligible', text), executionMode: 'background' as const }, deps([]));
+    expect(result, text).toMatchObject({ operation: { command: text } });
+    expect(result, text).not.toHaveProperty('operation.executionChannel');
+  }
+  const apt = await taskOperationPreflight({ ...command('apt', 'apt update'), executionMode: 'background' as const }, deps([]));
+  expect(apt).toMatchObject({ operation: { command: 'apt update' } });
+  expect(apt).not.toHaveProperty('operation.executionChannel');
 });
 
 it('refuses a PATH python3 command before review when a current connection proves it absent', async () => {
@@ -36,7 +50,9 @@ it('refuses a PATH python3 command before review when a current connection prove
     .toMatchObject({ operation: { executionChannel: 'native-exec' } });
   expect(await taskOperationPreflight(command('explicit', '/opt/python3 -c "print(1)"'), { ...deps([]), environment }))
     .toMatchObject({ operation: { command: '/opt/python3 -c "print(1)"' } });
-  expect(await taskOperationPreflight({ ...command('job', 'sleep 30'), executionMode: 'background' }, { ...deps([]), environment }))
+  expect(await taskOperationPreflight({ ...command('job', 'sleep 30'), executionMode: 'background' as const }, { ...deps([]), environment }))
+    .toMatchObject({ operation: { executionChannel: 'native-background' } });
+  expect(await taskOperationPreflight({ ...command('legacy', 'nohup sleep 30'), executionMode: 'background' as const }, { ...deps([]), environment }))
     .toMatchObject({ isError: true, details: { code: 'capability-blocked', effects: 'none' } });
   // Strict file transactions no longer need the legacy Python driver: without
   // python3 they stay dispatchable through SFTP/shell routes.

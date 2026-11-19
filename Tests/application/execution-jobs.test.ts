@@ -90,4 +90,30 @@ describe('backend execution job lifecycle', () => {
     const ended = new ExecutionJobs('task', vi.fn()); ended.restore(failed.snapshot());
     expect(ended.get('job')).toMatchObject({ status: 'failed', notStarted: 'denied', exitObserved: false });
   });
+  it('records background start observations only when the log path and process identity are valid', () => {
+    const { jobs } = fixture();
+    const logPath = '/tmp/.cloudhelm-bg-68bc578f-ad82-4194-8d50-ca55d477ed44.log';
+    expect(jobs.started(binding, 42, { logPath, processStartTime: 999 }))
+      .toMatchObject({ pid: 42, logPath, processStartTime: 999, status: 'running' });
+    expect(() => jobs.started(binding, 43, { logPath: '/tmp/agent-chosen.log' })).toThrow('Invalid background log observation');
+    expect(() => jobs.started(binding, 44, { processStartTime: -1 })).toThrow('Invalid background process identity observation');
+    expect(() => jobs.started(binding, 44, { processStartTime: Number.MAX_SAFE_INTEGER + 1 })).toThrow('Invalid background process identity observation');
+    expect(() => jobs.started(binding, 0)).toThrow('Invalid observed process identity');
+    expect(jobs.get('job')).toMatchObject({ pid: 42, processSequence: 1 });
+  });
+  it('keeps restored background observations only while they stay verifiable', () => {
+    const { jobs } = fixture();
+    const logPath = '/tmp/.cloudhelm-bg-68bc578f-ad82-4194-8d50-ca55d477ed44.log';
+    jobs.started(binding, 42, { logPath, processStartTime: 999 });
+    const restored = new ExecutionJobs('task', vi.fn());
+    restored.restore(jobs.snapshot());
+    expect(restored.get('job')).toMatchObject({ status: 'unknown', unknownReason: 'recovered',
+      pid: 42, logPath, processStartTime: 999 });
+    const tampered = new ExecutionJobs('task', vi.fn());
+    tampered.restore([{ ...jobs.get('job')!, logPath: '/tmp/agent-chosen.log', processStartTime: -5 } as ExecutionJobSnapshot]);
+    const job = tampered.get('job')!;
+    expect(job.logPath).toBeUndefined();
+    expect(job.processStartTime).toBeUndefined();
+    expect(job).toMatchObject({ status: 'unknown', unknownReason: 'recovered', pid: 42 });
+  });
 });

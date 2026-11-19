@@ -1,4 +1,5 @@
 import type { ExecutionJobBinding, ExecutionJobSnapshot, ExecutionJobUnknownReason, OperationResult } from '@cloudhelm/core';
+import { validBackgroundLogPath } from '@cloudhelm/core';
 
 const bindingKeys = ['jobId', 'operationId', 'taskId', 'hostId', 'terminalId', 'terminalGeneration', 'connectionId', 'loginAs', 'runAs'] as const;
 const recipient = (value: ExecutionJobBinding): ExecutionJobBinding => ({
@@ -35,14 +36,19 @@ export class ExecutionJobs {
     return saved;
   }
 
-  started(binding: ExecutionJobBinding, pid: number): ExecutionJobSnapshot {
+  started(binding: ExecutionJobBinding, pid: number, observation?: { logPath?: string; processStartTime?: number }): ExecutionJobSnapshot {
     const job = this.require(binding);
     if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2147483647) throw new Error('Invalid observed process identity');
+    if (observation?.logPath !== undefined && !validBackgroundLogPath(observation.logPath)) throw new Error('Invalid background log observation');
+    if (observation?.processStartTime !== undefined
+      && (!Number.isSafeInteger(observation.processStartTime) || (observation.processStartTime as number) < 0))
+      throw new Error('Invalid background process identity observation');
     // A stale start cannot undo lost observability, takeover, recovery, or an actual exit.
     if (ended(job) || job.status === 'unknown' || job.pid === pid) return structuredClone(job);
     const at = this.now();
     return this.commit({ ...job, pid, startedAt: job.startedAt ?? at, updatedAt: at,
-      processSequence: job.processSequence + 1, status: job.stopRequestId ? 'stop-requested' : 'running' });
+      processSequence: job.processSequence + 1, status: job.stopRequestId ? 'stop-requested' : 'running',
+      logPath: observation?.logPath ?? job.logPath, processStartTime: observation?.processStartTime ?? job.processStartTime });
   }
 
   notStarted(binding: ExecutionJobBinding, reason: NonNullable<ExecutionJobSnapshot['notStarted']>): ExecutionJobSnapshot {
@@ -94,6 +100,8 @@ export class ExecutionJobs {
         createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, processSequence: snapshot.processSequence,
         startedAt: Number.isFinite(snapshot.startedAt) ? snapshot.startedAt : undefined,
         pid: Number.isInteger(snapshot.pid) && snapshot.pid! > 0 && snapshot.pid! <= 2147483647 ? snapshot.pid : undefined,
+        logPath: typeof snapshot.logPath === 'string' && validBackgroundLogPath(snapshot.logPath) ? snapshot.logPath : undefined,
+        processStartTime: Number.isSafeInteger(snapshot.processStartTime) && (snapshot.processStartTime as number) >= 0 ? snapshot.processStartTime : undefined,
         exitObserved: snapshot.exitObserved === true, exitCode: snapshot.exitCode,
         endedAt: Number.isFinite(snapshot.endedAt) ? snapshot.endedAt : undefined,
         notStarted: snapshot.notStarted,

@@ -69,10 +69,13 @@ export class BackgroundOperations {
     this.jobs.reserve(binding); entry.binding = binding;
   }
 
-  started(operationId: string, event: { pid: number }): void {
+  started(operationId: string, event: { pid: number; logPath?: string; processStartTime?: number }): void {
     const entry = this.active.get(operationId);
     if (!entry?.binding || entry.context.controller.signal.aborted) throw new Error('Background startup recipient is no longer current');
-    const job = this.jobs.started(entry.binding, event.pid);
+    const job = this.jobs.started(entry.binding, event.pid,
+      event.logPath !== undefined || event.processStartTime !== undefined
+        ? { logPath: event.logPath, processStartTime: event.processStartTime }
+        : undefined);
     if (!['running', 'stop-requested'].includes(job.status)) throw new Error('Background startup observation is stale');
     entry.detached = true; entry.context.detached = true; entry.context.unlink();
     entry.ready(this.runningFeedback(job));

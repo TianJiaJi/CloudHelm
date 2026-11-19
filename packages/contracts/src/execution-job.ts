@@ -20,6 +20,10 @@ export interface ExecutionJobView extends ExecutionJobRecipientView {
   startedAt?: number;
   /** Last observed supervised process, not service readiness or an arbitrary kill target. */
   pid?: number;
+  /** Private 0600 log of the native-background launch; observation target only. */
+  logPath?: string;
+  /** /proc/<pid>/stat starttime bound to the observed PID against reuse. */
+  processStartTime?: number;
   processSequence: number;
   exitObserved: boolean;
   exitCode?: number;
