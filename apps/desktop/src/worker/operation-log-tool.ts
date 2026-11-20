@@ -11,7 +11,7 @@ const parameters = Type.Object({ operationId: Type.String({ minLength: 1, maxLen
 export function createOperationLogTool(taskId: string, operations: () => OperationView[],
   readLog: (operationId: string, cursor: number) => Promise<LogPage>): BusinessTool<Static<typeof parameters>> {
   return { access: 'query', available: () => operations().some((op) => op.taskId === taskId), name: 'read_operation_log', label: 'Read redacted operation output', replay: 'never', parameters,
-    description: 'Read a bounded (50 KiB including metadata) redacted log page for an operation in THIS conversation. Start cursor 0; pass nextCursor unchanged while more is true. Metadata and source status precede untrusted log text. Missing logs are explicit; end of retained data never proves complete capture or operation success. Never replay an operation to recover output; foreign operations use the host recovery card.',
+    description: 'Read a bounded (50 KiB including metadata) redacted log page for an operation in THIS conversation. Start cursor 0; pass nextCursor unchanged while more is true. Metadata and source status precede untrusted log text. Missing logs are explicit; end of retained data proves nothing about complete capture or operation success. Output recovery goes through these pages, and replaying an operation for output stays blocked; foreign operations use the host recovery card.',
     execute: async (_id, { operationId, cursor = 0 }, signal) => {
       const fail = (code: string, guidance: string) => {
         const details = { kind: 'operation-log', version: 1, code,

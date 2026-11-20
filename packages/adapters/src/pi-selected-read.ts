@@ -6,7 +6,7 @@ import { selectedReadParameters, selectedTextPage, validateSelectedRead, type Se
  * primitive still handles normal lines; long lines use this tool's byte mode. */
 export function createSelectedReadTool(read: (path: string, signal?: AbortSignal) => Promise<{ data: Buffer }>): BusinessTool<SelectedReadInput> {
   return { access: 'query', deferred: true, name: 'read_selected_text_file', label: 'Read selected local text', replay: 'never', parameters: selectedReadParameters,
-    description: 'Read only an authorized absolute local UTF-8 path, up to 1 MiB. Each response is at most 50 KiB including metadata. Use offset/limit for lines (1-based, at most 2000); for long lines use byteOffset/byteLimit instead (0-based, 4–51200 bytes). Never combine line and byte modes. Continue using the returned offsets and expectedSha256 to reject changed files. The page header is metadata, not file content. No local shell is available.',
+    description: 'Read only an authorized absolute local UTF-8 path, up to 1 MiB. Each response is at most 50 KiB including metadata. Use offset/limit for lines (1-based, at most 2000); for long lines use byteOffset/byteLimit instead (0-based, 4–51200 bytes), keeping line and byte modes separate. Continue using the returned offsets and expectedSha256 to reject changed files. The page header is metadata, not file content. No local shell is available.',
     async execute(_id, args, signal) {
       validateSelectedRead(args);
       if (!isAbsolute(args.path)) throw new Error('Use an absolute selected path');

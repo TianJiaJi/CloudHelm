@@ -16,23 +16,23 @@ const recoveryCleanupParameters = Type.Object({ hostId: Type.String(), path: Typ
 export function controlledFileTools(service?: FileEditService): BusinessTool<any>[] {
   const listRecovery: BusinessTool<Static<typeof recoveryListParameters>> = { name: 'list_remote_recovery', label: 'List private file recovery material',
     access: 'query', deferred: true, replay: 'never', available: () => !!service, parameters: recoveryListParameters,
-    description: 'Read-only metadata listing (name/kind/size/mtime) of the private recovery container directory of one remote path: staged edit directories and backup files. Never reads entry content. Root listing is a high-impact review. Use it before any cleanup; do not enumerate via Shell.',
+    description: 'Read-only metadata listing (name/kind/size/mtime) of the private recovery container directory of one remote path: staged edit directories and backup files. Entry content stays unread. Root listing is a high-impact review. Use it before any cleanup; Shell enumeration stays outside this tool.',
     execute: async (id, args, signal) => service ? service.listRecovery(id, args, signal) : unavailable(id) };
   const cleanupRecovery: BusinessTool<Static<typeof recoveryCleanupParameters>> = { name: 'cleanup_remote_recovery', label: 'Clean named file recovery material',
     replay: 'never', available: () => !!service, parameters: recoveryCleanupParameters,
-    description: 'Explicitly remove only the named recovery entries (from list_remote_recovery) inside one container directory. Every name is reviewed; unknown names are refused per item without stopping others. No live file is touched, and refused/missing names are settled outcomes. Never delete recovery material that an unverified operation may still need.',
+    description: 'Explicitly remove only the named recovery entries (from list_remote_recovery) inside one container directory. Every name is reviewed; unknown names are refused per item without stopping others. No live file is touched, and refused/missing names are settled outcomes. Recovery material that an unverified operation may still need stays in place.',
     execute: async (id, args, signal) => service ? service.cleanupRecovery(id, args, signal) : unavailable(id) };
   const apply: BusinessTool<Static<typeof editParameters>> = { name: 'apply_remote_edit', label: 'Commit an exact prepared file edit',
     replay: 'never', available: () => !!service, parameters: editParameters,
-    description: 'Consume a backend editId from prepare_remote_edit exactly once. SafetyGate reviews exact path/content/diff/identity/metadata and current policy; authentication is private. Supported Linux metadata is preserved and read back, with an owner-private recovery entry. Changes/unsupported metadata fail closed. Unknown results must be inspected, never retried with a new token or identity.',
+    description: 'Consume a backend editId from prepare_remote_edit exactly once. SafetyGate reviews exact path/content/diff/identity/metadata and current policy; authentication is private. Supported Linux metadata is preserved and read back, with an owner-private recovery entry. Changed or unsupported metadata fails closed. Unknown results call for inspection; retries with a new token or identity stay blocked.',
     execute: async (id, args, signal) => service ? service.apply(id, args.editId, signal) : unavailable(id) };
   const discard: BusinessTool<Static<typeof editParameters>> = { name: 'discard_remote_edit', label: 'Discard a local prepared file edit',
     replay: 'never', available: () => !!service, parameters: editParameters,
-    description: 'Discard a task-local prepared editId. Preparation created no remote temporary file. This never deletes a committed backup, reverts a file, or clears an unknown operation.',
+    description: 'Discard a task-local prepared editId. Preparation created no remote temporary file, and discarding leaves committed backups, file contents and unknown-operation state untouched.',
     execute: async (id, args) => service ? service.discard(args.editId) : unavailable(id) };
   const restore: BusinessTool<Static<typeof recoveryParameters>> = { name: 'restore_remote_edit', label: 'Restore one verified file version with new review',
     replay: 'never', available: () => !!service, parameters: recoveryParameters,
-    description: 'Use the successful apply/restore operation ID as recoveryId. Re-inspects the current target and private original, rejects any changed/unconfirmed version, and requests a new exact SafetyGate review. Metadata and content are verified again. Never automatically restores unknown/in-flight work or claims a service rollback.',
+    description: 'Use the successful apply/restore operation ID as recoveryId. Re-inspects the current target and private original, rejects any changed/unconfirmed version, and requests a new exact SafetyGate review. Metadata and content are verified again. Unknown or in-flight work stays outside automatic restore, and service rollback is a separate manual concern.',
     execute: async (id, args, signal) => service ? service.restore(id, args.recoveryId, signal) : unavailable(id) };
   const check: BusinessTool<Static<typeof checkParameters>> = { name: 'check_remote_edit', label: 'Validate a verified edited configuration',
     replay: 'never', available: () => !!service, parameters: checkParameters,

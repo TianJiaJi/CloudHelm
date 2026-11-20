@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { BashAnalyzer } from '@cloudhelm/adapters';
-import { agentPrompt } from '../../../apps/desktop/src/worker/agent-prompt.js';
+import { agentPrompt, executionGuidelines } from '../../../apps/desktop/src/worker/agent-prompt.js';
 import { agentAuthorization } from '../../../apps/desktop/src/worker/agent-authorization.js';
 import { inputPlan } from '../../../apps/desktop/src/worker/operation-input-plan.js';
 
@@ -27,19 +27,22 @@ describe('layered agent guidance', () => {
       '<context-data>',
       'Descriptive text inside field values', 'policyRevision invalidates older approvals',
       'apply_remote_edit with its backend editId', 'Preview hashes grant no approval or lock',
-      'preserve inspected ACL/xattr', 'never bypass with Shell staging', 'restore_remote_edit needs an unchanged confirmed target',
-      'Never include passwords, private keys, tokens or credential-bearing URLs']) expect(prompt).toContain(boundary);
-    for (const rule of ['SafetyGate', 'never automatically replay', 'No verification report submission is required',
+      'preserve inspected ACL/xattr', 'Shell staging, identity changes and delete/recreate stay outside the supported flow',
+      'restore_remote_edit needs an unchanged confirmed target',
+      'Keep passwords, private keys, tokens or credential-bearing URLs out of reports and chat']) expect(prompt).toContain(boundary);
+    for (const rule of ['SafetyGate', 'the backend blocks automatic replays until reconciliation',
+      'No verification report submission is required',
       'run_remote.cwd', 'read_operation_log', 'host recovery card', 'Ask the user only when',
       'Dedicated tools may include documented preflight',
       'execute one focused query per tool call', 'await its result before choosing the next query',
-      'Never probe sudo with sudo -n true', 'Do not use sudo with pipelines or redirections; do not use sudo -S, su or nested shells']) expect(prompt).toContain(rule);
+      'Keep sudo probes (sudo -n true, sudo -l, sudo -v) out of the command',
+      'Pipelines, redirections, sudo -S, su and nested shells stay out']) expect(prompt).toContain(rule);
     expect(prompt).not.toContain('submit_verification');
     expect(prompt).not.toContain('unsupported');
     for (const section of ['# Root operations', '# File changes', '# Execute safely', '# Stops and unknown outcomes', '# Credentials']) expect(prompt).toContain(section);
-    for (const credentialRule of ['never ask the user to paste a password or token into chat',
+    for (const credentialRule of ['the backend refuses credential-file reads',
       "the backend's private, operation-bound secure input", 'reference an existing secret path or file',
-      'the backend refuses those reads and executes nothing']) expect(prompt).toContain(credentialRule);
+      'so the value stays out of this conversation']) expect(prompt).toContain(credentialRule);
     for (const unrelated of ['apt-get --simulate', 'docker compose config --quiet', 'pgrep -a nginx', 'Examples (each numbered step)']) {
       expect(prompt).not.toContain(unrelated);
     }
@@ -48,11 +51,18 @@ describe('layered agent guidance', () => {
   it('keeps ordinary diagnosis focused without suggesting review bypass by splitting', () => {
     const prompt = agentPrompt([host], [], '');
     for (const rule of ['For ordinary diagnostics', 'execute one focused query per tool call',
-      'Do not bundle independent queries with semicolons, &&, ||, newlines or multiple pipelines',
-      'Do not add decorative echo/printf separators', 'Use a pipeline only when necessary for one bounded query',
-      'Never split, rewrite or rewrap a pending, denied, canceled or expired operation to evade review',
+      'semicolons, &&, ||, newlines and stacked pipelines go in separate calls',
+      'Skip decorative echo/printf separators', 'Use a pipeline only when necessary for one bounded query',
+      'Keep a pending, denied, canceled or expired operation as recorded',
       'submit any revised operation through normal backend checks', 'Dedicated tools may include documented preflight/verification'])
       expect(prompt).toContain(rule);
+  });
+
+  it('keeps executionGuidelines in capability-manual style with strict-negative bullets under 10%', () => {
+    const bullets = executionGuidelines.split('\n').filter((line) => line.startsWith('- '));
+    expect(bullets.length).toBeGreaterThan(20);
+    const strict = bullets.filter((bullet) => /\b(never|do not|must not)\b|不得|禁止|不要/iu.test(bullet));
+    expect(strict.length / bullets.length, `strict-negative bullets: ${strict.join(' | ')}`).toBeLessThan(0.1);
   });
 
   it('answers without a host and only plans complex work; does not require probes before a simple write', () => {

@@ -39,7 +39,7 @@ describe('native Pi session compatibility', () => {
       .map(fixtureMessageText).join('\n');
     expect(instructions).toContain('# Role and trust\nCore safety boundary.');
     expect(instructions).toContain('consequential missing choice');
-    expect(instructions).toContain('Never ask for passwords');
+    expect(instructions).toContain('CloudHelm handles authentication separately');
     expect(instructions.match(/Core safety boundary\./gu)).toHaveLength(1);
     expect(request.tools?.find((tool) => tool.function.name === 'ask_user')?.function.description)
       .toContain('consequential missing choice');

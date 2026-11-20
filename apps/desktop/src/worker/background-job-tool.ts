@@ -18,7 +18,7 @@ export function createBackgroundJobTool(deps: {
   createGate(executor: OperationExecutor): SafetyGate;
 }): BusinessTool<Static<typeof parameters>> {
   return { name: 'stop_remote_job', label: 'Request a reviewed background-job stop', replay: 'never', parameters,
-    description: 'Request SIGINT for one owned, currently observed background job through SafetyGate. Only hostId/jobId are accepted; never PID or arbitrary shell. Signal acknowledgement is NOT process exit. Query the original operation/job and read its log afterwards. Unknown/disconnected or changed bindings require inspection, never automatic resend or identity fallback.',
+    description: 'Request SIGINT for one owned, currently observed background job through SafetyGate. Only hostId/jobId are accepted; PID or arbitrary shell stay outside the accepted inputs. Signal acknowledgement is NOT process exit. Query the original operation/job and read its log afterwards. Unknown/disconnected or changed bindings require inspection; automatic resend and identity fallback stay blocked.',
     execute: async (_id, { hostId, jobId }, signal) => {
       deps.assertActive(); signal?.throwIfAborted();
       const host = deps.hosts.find((entry) => entry.id === hostId), job = deps.background.get(jobId);

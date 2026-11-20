@@ -44,7 +44,7 @@
 |---|---|---|
 | restart 三模式卡数 | ask/permissive 各 1 卡；ai-review AI 预审；preflight/check 三模式 0 卡 | `Tests/core/safety-risk-matrix.test.ts`（进 CI） |
 | 只读并发墙钟 | **4 条并发只读 ≈ 245.6ms（单条 60.3ms，≈×4.1）**——切换前 `serialCall` 全串行 | `scripts/measure-readonly-concurrency.mjs` 实跑 2026-11-21（不进 CI）；断言版测试已随 P0-3b 进 CI（4 慢只读 maxActive=4、总墙钟 < 单条 ×4） |
-| 提示词否定式占比 | executionGuidelines 严格否定句式按 bullet 计 **50%** | `apps/desktop/src/worker/agent-prompt.ts`（P0-7 前人工口径） |
+| 提示词否定式占比 | executionGuidelines 严格否定句式按 bullet 计 **50%** | `apps/desktop/src/worker/agent-prompt.ts`（P0-7 前人工口径）；P0-7 后 43 bullet 严格否定 0 条，负向比例门禁测试已进 CI（<10%） |
 | 系统提示字符数 | 门禁 ≤ 12000 字符 | `Tests/desktop/worker/task-runner-authorization.test.ts`（进 CI） |
 
 ## 基线测量协议
@@ -73,7 +73,7 @@
 | P0-2 | service 单审批 | 审批卡呈现三段事务意图；三模式回归测试矩阵；root 路径 sudo 缓存复用核查 | 完成（矩阵进 CI：ask/permissive 恰 1 卡、ai-review 无卡/升级恰 1 卡、preflight/check 零请求；root 三步凭据缓存集成测试锁定只索密一次） |
 | P0-5 | 审批续期 | 软到期提醒（10min）+ 续期（累计 ≤5 次 × 10min，硬截止首发 +60min）+ 硬上限取消；计时权收敛 worker server 单点；`decide-approval` 过期校验改用 hardExpiresAt（软过期后仍可批准） | 完成（gate 删双计时器与软过期后置改判；reminder/续期 RPC/decide 状态机测试进 CI：续期重武装提醒、五次上限+硬截止取消、软提醒不取消且事后仍可批准、软过期后批准放行） |
 | P0-6 | 输入提醒 | TTL 过期/投递失败推送式主动提醒（静默窗口无用户交互事件必达 renderer）+ 未聚焦系统通知 | 完成（publish 链核查通过；推送断言测试进 CI：worker fake-timer 到期即提交 expired 回执、Main commitInput 同步发布快照；未聚焦 expired/failed 系统通知，recovered 路径不经通知） |
-| P0-7 | 提示词重写 | 26 工具 description + executionGuidelines 能力说明书化；否定式 <10% 门禁；PROMPT_VERSION → 2026-12.1 | 待做 |
+| P0-7 | 提示词重写 | 26 工具 description + executionGuidelines 能力说明书化；否定式 <10% 门禁；PROMPT_VERSION → 2026-12.1 | 完成（43 bullet 严格否定清零、门禁测试进 CI；9 文件 21 description + ask_user/codemode/read_selected 同步；锁定短语保留，指南较旧版 +75 字符，<12000/<9400 界保持） |
 | SPIKE-C | Layer C 门控调查 | `edit_file` 收敛 Layer C（推翻覆盖禁令）可行性，时间盒 2-3 天，NO-GO 判据先行 | 待做 |
 
 **edit_file 收敛三层风险**：A 门面重塑（中风险，Phase 2）——单一 `edit_file` 内部编排 read(hash)→prepare→apply，内部仍是独立 ProposedOperation 逐个过 SafetyGate；B 自愈语义（中低风险，Phase 2 与 A 同批）——hash 冲突自动读当前内容返回模型重生成 diff；C 推翻覆盖禁令（高风险、前置未知）——SPIKE-C 门控。

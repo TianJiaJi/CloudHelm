@@ -20,7 +20,7 @@ export function createReconciliationTool(deps: {
   reconciled(operation: OperationView): void;
 }): BusinessTool<Static<typeof parameters>> {
   return { name: 'record_reconciled_result', label: 'Record an observed outcome after recovery', replay: 'never', parameters,
-    description: 'Only for an unresolved UNKNOWN or failed-with-possible-effects operation in this conversation. Cite newer, same-host, successful SafetyGate-classified effect-free observation IDs and explain what they prove; never use another write as evidence. Reuse eligible existing observations. Already-resolved targets allow an empty evidence list, need no new check and return their current resolution without changing it. Risk acceptance does not prove success. Running originals cannot be cleared; this never replays an action.',
+    description: 'Only for an unresolved UNKNOWN or failed-with-possible-effects operation in this conversation. Cite newer, same-host, successful SafetyGate-classified effect-free observation IDs and explain what they prove; another write is ineligible as evidence. Reuse eligible existing observations. Already-resolved targets allow an empty evidence list, need no new check and return their current resolution without changing it. Risk acceptance does not prove success. Running originals stay uncleared, and replaying an action stays outside this tool.',
     execute: async (_id, value) => {
       const operations = mergeOperationViews(deps.operations()).filter((operation) => operation.taskId === deps.taskId);
       const operation = operations.find((item) => item.id === value.operationId);
