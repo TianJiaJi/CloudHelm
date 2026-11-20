@@ -25,7 +25,9 @@ const unsupported = async (): Promise<never> => { throw new Error('UI smoke reac
 const shortcutSettings = { bindings: {} as Record<string, string>, enabled: true };
 let outboundLedger = { used: 3, cap: null as number | null };
 let appearance = { mode: 'system' as 'system' | 'light' | 'dark' };
-let layout = { mode: 'ssh' as 'ssh' | 'agent' };
+// sessionStorage stands in for the main-process layout store so a reload
+// restores the persisted layout, mirroring what preload does in the real app.
+let layout = { mode: sessionStorage.getItem('fixture-layout') === 'agent' ? 'agent' as const : 'ssh' as const };
 
 const referenceBodies = new Map<string, ReferenceBody>();
 const api: DesktopAPI = {
@@ -153,7 +155,7 @@ const api: DesktopAPI = {
   appearanceSettings: async () => structuredClone(appearance),
   saveAppearanceSettings: async (settings) => { calls.push({ kind: 'appearance', settings }); appearance = structuredClone(settings); },
   layoutSettings: async () => structuredClone(layout),
-  saveLayoutSettings: async (settings) => { calls.push({ kind: 'layout', settings }); layout = structuredClone(settings); },
+  saveLayoutSettings: async (settings) => { calls.push({ kind: 'layout', settings }); layout = structuredClone(settings); sessionStorage.setItem('fixture-layout', settings.mode); },
   readClipboard: async () => 'pasted from clipboard',
   writeClipboard: async (text) => { calls.push({ kind: 'clipboard-write', text }); },
   deleteConversation: async (id) => {

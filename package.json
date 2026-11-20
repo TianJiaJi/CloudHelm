@@ -31,7 +31,8 @@
     "test:host-risk": "node Tests/smoke/host-risk-recovery-smoke.mjs",
     "test:desktop:packaged": "node Tests/smoke/desktop-smoke.mjs --packaged",
     "test:markdown": "node Tests/smoke/markdown-smoke.mjs",
-    "test:ai-panel": "node Tests/smoke/ai-panel-smoke.mjs"
+    "test:ai-panel": "node Tests/smoke/ai-panel-smoke.mjs",
+    "test:layout": "node Tests/smoke/layout-switch-smoke.mjs"
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",
