@@ -1,4 +1,6 @@
-.panel { position: relative; display: flex; flex-direction: column; flex: none; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; }
+.panel { position: relative; display: flex; flex-direction: column; flex: none; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; animation: panel-in .18s ease-out; }
+@keyframes panel-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .panel { animation: none; } }
 .resizer { position: absolute; top: 0; bottom: 0; left: 0; width: 7px; z-index: 2; cursor: col-resize; touch-action: none; }
 .resizer:hover { background: var(--accentSoft); }
 .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: none; min-height: 42px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--border); font-size: 12px; }

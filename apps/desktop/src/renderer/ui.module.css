@@ -10,7 +10,7 @@
 .app small { color: var(--muted); font-size: 11px; }
 .app summary { cursor: pointer; }
 .app pre { overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px; line-height: 1.6; }
-.sidebar { display: flex; flex-direction: column; width: 208px; flex: none; }
+.sidebar { display: flex; flex-direction: column; width: 208px; flex: none; animation: shell-in .16s ease-out; }
 .sectionHead { display: flex; justify-content: space-between; align-items: center; padding: 13px 15px 9px; color: var(--muted); font-size: 11px; }
 .sectionHead button { padding: 3px; }
 .hostList { max-height: 37vh; overflow: auto; padding: 0 8px 10px; flex: none; }
@@ -35,7 +35,7 @@
 .sidebarFoot { padding: 12px; border-top: 1px solid var(--border); }
 .sidebarFoot button { display: flex; justify-content: flex-start; padding: 8px; width: 100%; color: var(--muted); font-size: 12px; }
 .sidebarFoot > small { display: block; margin: 8px 8px 0; font-size: 9px; opacity: .65; }
-.workspace { display: flex; flex: 1; flex-direction: column; min-width: 250px; position: relative; }
+.workspace { display: flex; flex: 1; flex-direction: column; min-width: 250px; position: relative; animation: shell-in .16s ease-out; }
 .toolbar { display: flex; align-items: center; min-height: 45px; flex: none; border-bottom: 1px solid var(--border); padding: 0 8px; gap: 4px; }
 .toolbar > button { padding: 6px; }
 .tabs { display: flex; flex: 1; gap: 3px; min-width: 0; overflow-x: auto; align-items: center; scrollbar-width: thin; }
@@ -62,9 +62,9 @@
 .error { position: absolute; left: 14px; right: 14px; bottom: 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; z-index: 25; background: var(--dangerBg); color: var(--dangerText); border: 1px solid var(--dangerBorder); border-radius: 8px; padding: 11px 13px; font-size: 12px; line-height: 1.5; }
 .error span { overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
 .error button { padding: 2px; flex: none; }
-.panelResizer { width: 6px; flex: none; margin: 0 -8px; cursor: col-resize; touch-action: none; z-index: 1; }
+.panelResizer { width: 6px; flex: none; margin: 0 -8px; cursor: col-resize; touch-action: none; z-index: 1; animation: shell-in .18s ease-out; }
 .panelResizer:hover { background: var(--accentSoft); border-radius: 3px; }
-.agentPanel { display: flex; flex-direction: column; flex: none; min-height: 0; min-width: 330px; max-width: calc(100vw - 530px); }
+.agentPanel { display: flex; flex-direction: column; flex: none; min-height: 0; min-width: 330px; max-width: calc(100vw - 530px); animation: shell-in .18s ease-out; }
 .agentActivity { padding: 6px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; line-height: 1.5; }
 .agentActivity[role=alert] { color: var(--warning); }
 .agentWelcome { display: flex; flex-direction: column; align-items: flex-start; padding: 25px 3px; }
@@ -133,4 +133,10 @@
   .sidebar { width: 180px; }
   .agentPanel { max-width: calc(100vw - 480px); }
   .terminalToolbar { gap: 4px; padding: 4px 7px; }
+}
+/* Layout-switch and third-column entrance: opacity only, so geometry-based
+ * smoke assertions stay valid even while the transition is running. */
+@keyframes shell-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar, .workspace, .panelResizer, .agentPanel { animation: none; }
 }

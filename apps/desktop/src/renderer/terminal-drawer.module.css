@@ -1,4 +1,6 @@
-.drawer { position: relative; display: flex; flex-direction: column; flex: none; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; }
+.drawer { position: relative; display: flex; flex-direction: column; flex: none; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; animation: drawer-in .18s ease-out; }
+@keyframes drawer-in { from { opacity: 0; transform: translateY(10px); } }
+@media (prefers-reduced-motion: reduce) { .drawer { animation: none; } }
 .handle { position: absolute; top: 0; left: 0; right: 0; height: 7px; z-index: 2; cursor: row-resize; touch-action: none; }
 .handle::after { content: ''; position: absolute; top: 2px; left: 50%; width: 34px; height: 3px; transform: translateX(-50%); border-radius: 2px; background: var(--border-strong); }
 .handle:hover::after, .handle:focus-visible::after { background: var(--muted); }

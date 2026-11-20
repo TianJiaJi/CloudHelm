@@ -79,7 +79,7 @@
 .planList li[data-state=blocked] .stepMark { color: var(--warning); }
 .stepTitle { flex: 1; min-width: 0; }
 .stepMark { flex: none; display: inline-grid; place-items: center; width: 13px; height: 13px; border: 1px solid var(--border); border-radius: 50%; font-size: 10px; line-height: 1; }
-.turn { min-width: 0; }
+.turn { min-width: 0; animation: turn-in .18s ease-out; }
 .turnProcess { margin: 2px 0 16px; color: var(--muted); font-size: 11px; }
 .turnProcess > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-height: 28px; cursor: pointer; list-style: none; }
 .turnProcess > summary::-webkit-details-marker { display: none; }
@@ -98,7 +98,9 @@
   .evHead .evPill, .evDuration { display: none; }
 }
 @keyframes pulse { 50% { opacity: .35; } }
+@keyframes turn-in { from { opacity: 0; transform: translateY(5px); } }
 @media (prefers-reduced-motion: reduce) {
   .activityPulse { animation: none; }
   .panel button { transition: none; }
+  .turn { animation: none; }
 }
