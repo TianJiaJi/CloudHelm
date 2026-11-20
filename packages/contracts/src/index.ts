@@ -392,6 +392,12 @@ export type AppEvent =
 
 export interface ShortcutSettings { bindings: Record<string, string>; enabled: boolean }
 
+/** User-selected theme; 'system' follows the OS preference. */
+export interface StoredAppearanceSettings { mode: 'system' | 'light' | 'dark' }
+
+/** Persisted UI layout; 'ssh' keeps the terminal-first workspace. */
+export interface StoredLayoutSettings { mode: 'ssh' | 'agent' }
+
 export interface DesktopAPI {
   openReferenceDraft(scope: import('./message-content.js').ReferenceDraftScope): Promise<string>;
   claimDraftReferences(draftId: string, referenceIds: string[]): Promise<void>;
@@ -426,6 +432,10 @@ export interface DesktopAPI {
   saveReviewSettings(settings: { jevKey?: string; disableJev?: boolean; reviewer?: ReviewSelection }): Promise<void>;
   shortcuts(): Promise<ShortcutSettings>;
   saveShortcuts(settings: ShortcutSettings): Promise<void>;
+  appearanceSettings(): Promise<StoredAppearanceSettings>;
+  saveAppearanceSettings(settings: StoredAppearanceSettings): Promise<void>;
+  layoutSettings(): Promise<StoredLayoutSettings>;
+  saveLayoutSettings(settings: StoredLayoutSettings): Promise<void>;
   /** Clipboard access for user-initiated menu actions; contents are never logged. */
   readClipboard(): Promise<string>;
   writeClipboard(text: string): Promise<void>;

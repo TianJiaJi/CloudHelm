@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import type { AppEvent, AppSnapshot, DesktopAPI, TerminalViewState, ReferenceBody } from '@cloudhelm/contracts';
 import { App } from '../../../apps/desktop/src/renderer/app.js';
+import '../../../apps/desktop/src/renderer/theme.css';
 import '../../../apps/desktop/src/renderer/global.css';
 
 // This fixture deliberately uses fake hosts, credentials, model responses, and SSH output.
@@ -22,6 +23,8 @@ const terminalEvent = (terminal: TerminalViewState): void => emit({ type: 'termi
 const unsupported = async (): Promise<never> => { throw new Error('UI smoke reached an unimplemented fixture method'); };
 const shortcutSettings = { bindings: {} as Record<string, string>, enabled: true };
 let outboundLedger = { used: 3, cap: null as number | null };
+let appearance = { mode: 'system' as 'system' | 'light' | 'dark' };
+let layout = { mode: 'ssh' as 'ssh' | 'agent' };
 
 const referenceBodies = new Map<string, ReferenceBody>();
 const api: DesktopAPI = {
@@ -146,6 +149,10 @@ const api: DesktopAPI = {
   appVersion: async () => '0.1.0-smoke',
   shortcuts: async () => structuredClone(shortcutSettings),
   saveShortcuts: async (settings) => { calls.push({ kind: 'shortcuts', settings }); shortcutSettings.bindings = structuredClone(settings.bindings); shortcutSettings.enabled = settings.enabled; },
+  appearanceSettings: async () => structuredClone(appearance),
+  saveAppearanceSettings: async (settings) => { calls.push({ kind: 'appearance', settings }); appearance = structuredClone(settings); },
+  layoutSettings: async () => structuredClone(layout),
+  saveLayoutSettings: async (settings) => { calls.push({ kind: 'layout', settings }); layout = structuredClone(settings); },
   readClipboard: async () => 'pasted from clipboard',
   writeClipboard: async (text) => { calls.push({ kind: 'clipboard-write', text }); },
   deleteConversation: async (id) => {

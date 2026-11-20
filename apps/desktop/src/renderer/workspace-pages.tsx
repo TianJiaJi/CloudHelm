@@ -13,6 +13,7 @@ import { MarkdownMessage } from './markdown-message.js';
 import { presentError } from './error-presentation.js';
 import { copyEntries, copyText } from './clipboard.js';
 import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
+import { Card, Pill } from './ui/index.js';
 import styles from './ui.module.css';
 
 export function FilesPage({ hostId, host, report }: { hostId: string; host: string; report(error: string): void }): React.JSX.Element {
@@ -64,7 +65,7 @@ export function FilesPage({ hostId, host, report }: { hostId: string; host: stri
       { id: 'copy-path', label: '复制当前路径', icon: 'copy', run: () => void copyText(path) },
       { id: 'up', label: '上一级', icon: 'arrow', disabled: path === '/', run: () => navigate(path === '/' ? '/' : `${path.replace(/\/$/u, '')}/..`) }
     ], '文件页操作')}>
-    <div className={styles.pageHead}><div><small>{host}</small><h2>远程文件</h2></div><span className={styles.pill}>只读 SFTP</span></div>
+    <div className={styles.pageHead}><div><small>{host}</small><h2>远程文件</h2></div><Pill>只读 SFTP</Pill></div>
     <form className={styles.pathRow} onSubmit={(event) => { event.preventDefault(); navigate(draft); }}>
       <button type="button" title="上一级" onClick={() => navigate(path === '/' ? '/' : `${path.replace(/\/$/u, '')}/..`)}><Icon name="arrow" /></button>
       <input aria-label="远程目录" value={draft} onChange={(event) => setDraft(event.target.value)} /><button>前往</button>
@@ -97,7 +98,7 @@ export function OperationCard({ operation, report }: { operation: OperationView;
       run: () => setLogOpen(true) });
     return entries;
   }
-  return <section className={styles.operationCard} onContextMenu={(event) => openContextMenu(event, menuEntries(), '操作详情')}>
+  return <Card as="section" tone="surface" className={styles.operationCard} onContextMenu={(event) => openContextMenu(event, menuEntries(), '操作详情')}>
     <div className={styles.cardTitle}><Icon name="terminal" /><strong>{operation.kind === 'command' ? '远程命令' : '文件操作'}</strong><small>{operation.reconciliation?.kind === 'risk-accepted' ? '风险已接管' : statuses[operation.status]}</small></div>
     <pre className={styles.command}>{operation.preview}</pre>
     <small>操作 {operation.id}{operation.logRef ? ` · 终端 ${operation.logRef}` : ''}</small>
@@ -116,7 +117,7 @@ export function OperationCard({ operation, report }: { operation: OperationView;
     {operation.status === 'running' && !logOpen && <button type="button" onClick={() => setLogOpen(true)}>查看增量日志</button>}
     {logOpen && <><button type="button" onClick={() => setLogOpen(false)}>收起日志</button><OperationLog key={operation.id} taskId={operation.taskId} operationId={operation.id}
       live={operation.status === 'running'} report={report} /></>}
-  </section>;
+  </Card>;
 }
 
 export function VerificationCard({ conversation, report, compact = false }: { conversation: TaskView; report(error: string): void; compact?: boolean }): React.JSX.Element | null {
@@ -126,7 +127,7 @@ export function VerificationCard({ conversation, report, compact = false }: { co
   if (conversation.report?.facts && conversation.status !== 'failed') return <VerificationFactsCard conversation={conversation} value={conversation.report} report={report} />;
   const failure = conversation.status === 'failed' ? presentError(conversation.summary) : null;
   const conclusion = failure?.description ?? conversation.report?.summary ?? conversation.summary ?? '';
-  return <section className={`${styles.reviewCard} ${styles.verificationCard} ${failure ? styles.verificationWarning : ''}`}
+  return <Card as="section" tone={failure ? 'warning' : 'accent'} className={styles.reviewCard}
     role={failure ? 'alert' : undefined}
     onContextMenu={(event) => openContextMenu(event, copyEntries('复制结论', conclusion, report), '验证结论')}>
     <div className={styles.cardTitle}><Icon name="shield" /><strong>{failure?.title ?? (conversation.report ? '历史报告 · 模型判断' : '历史操作记录')}</strong></div>
@@ -138,14 +139,14 @@ export function VerificationCard({ conversation, report, compact = false }: { co
     <div className={styles.cardActions}>
       <button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
     </div>
-  </section>;
+  </Card>;
 }
 
 export function ReportPage({ conversation, operations, report }: { conversation: TaskView; operations: OperationView[]; report(error: string): void }): React.JSX.Element {
   const snapshot = useUi((state) => state.snapshot);
   const messages = snapshot?.messages.filter((message) => message.taskId === conversation.id) ?? [];
   return <section className={styles.reportPage}>
-    <div className={styles.pageHead}><div><small>AI 对话详情</small><h2>{conversation.goal}</h2></div><span className={styles.pill}>{statusLabel[conversation.status]}</span></div>
+    <div className={styles.pageHead}><div><small>AI 对话详情</small><h2>{conversation.goal}</h2></div><Pill>{statusLabel[conversation.status]}</Pill></div>
     {!conversation.report && (conversation.status === 'failed' || conversation.status === 'answered' && conversation.verificationState?.status === 'unverified') && <VerificationCard conversation={conversation} report={report} />}
     {conversation.report && <>
       <VerificationCard conversation={conversation} report={report} />

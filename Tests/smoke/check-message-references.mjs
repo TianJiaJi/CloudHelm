@@ -1,4 +1,4 @@
-/* global window, document, ClipboardEvent, DataTransfer, CustomEvent */
+/* global window, document, getComputedStyle, ClipboardEvent, DataTransfer, CustomEvent */
 import assert from 'node:assert/strict';
 import process from 'node:process';
 export async function checkMessageReferences(page, screenshot) {
@@ -22,8 +22,14 @@ export async function checkMessageReferences(page, screenshot) {
   const preview = page.getByRole('dialog', { name: '粘贴文本预览' });
   await preview.getByRole('textbox', { name: '编辑粘贴内容' }).fill(body + '// edited');
   assert.deepEqual(await preview.evaluate((dialog) => {
+    const probe = document.createElement('div');
+    probe.style.display = 'none';
+    probe.style.background = 'var(--panel)';
+    document.body.appendChild(probe);
+    const themedPanel = getComputedStyle(probe).backgroundColor;
+    probe.remove();
     const canvas = dialog.querySelector('textarea');
-    return { themed: dialog.parentElement.parentElement === document.getElementById('root').firstElementChild,
+    return { themed: window.getComputedStyle(dialog).backgroundColor === themedPanel,
       panel: window.getComputedStyle(dialog).backgroundColor,
       canvas: window.getComputedStyle(canvas).backgroundColor,
       save: window.getComputedStyle(dialog.querySelector('button:last-child')).backgroundColor };

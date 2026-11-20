@@ -13,6 +13,19 @@ import { Icon } from './ui-helpers.js';
 import { useUi } from './store.js';
 import styles from './agent-panel.module.css';
 
+/** Local visibility scopes for the stream filter; the backend timeline stays untouched. */
+export type StreamFilter = 'all' | 'commands' | 'interactions' | 'notices';
+
+/** Local visibility projection only: pending clarifications stay reachable so a
+ * filter can never strand the user from an unanswered question. */
+function entryVisible(entry: TimelineEntry, filter: StreamFilter): boolean {
+  if (filter === 'all') return true;
+  if (entry.kind === 'operation') return filter === 'commands';
+  if (entry.kind === 'clarification') return filter === 'interactions' || entry.value.status === 'pending';
+  if (entry.value.role === 'user' || entry.value.role === 'agent') return false;
+  return filter === 'notices';
+}
+
 /** Finished assistant answers expose discoverable copy actions; the raw
  * Markdown source stays distinct from code blocks' own copy. */
 function AssistantMessage({ message, report, omitReasoning = false }: {
@@ -88,17 +101,18 @@ function Turn({ turn, conversation, report, showInactivePlan }: {
   </section>;
 }
 
-export function ConversationTranscript({ snapshot, conversation, report }: {
-  snapshot: AppSnapshot; conversation: TaskView; report(error: string): void;
+export function ConversationTranscript({ snapshot, conversation, report, filter = 'all' }: {
+  snapshot: AppSnapshot; conversation: TaskView; report(error: string): void; filter?: StreamFilter;
 }): React.JSX.Element {
   const entries = conversationTimeline(snapshot.messages.filter((message) => message.taskId === conversation.id),
     snapshot.operations.filter((operation) => operation.taskId === conversation.id),
-    (snapshot.clarifications ?? []).filter((request) => request.taskId === conversation.id));
+    (snapshot.clarifications ?? []).filter((request) => request.taskId === conversation.id)).filter((entry) => entryVisible(entry, filter));
   const execution = snapshot.execution?.[conversation.id];
   const turns = conversationTurns(entries, { status: conversation.status, execution,
     pendingInteraction: [...snapshot.approvals, ...snapshot.inputs].some((request) => request.taskId === conversation.id),
     liveReasoning: !!(snapshot.reasoningProgress?.[conversation.id] || snapshot.textProgress?.[conversation.id]) });
   const showInactivePlan = !(execution?.canStop ?? ['running', 'waiting-review', 'waiting-user', 'recovering'].includes(conversation.status));
   return <>{turns.map((turn) => <Turn key={`${conversation.id}:${turn.key}`} turn={turn} conversation={conversation}
-    report={report} showInactivePlan={showInactivePlan} />)}</>;
+    report={report} showInactivePlan={showInactivePlan} />)}
+    {!turns.length && filter !== 'all' && <p className={styles.filterEmpty}>当前筛选下没有内容；切换回“全部”可查看完整时间线。</p>}</>;
 }

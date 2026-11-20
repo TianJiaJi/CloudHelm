@@ -1,0 +1,19 @@
+.drawer { position: relative; display: flex; flex-direction: column; flex: none; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; }
+.handle { position: absolute; top: 0; left: 0; right: 0; height: 7px; z-index: 2; cursor: row-resize; touch-action: none; }
+.handle::after { content: ''; position: absolute; top: 2px; left: 50%; width: 34px; height: 3px; transform: translateX(-50%); border-radius: 2px; background: var(--border-strong); }
+.handle:hover::after, .handle:focus-visible::after { background: var(--muted); }
+.bar { display: flex; align-items: center; gap: 4px; flex: none; min-height: 40px; padding: 4px 8px 4px 14px; border-bottom: 1px solid var(--border); }
+.tabs { display: flex; flex: 1; gap: 3px; min-width: 0; overflow-x: auto; align-items: center; scrollbar-width: thin; }
+.tab { display: flex; align-items: center; flex: none; max-width: 215px; min-width: 0; padding: 2px 3px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); white-space: nowrap; }
+.tabSelect { display: flex; align-items: center; gap: 6px; justify-content: flex-start !important; min-width: 0; padding: 6px 5px !important; font-size: 11px; text-align: left; }
+.tabSelect span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabClose { flex: none; padding: 4px !important; color: var(--muted) !important; }
+.activeTab { background: var(--raised); border-color: var(--border); color: var(--text); }
+.activeTab .tabSelect svg { color: var(--accent); }
+.newTab { flex: none; padding: 5px !important; color: var(--muted) !important; }
+.actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.actions button { padding: 5px; font-size: 10px; color: var(--muted); }
+.collapse svg { transform: rotate(90deg); }
+.body { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.notice { padding: 7px 13px; font-size: 10px; color: var(--muted); border-bottom: 1px solid var(--border); line-height: 1.5; }
+.empty { display: grid; place-items: center; flex: 1; color: var(--muted); font-size: 11px; }

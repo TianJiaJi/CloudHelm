@@ -5,7 +5,7 @@
 .chevron { display: inline-flex; flex: none; }
 .chevron[data-open=true] { transform: rotate(90deg); }
 .status { font-size: 10px; white-space: nowrap; }
-.status[data-status=interrupted] { color: light-dark(#975a17, #dfb27e); }
+.status[data-status=interrupted] { color: var(--warning); }
 .elapsed { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
 .thinkingIcon { width: 4px; height: 4px; margin: 0 2px; border-radius: 50%; background: currentColor; animation: breathe 1.6s ease-in-out infinite; }
 .body { --assistant-font-size: 11px; --assistant-line-height: 16px; max-height: 180px; overflow: auto; scrollbar-width: thin; margin: 6px 0 2px 6px; padding: 2px 6px 2px 10px; border-left: 1px solid var(--border); overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 16px; }

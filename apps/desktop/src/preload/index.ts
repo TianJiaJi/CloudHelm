@@ -1,7 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AppEvent, DesktopAPI } from '@cloudhelm/contracts';
+import type { AppEvent, DesktopAPI, StoredAppearanceSettings, StoredLayoutSettings } from '@cloudhelm/contracts';
 
 const invoke = <T>(method: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(`cloudhelm:${method}`, ...args) as Promise<T>;
+
+// Resolved before the renderer paints so the first frame already matches the
+// persisted theme; 'system' is resolved against the OS preference here.
+const initialAppearance = ipcRenderer.sendSync('cloudhelm:initial-appearance') as StoredAppearanceSettings;
+const resolvedTheme = initialAppearance.mode === 'system'
+  ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+  : initialAppearance.mode;
+document.documentElement.dataset.theme = resolvedTheme;
+// Same for the layout mode: the store reads this before its first render.
+const initialLayout = ipcRenderer.sendSync('cloudhelm:initial-layout') as StoredLayoutSettings;
+document.documentElement.dataset.layout = initialLayout.mode;
 
 const api: DesktopAPI = {
   openReferenceDraft: (scope) => invoke('open-reference-draft', scope),
@@ -31,6 +42,10 @@ const api: DesktopAPI = {
   saveReviewSettings: (settings) => invoke('save-review-settings', settings),
   shortcuts: () => invoke('shortcuts'),
   saveShortcuts: (settings) => invoke('save-shortcuts', settings),
+  appearanceSettings: () => invoke('appearance-settings'),
+  saveAppearanceSettings: (settings) => invoke('save-appearance-settings', settings),
+  layoutSettings: () => invoke('layout-settings'),
+  saveLayoutSettings: (settings) => invoke('save-layout-settings', settings),
   readClipboard: () => invoke('read-clipboard'),
   writeClipboard: (text) => invoke('write-clipboard', text),
   listModelProviders: () => invoke('list-model-providers'),

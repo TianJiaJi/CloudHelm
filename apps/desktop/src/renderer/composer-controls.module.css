@@ -29,11 +29,7 @@
 .permissionTrigger > svg, .contextTrigger { flex: none; }
 .contextTrigger > span { white-space: nowrap; }
 .footer button:disabled { opacity: .65; }
-.permissive { --permissionOrange: #f5a14b; }
-.picker button.permissive, .picker button.permissive > svg, .permissionTrigger.permissive { color: var(--permissionOrange) !important; }
-@media (prefers-color-scheme: light) {
-  .permissive { --permissionOrange: #b85c00; }
-}
+.picker button.permissive, .picker button.permissive > svg, .permissionTrigger.permissive { color: var(--warning) !important; }
 .ring { flex: none; }
 .contextDetails { padding: 10px; }
 .contextDetails p { font-size: 12px; line-height: 1.8; white-space: pre-line; margin: 10px 0; }

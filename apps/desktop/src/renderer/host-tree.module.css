@@ -1,0 +1,28 @@
+.sidebar { display: flex; flex-direction: column; width: 260px; flex: none; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; }
+.search { margin: 10px 12px 8px; padding: 7px 10px; font-size: 12px; }
+.filter { display: flex; margin: 0 12px 8px; }
+.treeHead { display: flex; justify-content: space-between; align-items: center; padding: 6px 15px 7px; color: var(--muted); font-size: 11px; }
+.treeHead button { padding: 3px; }
+.tree { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 10px; }
+.node { margin-bottom: 2px; }
+.row { display: flex; align-items: center; border-radius: 7px; position: relative; }
+.row:hover { background: transparent; }
+.caret { flex: none; padding: 5px 2px 5px 4px; color: var(--muted) !important; }
+.caret svg { display: block; transition: transform .14s ease; }
+.caret[data-open='false'] svg { transform: rotate(-90deg); }
+.rowSelect { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; padding: 9px 5px 9px 2px; text-align: left; }
+.rowSelect > svg { color: var(--muted); flex: none; }
+.rowSelect > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rowSelect small { display: block; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; font-size: 10px; }
+.selected { background: var(--raised) !important; }
+.selected > svg, .selected .rowSelect > svg { color: var(--accent); }
+.sectionLabel { margin: 10px 7px 3px; padding: 0 7px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.leaf { display: flex; align-items: flex-start; gap: 7px; width: 100%; min-width: 0; margin: 1px 0; padding: 7px 8px 7px 27px; text-align: left; border-radius: 7px; }
+.leaf > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; }
+.leaf small { display: block; font-size: 10px; margin-top: 3px; }
+.leaf.selected { background: var(--raised) !important; }
+.addHostEmpty { width: 100%; min-height: 60px; margin: 4px 0; border: 1px dashed var(--border) !important; color: var(--muted) !important; font-size: 11px; }
+.empty { margin: 6px 9px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.foot { padding: 10px 12px; border-top: 1px solid var(--border); }
+.foot button { display: flex; justify-content: flex-start; width: 100%; padding: 8px; color: var(--muted); font-size: 12px; }
+.foot > small { display: block; margin: 8px 8px 0; font-size: 9px; opacity: .65; }

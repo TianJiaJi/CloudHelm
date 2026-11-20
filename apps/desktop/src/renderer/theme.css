@@ -1,0 +1,91 @@
+/* CloudHelm theme tokens. Color literals live here and nowhere else:
+   black/white/gray minimal. The dark palette is the :root default so the UI
+   still renders if data-theme has not been applied yet; the light palette
+   overrides via html[data-theme='light']. */
+
+:root {
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  color-scheme: dark;
+  --bg: #16171a;
+  --surface: #1d1e22;
+  --raised: #26282d;
+  --border: #2a2c31;
+  --border-strong: #3a3d44;
+  --text: #eceded;
+  --muted: #9ca1a8;
+  --faint: #646a73;
+  --accent: #f2f3f5;
+  --accent-press: #ffffff;
+  --accentText: #17181b;
+  --accentSoft: #f2f3f514;
+  --success: #529a6a;
+  --warning: #c99a45;
+  --danger: #d96b5f;
+  --dangerText: #f0c1bb;
+  --info: #6b9fd6;
+  --terminalBg: #131417;
+  --terminalCursor: #eceded;
+  --terminalSelection: #3a3d44;
+  --scrollbar-thumb: rgba(236, 237, 239, .19);
+  --scrim: rgba(0, 0, 0, .62);
+  --shadow-1: 0 2px 8px rgba(0, 0, 0, .28);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, .34);
+  --shadow-3: 0 24px 70px rgba(0, 0, 0, .55);
+  /* Derived tints: resolved per element, so the light overrides below apply too. */
+  --dangerBg: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  --dangerBorder: color-mix(in srgb, var(--danger) 42%, transparent);
+  --warningBg: color-mix(in srgb, var(--warning) 12%, transparent);
+  --warningBorder: color-mix(in srgb, var(--warning) 55%, transparent);
+  --accentBorder: color-mix(in srgb, var(--accent) 40%, transparent);
+  /* highlight.js syntax palette. */
+  --code-keyword: #b8a3d9;
+  --code-string: #7fb894;
+  --code-number: #82aac4;
+  --code-title: #cfa878;
+  --code-attr: #93b7c9;
+  --code-builtin: #c4b2dd;
+  --code-deletion: #d98880;
+  /* Legacy aliases for token names used before this sheet existed. */
+  --canvas: var(--bg);
+  --panel: var(--surface);
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f6f6f7;
+  --surface: #fbfbfc;
+  --raised: #ffffff;
+  --border: #e3e4e8;
+  --border-strong: #c9ccd2;
+  --text: #1f2125;
+  --muted: #5f6570;
+  --faint: #9096a0;
+  --accent: #1f2125;
+  --accent-press: #000000;
+  --accentText: #ffffff;
+  --accentSoft: #1f21250d;
+  --success: #35784f;
+  --warning: #9a6f1f;
+  --danger: #b84a3f;
+  --dangerText: #b84a3f;
+  --info: #3c6da8;
+  --terminalBg: #ffffff;
+  --terminalCursor: #1f2125;
+  --terminalSelection: #c9ccd2;
+  --scrollbar-thumb: rgba(31, 33, 37, .22);
+  --scrim: rgba(31, 33, 37, .3);
+  --shadow-1: 0 2px 8px rgba(31, 33, 37, .06);
+  --shadow-2: 0 8px 24px rgba(31, 33, 37, .1);
+  --shadow-3: 0 24px 70px rgba(31, 33, 37, .18);
+  --code-keyword: #7c62a8;
+  --code-string: #4d7c5f;
+  --code-number: #4a6c85;
+  --code-title: #9a6f3c;
+  --code-attr: #4f7080;
+  --code-builtin: #8a6fb0;
+  --code-deletion: #b05a52;
+}

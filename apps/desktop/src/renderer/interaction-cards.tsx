@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ApprovalView, InputRequestView } from '@cloudhelm/contracts';
 import { capture, Icon } from './ui-helpers.js';
+import { Card } from './ui/index.js';
 import styles from './ui.module.css';
 
 function useExpired(expiresAt: number): boolean {
@@ -16,7 +17,7 @@ export function ApprovalCard({ approval, host, report }: { approval: ApprovalVie
     setBusy(true);
     void capture(() => window.cloudhelm.decideApproval(approval.id, approved), report).finally(() => setBusy(false));
   }
-  return <section className={styles.reviewCard} aria-label="命令审批">
+  return <Card as="section" tone="accent" className={styles.reviewCard} aria-label="命令审批">
     <div className={styles.cardTitle}><Icon name="shield" /><strong>{approval.title}</strong></div>
     <small>{host} · {expired ? '请求已过期' : '等待你的决定'}</small><p>{approval.explanation}</p>
     <small>执行账号：{approval.account ?? '未知'} · 工作目录：{approval.cwd ?? '未知'} · 影响：{approval.impact === 'high' ? '高' : approval.impact === 'unknown' ? '尚不明确' : '一般'}</small>
@@ -24,7 +25,7 @@ export function ApprovalCard({ approval, host, report }: { approval: ApprovalVie
     <div className={styles.reviewCommand}><small>待批准的完整操作</small><pre>{approval.preview}</pre></div>
     {approval.recovery && <p>{approval.recovery}</p>}
     <div className={styles.cardActions}><button disabled={expired || busy} onClick={() => decide(false)}>拒绝</button><button className={styles.primary} disabled={expired || busy} onClick={() => decide(true)}>批准这次操作</button></div>
-  </section>;
+  </Card>;
 }
 
 export function InputCard({ input, host, report, later }: { input: InputRequestView; host: string; report(error: string): void; later?: () => void }): React.JSX.Element {
@@ -37,8 +38,7 @@ export function InputCard({ input, host, report, later }: { input: InputRequestV
     setBusy(true); setAnswer('');
     void capture(() => window.cloudhelm.answerInput(input.id, value), report).finally(() => setBusy(false));
   }
-  return <form className={later ? styles.dialog : styles.reviewCard} role={later ? 'dialog' : undefined} aria-modal={later ? true : undefined}
-    aria-label={input.title} onSubmit={(event) => { event.preventDefault(); submit(answer); }}>
+  const body = <>
     <div className={styles.cardTitle}><Icon name={sensitive ? 'shield' : 'chat'} /><strong>{input.title}</strong></div>
     <p>{input.explanation}</p><small>目标主机：{host} · {expired ? '请求已过期' : '仅用于当前操作'}</small>
     {sensitive && <p className={styles.notice}>密码或验证码直接提交给当前认证操作，AI 不会看到，也不会保存到对话或终端日志。</p>}
@@ -52,5 +52,9 @@ export function InputCard({ input, host, report, later }: { input: InputRequestV
       {!input.choices?.length && <button className={styles.primary} disabled={!answer || expired || busy}>{busy ? '提交中…' : '安全提交'}</button>}
     </div>
     <small>取消输入或关闭窗口不会自动停止远端进程。需要时可单独选择“停止命令”。</small>
-  </form>;
+  </>;
+  if (later) return <form className={styles.dialog} role="dialog" aria-modal={true}
+    aria-label={input.title} onSubmit={(event) => { event.preventDefault(); submit(answer); }}>{body}</form>;
+  return <Card as="form" tone="accent" className={styles.reviewCard}
+    aria-label={input.title} onSubmit={(event) => { event.preventDefault(); submit(answer); }}>{body}</Card>;
 }

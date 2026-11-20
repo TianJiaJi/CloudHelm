@@ -11,14 +11,14 @@
 .codeInline { padding: 0; border: 0; border-radius: 0; background: transparent; font: inherit; }
 .copyStatus { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 
-/* highlight.js token palette; adapts to dark and light themes. */
+/* highlight.js token palette; driven by theme.css --code-* tokens. */
 .hljs-comment, .hljs-quote { color: var(--muted); font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-template-tag, .hljs-doctag, .hljs-meta .hljs-keyword { color: light-dark(#8250df, #c792ea); }
-.hljs-string, .hljs-regexp, .hljs-addition { color: light-dark(#0a7d32, #7ee787); }
-.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet, .hljs-meta { color: light-dark(#0550ae, #79b8ff); }
-.hljs-title, .hljs-section, .hljs-name, .hljs-selector-id, .hljs-selector-class { color: light-dark(#953800, #ffb86c); }
-.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-type, .hljs-class .hljs-title { color: light-dark(#116329, #a5d6ff); }
-.hljs-built_in, .hljs-builtin-name { color: light-dark(#8250df, #d2a8ff); }
-.hljs-deletion { color: light-dark(#82071e, #ff7b72); }
+.hljs-keyword, .hljs-selector-tag, .hljs-template-tag, .hljs-doctag, .hljs-meta .hljs-keyword { color: var(--code-keyword); }
+.hljs-string, .hljs-regexp, .hljs-addition { color: var(--code-string); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet, .hljs-meta { color: var(--code-number); }
+.hljs-title, .hljs-section, .hljs-name, .hljs-selector-id, .hljs-selector-class { color: var(--code-title); }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-type, .hljs-class .hljs-title { color: var(--code-attr); }
+.hljs-built_in, .hljs-builtin-name { color: var(--code-builtin); }
+.hljs-deletion { color: var(--code-deletion); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }

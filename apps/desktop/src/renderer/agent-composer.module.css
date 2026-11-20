@@ -1,6 +1,6 @@
 .composerWrap { flex: none; padding: 8px 12px 10px; min-width: 0; }
-.composer { position: relative; min-width: 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); box-shadow: 0 2px 8px #0000000a; transition: border-color .15s ease, box-shadow .15s ease; }
-.composer:focus-within { border-color: color-mix(in srgb, var(--text) 28%, var(--border)); box-shadow: 0 2px 8px #00000012; }
+.composer { position: relative; min-width: 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); box-shadow: var(--shadow-1); transition: border-color .15s ease, box-shadow .15s ease; }
+.composer:focus-within { border-color: color-mix(in srgb, var(--text) 28%, var(--border)); box-shadow: var(--shadow-2); }
 .composer [role=textbox] { box-sizing: border-box; font-size: 13px; min-height: 72px; max-height: 280px; line-height: 20px; padding: 10px 12px 2px; }
 .composer > p { padding-inline: 12px; }
 .composerTools { display: flex; align-items: center; gap: 6px; padding: 6px; min-width: 0; }

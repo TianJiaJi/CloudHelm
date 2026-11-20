@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClarificationAnswer, ClarificationRequest } from '@cloudhelm/contracts';
+import { Card } from './ui/index.js';
 import styles from './clarification-card.module.css';
 
 const drafts = new Map<string, Record<string, ClarificationAnswer>>();
@@ -23,7 +24,7 @@ export function ClarificationCard({ request }: { request: ClarificationRequest }
     finally { submitting.current = false; setBusy(false); }
   }
   const complete = request.questions.every((q) => answers[q.id]?.value.trim());
-  return <section className={styles.card} aria-label="需求澄清">
+  return <Card as="section" tone="accent" className={styles.card} aria-label="需求澄清">
     <header><strong>需要你补充的信息</strong><span>{ { pending: '等待回答', answered: '已回答', cancelled: '已停止', expired: '已失效' }[request.status] }</span></header>
     {pending && <p className={styles.hint}>回答后 AI 会继续。请勿填写密码、验证码或密钥。</p>}
     <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
@@ -46,5 +47,5 @@ export function ClarificationCard({ request }: { request: ClarificationRequest }
       {pending && <footer><button type="button" disabled={busy} onClick={() => void submit(true)}>停止本轮</button><button type="submit" disabled={busy || !complete}>{busy ? '提交中…' : '提交并继续'}</button></footer>}
       {request.status === 'expired' && <p className={styles.hint}>运行已结束或应用已重启，请发送新消息继续。</p>}
     </form>
-  </section>;
+  </Card>;
 }

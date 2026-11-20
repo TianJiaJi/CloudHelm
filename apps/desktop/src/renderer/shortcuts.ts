@@ -6,7 +6,7 @@ export type ShortcutActionId =
   | 'edit.copy' | 'edit.paste' | 'edit.cut' | 'edit.selectAll' | 'edit.undo' | 'edit.redo'
   | 'terminal.new' | 'conversation.new' | 'settings.open'
   | 'tab.close' | 'tab.closeOthers' | 'tab.closeAll' | 'tab.next' | 'tab.previous'
-  | 'agent.toggle'
+  | 'agent.toggle' | 'terminal.toggleDrawer' | 'search.focus'
   | 'terminal.copy' | 'terminal.paste' | 'terminal.selectAll' | 'terminal.clear' | 'terminal.quote';
 
 export interface ShortcutAction {
@@ -41,6 +41,8 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: 'conversation.new', label: '新对话', group: 'workspace', scope: 'global', defaultBinding: 'mod+n' },
   { id: 'settings.open', label: '打开设置', group: 'workspace', scope: 'global' },
   { id: 'agent.toggle', label: '切换 AI 助手面板', group: 'agent', scope: 'global' },
+  { id: 'terminal.toggleDrawer', label: '切换终端抽屉（Agent 模式）', group: 'workspace', scope: 'global', defaultBinding: 'mod+j' },
+  { id: 'search.focus', label: '聚焦搜索（Agent 模式）', group: 'workspace', scope: 'global', defaultBinding: 'mod+k' },
   { id: 'terminal.copy', label: '复制选中内容', group: 'terminal', scope: 'terminal', defaultBinding: 'mod+shift+c' },
   { id: 'terminal.paste', label: '粘贴', group: 'terminal', scope: 'terminal', defaultBinding: 'mod+shift+v' },
   { id: 'terminal.selectAll', label: '全选终端内容', group: 'terminal', scope: 'terminal', defaultBinding: 'mod+shift+a' },

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ContextUsageView, HostView, ModelChoice, ReviewMode, TaskView } from '@cloudhelm/contracts';
-import { MenuSurface } from './menu-surface.js';
+import { MenuSurface } from './ui/index.js';
 import { capture, Icon, reviewLabel } from './ui-helpers.js';
 import styles from './composer-controls.module.css';
 import { contextUsagePresentation } from './context-usage.js';

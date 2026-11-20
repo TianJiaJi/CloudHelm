@@ -5,6 +5,7 @@ import { capture, Icon } from './ui-helpers.js';
 import { useUi } from './store.js';
 import { copyEntries } from './clipboard.js';
 import { openContextMenu } from './context-menu.js';
+import { Card } from './ui/index.js';
 import styles from './ui.module.css';
 
 const operationStatus: Readonly<Record<string, string>> = { succeeded: '执行返回', failed: '执行失败', denied: '已拦截', unknown: '结果未知',
@@ -23,7 +24,7 @@ export function VerificationFactsCard({ conversation, value, report }: {
     finally { setRebuilding(false); }
   };
   const record = facts.operations.map((op) => `${op.operationId}: ${operationStatus[op.status] ?? '状态未登记'}${op.exitCode === undefined ? '' : ` (exit ${op.exitCode})`}`).join('\n');
-  return <section className={`${styles.reviewCard} ${styles.verificationCard}`} aria-label="执行证据"
+  return <Card as="section" tone="accent" className={styles.reviewCard} aria-label="执行证据"
     onContextMenu={(event) => openContextMenu(event, copyEntries('复制执行记录', record, report), '执行证据')}>
     <div className={styles.cardTitle}><Icon name="history" /><strong>执行证据</strong></div>
     {!!facts.unresolvedOperationIds.length && <p role="alert">以下操作的结果尚未确认：{facts.unresolvedOperationIds.join('、')}。请先核对原操作，不要直接重试。</p>}
@@ -38,7 +39,7 @@ export function VerificationFactsCard({ conversation, value, report }: {
           onClick={() => void rebuild()}>{rebuilding ? '正在整理已有记录…' : '仅按已有记录重新整理'}</button>
         <button onClick={() => useUi.getState().openReport(conversation.id)}>查看完整记录</button>
       </div>}
-  </section>;
+  </Card>;
 }
 
 export function VerificationHistory({ values }: { values?: VerificationReport[] }): React.JSX.Element | null {

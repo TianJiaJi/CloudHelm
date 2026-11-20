@@ -12,16 +12,16 @@ import { operationNeedsVerification, type AppSnapshot, type HostView, type Local
 import { useUi } from './store.js';
 import { ApprovalCard, InputCard } from './interaction-cards.js';
 import { VerificationCard } from './workspace-pages.js';
-import { ActivityLabel, AgentPanelHeader, AgentPlan, AssistantIdentity } from './agent-panel-parts.js';
+import { ActivityLabel, AgentPlan, AssistantIdentity } from './agent-panel-parts.js';
 import { RecoveryCard } from './recovery-card.js';
 import { RequestBudgetCard } from './request-budget-card.js';
-import { ConversationTranscript } from './conversation-transcript.js';
+import { ConversationTranscript, type StreamFilter } from './conversation-transcript.js';
 import { presentError } from './error-presentation.js';
-import { capture, Icon, reviewLabel } from './ui-helpers.js';
+import { capture, Icon } from './ui-helpers.js';
 import { copyText } from './clipboard.js';
 import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
 import { ComposerFooter, ModelPicker, PermissionPicker, useMenuAnchor } from './composer-controls.js';
-import { MenuItem, MenuSurface } from './menu-surface.js';
+import { MenuItem, MenuSurface } from './ui/index.js';
 import styles from './ui.module.css';
 import panelStyles from './agent-panel.module.css';
 import composerStyles from './agent-composer.module.css';
@@ -35,9 +35,10 @@ useUi.subscribe((state, previous) => {
   for (const task of previous.snapshot?.conversations ?? []) if (!live.has(task.id)) composerDrafts.delete(task.id);
 });
 
-export function AgentPanel({ snapshot, host, conversation, report, openInput, hiddenInputs }: {
+/** Scrollable card stream plus composer; shared verbatim by the SSH right rail and the Agent main area. */
+export function StreamArea({ snapshot, host, conversation, report, openInput, hiddenInputs, streamFilter }: {
   snapshot: AppSnapshot; host?: HostView; conversation?: TaskView;
-  report(error: string): void; openInput(id: string): void; hiddenInputs: string[];
+  report(error: string): void; openInput(id: string): void; hiddenInputs: string[]; streamFilter?: StreamFilter;
 }): React.JSX.Element {
   const [models, setModels] = useState<ModelOption[]>([]);
   const reasoning = conversation ? snapshot.reasoningProgress?.[conversation.id] : undefined;
@@ -91,10 +92,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
     return () => { observer.disconnect(); resize.disconnect(); if (frame) window.cancelAnimationFrame(frame); };
   }, [conversation?.id]);
   const hostName = (id: string): string => snapshot.hosts.find((item) => item.id === id)?.label ?? id;
-  return <section className={panelStyles.panel} aria-label="AI 助手面板">
-    <AgentPanelHeader snapshot={snapshot} conversation={conversation} hostId={host?.id} />
-    <div className={panelStyles.assistantContext}><span><span className={`${styles.dot} ${host?.status === 'connected' ? styles.online : ''}`} />{host ? `${host.label} · ${host.username}` : '自由对话'}</span>
-      <small>{host ? <><Icon name="shield" size={12} />{reviewLabel[conversation?.reviewModesByHost?.[host.id] ?? host.defaultMode]}</> : '未授权远端操作'}</small></div>
+  return <>
     {conversation && <div className={panelStyles.agentActions}>
       <ActivityLabel task={conversation} />
       {conversation.session && !running && conversation.resumeReason && conversation.resumeReason !== 'report' && (!conversation.budget || conversation.budget.roundUsed < conversation.budget.roundLimit) && ['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status)
@@ -123,7 +121,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
       </div>}
       {conversation && <AgentActivity key={`activity:${conversation.id}`} snapshot={snapshot} conversation={conversation} report={report} />}
       {conversation && <ConversationQueue key={`queue:${conversation.id}`} inputs={(snapshot.queuedInputs ?? []).filter((input) => input.taskId === conversation.id)} report={report} />}
-      {conversation && <ConversationTranscript snapshot={snapshot} conversation={conversation} report={report} />}
+      {conversation && <ConversationTranscript snapshot={snapshot} conversation={conversation} report={report} filter={streamFilter} />}
       {host && <RecoveryCard snapshot={snapshot} hostId={host.id} conversation={conversation} report={report} />}
       {reasoning && <article className={panelStyles.message} key={reasoning.id}><AssistantIdentity /><ReasoningContent value={reasoning.reasoning} startedAt={reasoning.createdAt} now={now} /></article>}
       {liveText && <article className={panelStyles.message} key={liveText.id}><AssistantIdentity />{!!liveText.text.trim() && <MarkdownMessage text={liveText.text} />}</article>}
@@ -140,7 +138,7 @@ export function AgentPanel({ snapshot, host, conversation, report, openInput, hi
     }}><Icon name="arrow" size={12} />回到最新</button>}
     </div>
     <Composer key={`composer:${conversation?.id ?? `draft:${host?.id ?? 'chat'}`}`} operations={operations} execution={conversation ? snapshot.execution?.[conversation.id] : undefined} hostId={host?.id ?? null} conversation={conversation} host={host} compaction={conversation ? snapshot.contextCompaction?.[conversation.id] : undefined} usage={conversation ? snapshot.contextUsage?.[conversation.id] : undefined} profile={snapshot.profile} models={models} report={report} />
-  </section>;
+  </>;
 }
 
 function Composer({ execution, operations, hostId, host, usage, compaction, conversation, profile, models, report }: {

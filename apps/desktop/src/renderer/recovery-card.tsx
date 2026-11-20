@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { operationNeedsVerification, operationOutcomeResolvable, sharesHostRiskDomain, type AppSnapshot, type OperationView, type TaskView } from '@cloudhelm/contracts';
+import { Card } from './ui/index.js';
 import styles from './ui.module.css';
 
 const RISK_EXPLANATION = '用户在恢复卡明确知晓原远端操作结果未知且可能继续运行，自愿接管此项未决风险。';
@@ -34,7 +35,7 @@ function RecoveryItem({ operation, snapshot, conversation, current, remaining, h
     finally { setBusy(false); }
   }
   if (dismissed) return <p role="status">已拒绝接管风险；主机写入仍被阻断。再次提交写入请求时可重新查看。</p>;
-  return <section className={styles.operationCard} role="region" aria-label="本次远端写入风险确认">
+  return <Card as="section" tone="raised" className={styles.operationCard} role="region" aria-label="本次远端写入风险确认">
     <strong>本次写入暂未发送 · 待处理 1 / {remaining} 项</strong>
     <p>待执行：<code>{current?.preview ?? '当前对话请求的远端变更'}</code></p>
     {request && <p>用途：{request.slice(0, 120)}</p>}
@@ -53,7 +54,7 @@ function RecoveryItem({ operation, snapshot, conversation, current, remaining, h
       <button disabled={busy} onClick={() => void acceptRisk()}>知晓风险，仅解除这条写入阻断</button>
     </div> : <p>原操作仍在运行或审核中，不能解除；请等待真实退出。</p>}
     <small>风险确认不等于继续聊天。全部阻断项解除后，请点击对话顶部的「继续 AI」或发送消息；AI 不会自动重放原命令，新的命令仍须审核。</small>
-  </section>;
+  </Card>;
 }
 
 /** Show a single host-wide blocker only after this conversation encounters it. */

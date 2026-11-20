@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { IconName } from './ui-helpers.js';
-import { MenuDivider, MenuItem, MenuSurface } from './menu-surface.js';
+import { MenuDivider, MenuItem, MenuSurface } from './ui/index.js';
 
 export interface ContextMenuAction {
   id: string;

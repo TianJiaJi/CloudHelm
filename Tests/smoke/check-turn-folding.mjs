@@ -26,7 +26,7 @@ export async function checkTurnFolding(page, panel, screenshot) {
   assert.equal(await panel.getByText('本轮结果', { exact: true }).count(), 0);
   await screenshot('completed-turn-collapsed.png');
   await process.locator(':scope > summary').click();
-  await process.locator('summary code[title="df -h"]').waitFor();
+  await process.locator('code[title="df -h"]').waitFor();
   await process.getByRole('region', { name: '执行计划', exact: true }).waitFor();
   const reasoning = process.getByRole('region', { name: '思考内容', exact: true });
   await reasoning.getByRole('button').click();

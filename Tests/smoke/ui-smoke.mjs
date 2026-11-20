@@ -8,7 +8,7 @@ import { checkPrivilegeFeedback } from './check-privilege-feedback.mjs';
 import { checkReasoningContent } from './check-reasoning-content.mjs';
 import { checkExecutionThinking } from './check-execution-thinking.mjs';
 import { checkComposer } from './check-composer.mjs';
-/* global window, document, navigator, structuredClone */
+/* global window, document, navigator, structuredClone, getComputedStyle */
 import { checkClarification } from './check-clarification.mjs';
 import { checkMiddleClick } from './check-middle-click.mjs';
 import assert from 'node:assert/strict';
@@ -171,7 +171,16 @@ async function exerciseNavigation() {
   await reviewTrigger.click();
   const reviewMenu = page.getByRole('menu', { name: '审核模型' });
   await reviewMenu.waitFor();
-  assert.equal(await reviewMenu.evaluate((element) => window.getComputedStyle(element).backgroundColor), 'rgb(36, 39, 40)');
+  const panelColor = await page.evaluate(() => {
+    const probe = document.createElement('div');
+    probe.style.display = 'none';
+    probe.style.background = 'var(--panel)';
+    document.body.appendChild(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return color;
+  });
+  assert.equal(await reviewMenu.evaluate((element) => window.getComputedStyle(element).backgroundColor), panelColor, 'menu surface should render on the themed panel color');
   await screenshot('review-model-menu.png');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');

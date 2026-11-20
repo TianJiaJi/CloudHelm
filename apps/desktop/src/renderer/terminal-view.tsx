@@ -9,7 +9,14 @@ import { isMacPlatform, menuHint, type ShortcutActionId, type ShortcutContext } 
 import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
 import { copyText, readClipboardText } from './clipboard.js';
 import { registerTerminalActions } from './terminal-actions.js';
+import { useTheme } from './theme-store.js';
 import styles from './ui.module.css';
+
+function terminalTheme(): { background: string; foreground: string; cursor: string; selectionBackground: string } {
+  const computed = getComputedStyle(document.documentElement);
+  const token = (name: string): string => computed.getPropertyValue(name).trim();
+  return { background: token('--terminalBg'), foreground: token('--text'), cursor: token('--terminalCursor'), selectionBackground: token('--terminalSelection') };
+}
 
 export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
   terminalId: string; report(error: string): void; onQuote?(): void; onNewTerminal?(): void;
@@ -29,14 +36,9 @@ export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
   useEffect(() => {
     const element = holder.current;
     if (!element) return;
-    const media = window.matchMedia('(prefers-color-scheme: light)');
-    const theme = () => media.matches
-      ? { background: '#f7f9f8', foreground: '#262d2a', cursor: '#397d6b', selectionBackground: '#b8d6ca' }
-      : { background: '#202324', foreground: '#e0e4e2', cursor: '#83b7aa', selectionBackground: '#44665b' };
     const xterm = new Terminal({ cursorBlink: true, fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 13,
-      lineHeight: 1.2, theme: theme(), scrollback: 5000 });
-    const updateTheme = () => { xterm.options.theme = theme(); };
-    media.addEventListener('change', updateTheme);
+      lineHeight: 1.2, theme: terminalTheme(), scrollback: 5000 });
+    const stopThemeUpdates = useTheme.subscribe(() => { xterm.options.theme = terminalTheme(); });
     terminal.current = xterm;
     xterm.open(element);
     const showError = (error: unknown): void => report(error instanceof Error ? error.message : String(error));
@@ -74,7 +76,7 @@ export function TerminalView({ terminalId, report, onQuote, onNewTerminal }: {
       focus: () => xterm.focus()
     });
     return () => {
-      unregister(); stopFitting(); stopScrollTracking.dispose(); dispose.dispose(); media.removeEventListener('change', updateTheme); xterm.dispose();
+      unregister(); stopFitting(); stopScrollTracking.dispose(); dispose.dispose(); stopThemeUpdates(); xterm.dispose();
       terminal.current = null; shown.current = 0; followed.current = true;
     };
   }, [terminalId, report]);

@@ -1,0 +1,2 @@
+.switcher { display: flex; align-items: center; gap: 9px; height: 67px; padding: 0 17px; flex: none; }
+.logo { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--accentBorder); border-radius: 8px; color: var(--accent); flex: none; }

@@ -1,7 +1,7 @@
 import { jobNeedsAttention } from './execution-workspace-view.js';
 import { operationNeedsVerification, type AppSnapshot, type OperationView, type PlanStep, type TaskView } from '@cloudhelm/contracts';
 import { useId, useState } from 'react';
-import { MenuItem, MenuSurface } from './menu-surface.js';
+import { MenuItem, MenuSurface, Pill } from './ui/index.js';
 import { useMenuAnchor } from './composer-controls.js';
 import { useUi } from './store.js';
 import { Icon, statusLabel } from './ui-helpers.js';
@@ -41,12 +41,29 @@ export function canCondenseOperation(operation: OperationView): boolean {
 }
 
 export function OperationActivity({ operation, report }: { operation: OperationView; report(error: string): void }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
   if (!canCondenseOperation(operation)) return <OperationCard operation={operation} report={report} />;
-  return <details className={styles.toolActivity}>
-    <summary><Icon name="check" size={13} /><span>{operation.kind === 'command' ? '已完成远端命令' : '已完成文件操作'}</span>
-      <code title={operation.preview}>{operation.preview}</code>{operation.exitCode !== undefined && <small className={styles.exitCode}>退出 {operation.exitCode}</small>}<Icon name="chevron" size={11} /></summary>
-    <div className={styles.toolDetails}><OperationCard operation={operation} report={report} /></div>
-  </details>;
+  const duration = operation.completedAt !== undefined ? formatElapsed(operation.createdAt, operation.completedAt) : '';
+  return <div className={styles.toolActivity}>
+    <button type="button" className={styles.evHead} aria-expanded={open} aria-controls={detailsId} onClick={() => setOpen(!open)}>
+      <Icon name="check" size={13} /><span>{operation.kind === 'command' ? '已完成远端命令' : '已完成文件操作'}</span>
+      <code title={operation.preview}>{operation.preview}</code>
+      <Pill className={styles.evPill}>{operation.exitCode !== undefined ? `退出 ${operation.exitCode}` : '已完成'}</Pill>
+      {duration && <small className={styles.evDuration} title="该操作从开始到退出的耗时">{duration}</small>}
+      <Icon name="chevron" size={11} />
+    </button>
+    {open && <div id={detailsId} className={styles.toolDetails}><OperationCard operation={operation} report={report} /></div>}
+  </div>;
+}
+
+/** Wall time of a finished operation; backend timestamps only, never a live clock. */
+function formatElapsed(from: number, to: number): string {
+  const seconds = Math.max(0, Math.round((to - from) / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
+  return `${Math.floor(minutes / 60)} 时 ${minutes % 60} 分`;
 }
 
 /** Plan contents and completion counts are projections of backend PlanStep values. */

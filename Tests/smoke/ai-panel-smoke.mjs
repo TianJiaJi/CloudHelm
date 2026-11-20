@@ -64,7 +64,18 @@ try {
     const taskId = await page.evaluate(async () => (await window.cloudhelm.snapshot()).conversations[0].id);
     assert.deepEqual({ taskId: routed.taskId, hostId: routed.hostId, mode: routed.mode }, { taskId, hostId: 'prod', mode });
     // Allow the ordinary color transition to settle; this is not an execution state.
-    if (mode === 'permissive') await page.waitForFunction(() => window.getComputedStyle(document.querySelector('button[aria-label="权限选择，当前 完全访问"]')).color === 'rgb(245, 161, 75)');
+    if (mode === 'permissive') {
+      const warningColor = await page.evaluate(() => {
+        const probe = document.createElement('div');
+        probe.style.display = 'none';
+        probe.style.color = 'var(--warning)';
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      await page.waitForFunction((expected) => window.getComputedStyle(document.querySelector('button[aria-label="权限选择，当前 完全访问"]')).color === expected, warningColor);
+    }
   }
   assert.equal(await page.evaluate(async () => (await window.cloudhelm.snapshot()).hosts.find((host) => host.id === 'prod').defaultMode), initialDefault, 'Conversation switching must not rewrite the host default');
   await permissionTrigger.click();
@@ -131,11 +142,11 @@ try {
   await plan.getByRole('button').press('Enter');
   assert.equal(await plan.getByRole('button').getAttribute('aria-expanded'), 'false');
   assert.equal(await plan.getByText('汇总检查结果', { exact: true }).isVisible(), false);
-  const success = panel.locator('details').filter({ has: page.locator('summary', { hasText: '已完成远端命令' }) }).first();
-  assert.equal(await success.getAttribute('open'), null);
-  await success.locator(':scope > summary').click();
-  await success.getByText('/dev/sda1 145G 54G 92G 37% /', { exact: true }).waitFor();
-  await success.locator(':scope > summary').click();
+  const successHead = panel.locator('button[class*="evHead"]').filter({ hasText: '已完成远端命令' }).first();
+  assert.equal(await successHead.getAttribute('aria-expanded'), 'false');
+  await successHead.click();
+  await panel.getByText('/dev/sda1 145G 54G 92G 37% /', { exact: true }).waitFor();
+  await successHead.click();
   await panel.getByText('结果待核验', { exact: true }).waitFor();
   await panel.getByText('systemctl status example.service', { exact: true }).first().waitFor();
   await page.evaluate(async (label) => {

@@ -19,6 +19,10 @@ interface UiState {
   agentPanelOpen: boolean;
   agentPanelWidth: number;
   settingsOpen: boolean;
+  layoutMode: 'ssh' | 'agent';
+  drawerOpen: boolean;
+  drawerHeight: number;
+  auxPanelWidth: number;
   setSnapshot(snapshot: AppSnapshot): void;
   applyEvent(event: AppEvent): void;
   openTerminal(id: string): void;
@@ -31,6 +35,10 @@ interface UiState {
   setSettingsOpen(open: boolean): void;
   toggleAgentPanel(): void;
   setAgentPanelWidth(width: number): void;
+  setLayoutMode(mode: 'ssh' | 'agent'): void;
+  toggleDrawer(): void;
+  setDrawerHeight(height: number): void;
+  setAuxPanelWidth(width: number): void;
 }
 
 const hostKey = (hostId: string | null): string => hostId ?? 'local-chat';
@@ -82,6 +90,9 @@ function updateConversation(state: UiState, id: string, change: Partial<TaskView
 export const useUi = create<UiState>((set) => ({
   snapshot: null, terminals: {}, tabs: [], activeTabId: null, activeHostId: null, selectedConversationId: null,
   conversationSelection: {}, currentRequests: {}, agentPanelOpen: true, agentPanelWidth: 400, settingsOpen: false,
+  // The preload resolved the persisted layout before first paint; mirror it.
+  layoutMode: typeof document !== 'undefined' && document.documentElement.dataset.layout === 'agent' ? 'agent' : 'ssh',
+  drawerOpen: true, drawerHeight: 260, auxPanelWidth: 440,
   setSnapshot: (snapshot) => set((state) => projectSnapshot(state, snapshot)),
   applyEvent: (event) => set((state) => {
     if (event.type === 'snapshot') return projectSnapshot(state, event.value);
@@ -181,5 +192,12 @@ export const useUi = create<UiState>((set) => ({
     conversationSelection: { ...state.conversationSelection, [hostKey(hostId)]: null }, agentPanelOpen: true })),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   toggleAgentPanel: () => set((state) => ({ agentPanelOpen: !state.agentPanelOpen })),
-  setAgentPanelWidth: (width) => set({ agentPanelWidth: Math.max(330, Math.min(620, width)) })
+  setAgentPanelWidth: (width) => set({ agentPanelWidth: Math.max(330, Math.min(620, width)) }),
+  setLayoutMode: (mode) => {
+    set({ layoutMode: mode });
+    void window.cloudhelm?.saveLayoutSettings({ mode }).catch(() => undefined);
+  },
+  toggleDrawer: () => set((state) => ({ drawerOpen: !state.drawerOpen })),
+  setDrawerHeight: (height) => set({ drawerHeight: Math.max(150, height) }),
+  setAuxPanelWidth: (width) => set({ auxPanelWidth: Math.max(360, Math.min(620, width)) })
 }));

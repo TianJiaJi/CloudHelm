@@ -5,7 +5,7 @@ import { DiagnosticLogger, diagnosticSettings } from './diagnostic-logger.js';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron';
 import { BashAnalyzer, SqliteStore, listModelProviders } from '@cloudhelm/adapters';
 import type { AppEvent, DesktopAPI, HostDraft, LocalScope } from '@cloudhelm/contracts';
 import { operationNeedsVerification } from '@cloudhelm/contracts';
@@ -18,6 +18,7 @@ import { RuntimeBridge } from './runtime-bridge.js';
 import { HostConnectionTester } from './host-connection-test.js';
 import { AppShutdown } from './app-shutdown.js';
 import { applicationTestWindowPolicy, silenceTestDialogs } from './test-window-policy.js';
+import { appearanceSettings, saveAppearanceSettings, windowBackgroundColor, layoutSettings, saveLayoutSettings } from './ui-settings.js';
 import { RequestBudgetError } from '@cloudhelm/core';
 
 const testWindow = (() => {
@@ -127,6 +128,14 @@ function registerIpc(): void {
   });
   ipcMain.handle('cloudhelm:shortcuts', () => state.shortcuts());
   ipcMain.handle('cloudhelm:save-shortcuts', (_event, settings: Parameters<DesktopAPI['saveShortcuts']>[0]) => state.saveShortcuts(settings));
+  ipcMain.handle('cloudhelm:appearance-settings', () => appearanceSettings(store));
+  ipcMain.handle('cloudhelm:save-appearance-settings', (_event, settings: Parameters<DesktopAPI['saveAppearanceSettings']>[0]) => saveAppearanceSettings(store, settings));
+  // The renderer preload reads this synchronously before first paint to avoid a theme flash.
+  ipcMain.on('cloudhelm:initial-appearance', (event) => { event.returnValue = appearanceSettings(store); });
+  ipcMain.handle('cloudhelm:layout-settings', () => layoutSettings(store));
+  ipcMain.handle('cloudhelm:save-layout-settings', (_event, settings: Parameters<DesktopAPI['saveLayoutSettings']>[0]) => saveLayoutSettings(store, settings));
+  // Same synchronous bootstrap as the theme: the renderer knows its layout before first paint.
+  ipcMain.on('cloudhelm:initial-layout', (event) => { event.returnValue = layoutSettings(store); });
   ipcMain.handle('cloudhelm:outbound-limit', () => state.outboundLimit());
   ipcMain.handle('cloudhelm:save-outbound-limit', (_event, cap: number | null) => state.saveOutboundLimit(cap));
   ipcMain.handle('cloudhelm:read-clipboard', () => clipboard.readText());
@@ -220,7 +229,7 @@ function macApplicationMenu(): Menu {
 function createWindow(): void {
   window = new BrowserWindow({
     width: 1440, height: 920, minWidth: 980, minHeight: 640,
-    backgroundColor: '#111715', title: 'CloudHelm',
+    backgroundColor: windowBackgroundColor(store, !nativeTheme.shouldUseDarkColors), title: 'CloudHelm',
     ...testWindow.options,
     webPreferences: { preload: join(import.meta.dirname, '../preload/index.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false,
       ...(testWindow.hidden ? { backgroundThrottling: false } : {}) }

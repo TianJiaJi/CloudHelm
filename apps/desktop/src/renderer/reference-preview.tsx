@@ -25,8 +25,6 @@ export function ReferencePreview({ part, editable = false, close, save, remove }
     return () => { live = false; previous?.focus({ preventScroll: true }); };
   }, [part]);
   const shown = original ? body?.original : body?.summary ?? body?.original;
-  // The theme tokens live on the app shell, not document.body.
-  const portalTarget = document.getElementById('root')?.firstElementChild ?? document.body;
   return createPortal(<div className={styles.scrim} onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
     <div className={styles.preview} ref={dialog} role="dialog" aria-modal="true" aria-label={part.reference.kind === 'terminal' ? '终端引用预览' : '粘贴文本预览'} tabIndex={-1}
       onKeyDown={(event) => {
@@ -55,5 +53,5 @@ export function ReferencePreview({ part, editable = false, close, save, remove }
           {canEdit && <button className={styles.primaryButton} type="button" disabled={!body} onClick={() => { save?.(text); close(); }}>保存</button>}</div>
       </footer>
     </div>
-  </div>, portalTarget);
+  </div>, document.body);
 }

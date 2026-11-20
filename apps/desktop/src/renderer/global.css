@@ -1,8 +1,7 @@
 :root {
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
-  color: #e5e7e8;
-  background: #1a1c1d;
-  color-scheme: dark;
+  color: var(--text);
+  background: var(--bg);
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
 }
@@ -14,7 +13,4 @@ button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 ::-webkit-scrollbar { width: 6px; height: 5px; }
-::-webkit-scrollbar-thumb { background: #7776; border-radius: 5px; }
-@media (prefers-color-scheme: light) {
-  :root { color: #262d2a; background: #eef0f0; color-scheme: light; }
-}
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { MenuSurface } from './menu-surface.js';
+import { MenuSurface } from './ui/index.js';
 
 /** Menu anchored to an element, positioned from its bounding box. */
 export function AnchoredMenu({ anchor, label, children, close }: {

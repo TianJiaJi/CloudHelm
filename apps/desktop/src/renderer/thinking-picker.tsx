@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ThinkingLevel, ThinkingView } from '@cloudhelm/contracts';
-import { MenuSurface } from './menu-surface.js';
+import { MenuSurface } from './ui/index.js';
 import { useMenuAnchor } from './composer-controls.js';
 import { Icon, capture } from './ui-helpers.js';
 import styles from './composer-controls.module.css';

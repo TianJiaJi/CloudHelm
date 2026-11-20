@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppSnapshot, ModelProfileDraft, ModelProviderSettings, ModelProviderView, ReviewSelection } from '@cloudhelm/contracts';
 import { errorMessage, inlineError } from './error-presentation.js';
 import { ShortcutSettings } from './shortcut-settings.js';
-import { MenuSurface } from './menu-surface.js';
+import { MenuSurface } from './ui/index.js';
 import { useMenuAnchor } from './composer-controls.js';
 import { Icon } from './ui-helpers.js';
+import { useTheme } from './theme-store.js';
 import styles from './model-settings.module.css';
 
 type Profile = AppSnapshot['profile'];
-type Section = 'api' | 'subscription' | 'review' | 'budget' | 'shortcuts';
+type Section = 'api' | 'subscription' | 'review' | 'budget' | 'shortcuts' | 'appearance';
 type Destination = { section: Section } | { providerId: string } | { close: true } | { externalAction(): void };
 type NavigationGuard = (next: () => void) => void;
 type Feedback = { kind: 'success' | 'error'; text: string } | null;
@@ -247,7 +248,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
     <nav className={styles.sections} role="tablist" aria-label="模型接入方式">
       {([{ id: 'api', label: 'API Key', icon: 'key' }, { id: 'subscription', label: '模型订阅 · 未开放', icon: 'subscription' },
         { id: 'review', label: 'AI 审核', icon: 'shield' }, { id: 'budget', label: '出站限制', icon: 'gauge' },
-        { id: 'shortcuts', label: '快捷键', icon: 'keyboard' }] as const).map((item) =>
+        { id: 'shortcuts', label: '快捷键', icon: 'keyboard' }, { id: 'appearance', label: '外观', icon: 'theme' }] as const).map((item) =>
         <button key={item.id} id={`model-tab-${item.id}`} type="button" role="tab" aria-selected={section === item.id}
           aria-controls={`model-panel-${item.id}`} disabled={busy !== null} className={styles.sectionTab}
           onClick={() => requestNavigation({ section: item.id })}><SettingsIcon kind={item.icon} />{item.label}</button>)}
@@ -384,11 +385,14 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
 
     {section === 'shortcuts' && <ShortcutSettings report={callback.current.report} />}
 
+    {section === 'appearance' && <AppearanceSettings />}
+
     <footer className={styles.footer}>
       <p>{section === 'api' ? '默认模型用于新对话；已有对话可在输入框中切换模型。'
         : section === 'review' ? '密钥默认仅保存在此设备。'
           : section === 'budget' ? '出站限制立即生效，覆盖所有任务与本机全部模型请求。'
-            : section === 'shortcuts' ? '快捷键保存在本机，更改立即生效。' : '当前版本不提供订阅登录。'}</p>
+            : section === 'shortcuts' ? '快捷键保存在本机，更改立即生效。'
+              : section === 'appearance' ? '外观偏好保存在本机，更改立即生效。' : '当前版本不提供订阅登录。'}</p>
       <button type="button" className={styles.button} disabled={busy !== null} onClick={() => requestNavigation({ close: true })}>返回</button>
       {section === 'api' && <button type="button" className={styles.primary} disabled={busy !== null || !validApi}
         onClick={() => void saveApi()}>{busy === 'save' ? '保存中…' : '保存为默认'}</button>}
@@ -430,7 +434,28 @@ function UnsavedChanges({ api, busy, canSave, cancel, discard, save }: {
   </dialog>;
 }
 
-type IconKind = 'key' | 'subscription' | 'shield' | 'search' | 'eye' | 'eye-off' | 'keyboard' | 'gauge';
+function AppearanceSettings(): React.JSX.Element {
+  const mode = useTheme((state) => state.mode);
+  const resolved = useTheme((state) => state.resolved);
+  const setMode = useTheme((state) => state.setMode);
+  const current = mode === 'system' ? `跟随系统（当前${resolved === 'light' ? '浅色' : '深色'}）` : mode === 'light' ? '固定为浅色' : '固定为深色';
+  return <div className={styles.detail} role="tabpanel" id="model-panel-appearance" aria-labelledby="model-tab-appearance">
+    <div className={styles.providerHeading}><div><h2>外观</h2>
+      <p>选择界面配色，当前{current}。</p></div></div>
+    <div className={styles.modelList} role="radiogroup" aria-label="外观模式">
+      {([['system', '跟随系统', '自动匹配操作系统的深浅色设置'],
+        ['light', '浅色', '固定使用浅色配色'],
+        ['dark', '深色', '固定使用深色配色']] as const).map(([value, label, hint]) =>
+        <button key={value} type="button" role="radio" aria-checked={mode === value} className={styles.modelRow} onClick={() => setMode(value)}>
+          <span className={styles.radio} aria-hidden="true" />
+          <span>{label}<small>{hint}</small></span>
+        </button>)}
+    </div>
+    <p className={styles.hint}>深浅色影响全部界面，包括终端与代码高亮。</p>
+  </div>;
+}
+
+type IconKind = 'key' | 'subscription' | 'shield' | 'search' | 'eye' | 'eye-off' | 'keyboard' | 'gauge' | 'theme';
 function SettingsIcon({ kind }: { kind: IconKind }): React.JSX.Element {
   const paths: Record<IconKind, React.JSX.Element> = {
     key: <><circle cx="15" cy="8" r="5" /><path d="m11.5 11.5-8 8V22H7v-3h3v-3l3-3" /></>,
@@ -440,7 +465,8 @@ function SettingsIcon({ kind }: { kind: IconKind }): React.JSX.Element {
     search: <><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></>,
     eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>,
     'eye-off': <><path d="m3 3 18 18M9 5.5 12 5c6.5 0 10 7 10 7s-1 2-3 4M6 7c-2.5 2-4 5-4 5s3.5 7 10 7c1.5 0 3-.4 4.2-1M10 10a3 3 0 0 0 4 4" /></>,
-    gauge: <><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></>
+    gauge: <><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></>,
+    theme: <><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" /></>
   };
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;

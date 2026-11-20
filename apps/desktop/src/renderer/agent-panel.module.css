@@ -1,7 +1,5 @@
 .panel {
-  --panel: #1a1b1d; --canvas: #222427; --raised: #2a2d31; --border: #e0e2f221;
-  --text: #d1d3db; --muted: #9599a6; --accent: #dadde5; --accentText: #222427; --accentSoft: #e0e2f20d;
-  --success: #72c9a6; --assistant-font-size: 13px; --assistant-code-radius: 6px;
+  --assistant-font-size: 13px; --assistant-code-radius: 6px;
   display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0;
   position: relative; background: var(--panel); color: var(--text); font-size: 13px;
   container: assistant / inline-size;
@@ -22,14 +20,13 @@
 .agentActions { display: flex; flex: none; align-items: center; gap: 8px; padding: 7px 12px 0; }
 .taskStatus { font-size: 11px; color: var(--muted); }
 .taskStatus[data-state=running] { color: var(--text); }
-.taskStatus[data-state=waiting-review], .taskStatus[data-state=failed], .taskStatus[data-state=recovering] { color: light-dark(#975a17, #dfb27e); }
+.taskStatus[data-state=waiting-review], .taskStatus[data-state=failed], .taskStatus[data-state=recovering] { color: var(--warning); }
 .agentActions button { margin-left: auto; padding: 3px 6px; font-size: 11px; color: var(--accent); }
 .agentActivity { display: flex; flex: none; align-items: flex-start; gap: 6px; padding: 8px 0; color: var(--muted); font-size: 11px; line-height: 18px; overflow-wrap: anywhere; }
 .activityPulse { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; margin-top: 6px; animation: pulse 1.7s ease-in-out infinite; }
-.agentActivity[role=alert] { color: light-dark(#a54c3a, #efb294); }
 .agentScroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 16px 12px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; position: relative; overflow-anchor: none; }
 .scrollStage { display: flex; flex: 1; flex-direction: column; min-height: 0; position: relative; }
-.panel .jumpToLatest { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 2; padding: 5px 10px; border: 1px solid var(--border); border-radius: 20px; background: var(--raised); color: var(--text); font-size: 11px; box-shadow: 0 4px 14px #0003; white-space: nowrap; }
+.panel .jumpToLatest { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 2; padding: 5px 10px; border: 1px solid var(--border); border-radius: 20px; background: var(--raised); color: var(--text); font-size: 11px; box-shadow: var(--shadow-2); white-space: nowrap; }
 .jumpToLatest > svg { transform: rotate(180deg); }
 .agentWelcome { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-height: min(360px, 50vh); padding: 24px 0; }
 .welcomeIcon { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text); background: var(--accentSoft); border-radius: 8px; }
@@ -56,16 +53,17 @@
 .assistantActions > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .assistantCopyStatus { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .toolActivity { margin: 4px 0 12px; font-size: 12px; min-width: 0; color: var(--muted); }
-.toolActivity > summary { display: flex; align-items: center; gap: 6px; min-height: 24px; list-style: none; border-radius: 4px; padding: 2px 0; }
-.toolActivity > summary::-webkit-details-marker { display: none; }
-.toolActivity > summary:hover { color: var(--text); background: var(--accentSoft); }
-.toolActivity > summary > svg { flex: none; }
-.toolActivity > summary > svg:first-child { color: var(--success); }
-.toolActivity > summary > span { flex: none; font-size: 11px; }
-.toolActivity > summary > code { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.exitCode { flex: none; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
-.toolActivity[open] > summary > svg:last-child { transform: rotate(90deg); }
+.toolActivity > .evHead { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 24px; padding: 2px 0; border-radius: 4px; text-align: left; }
+.toolActivity > .evHead:hover { color: var(--text); background: var(--accentSoft); }
+.evHead > svg { flex: none; }
+.evHead > svg:first-child { color: var(--success); }
+.evHead[aria-expanded='true'] > svg:last-child { transform: rotate(90deg); }
+.evHead > span { flex: none; font-size: 11px; }
+.evHead > code { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.evHead .evPill { padding: 2px 5px; font-size: 10px; }
+.evDuration { flex: none; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .toolDetails { margin: 4px 0 0 8px; padding-left: 12px; border-left: 1px solid var(--border); }
+.filterEmpty { margin: 12px 0; color: var(--muted); font-size: 11px; }
 .planDock { flex: none; margin: 0; padding: 7px 10px; border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; background: var(--accentSoft); font-size: 12px; }
 .panel .planToggle { display: flex; align-items: center; gap: 6px; padding: 0; width: 100%; min-height: 24px; text-align: left; justify-content: flex-start; color: var(--text); }
 .panel .planToggle:hover { background: transparent; }
@@ -78,7 +76,7 @@
 .planList li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; color: var(--muted); line-height: 20px; overflow-wrap: anywhere; }
 .planList li[data-state=running] { color: var(--text); }
 .planList li[data-state=done] .stepMark { color: var(--muted); }
-.planList li[data-state=blocked] .stepMark { color: light-dark(#975a17, #dfb27e); }
+.planList li[data-state=blocked] .stepMark { color: var(--warning); }
 .stepTitle { flex: 1; min-width: 0; }
 .stepMark { flex: none; display: inline-grid; place-items: center; width: 13px; height: 13px; border: 1px solid var(--border); border-radius: 50%; font-size: 10px; line-height: 1; }
 .turn { min-width: 0; }
@@ -97,12 +95,9 @@
 .menuEmpty { padding: 0 10px; color: var(--muted); font-size: 12px; }
 @container assistant (max-width: 360px) {
   .agentScroll { padding-inline: 12px; }
-  .exitCode { display: none; }
+  .evHead .evPill, .evDuration { display: none; }
 }
 @keyframes pulse { 50% { opacity: .35; } }
-@media (prefers-color-scheme: light) {
-  .panel { --panel: #fff; --canvas: #edeff2; --raised: #e1e1e1; --border: #4d6b992e; --text: #31353a; --muted: #5b6066; --accent: #36393d; --accentText: #fff; --accentSoft: #5663770d; --success: #007e60; }
-}
 @media (prefers-reduced-motion: reduce) {
   .activityPulse { animation: none; }
   .panel button { transition: none; }

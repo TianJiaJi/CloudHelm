@@ -53,10 +53,11 @@ describe('AI panel projections', () => {
   it('uses a disclosure only for ordinary successes, with the command still readable', () => {
     expect(canCondenseOperation(operation)).toBe(true);
     const output = renderToStaticMarkup(createElement(OperationActivity, { operation, report: () => {} }));
-    expect(output).toContain('<details');
+    expect(output).toContain('aria-expanded="false"');
     expect(output).toContain('已完成远端命令');
     expect(output).toContain('df -h');
     expect(output).not.toContain('退出 0');
+    expect(output).not.toContain('<details');
   });
 
   it('shows only an actual command exit code, not an invented success code', () => {

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
-import { Icon, type IconName } from './ui-helpers.js';
-import styles from './ui.module.css';
+import { Icon, type IconName } from './icon.js';
+import styles from './primitives.module.css';
 
 /** Element bounds or a pointer position in viewport coordinates. */
 export type MenuAnchor = HTMLElement | { x: number; y: number };
