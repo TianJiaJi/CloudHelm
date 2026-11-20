@@ -70,7 +70,7 @@
 | P0-1 | 重试矩阵 | `operation-retry.ts` 瞬态二分（执行前连接失败才自动重试；执行中超时/在途失败不自动重试且携带"禁止盲目重发"警示）；写零重试；参数错误字段级报错 | 完成 |
 | P0-3a | 调度器等价重构 | `operation-scheduler.ts` 接管 `serialCall`，行为仍全串行；调度键 `{taskId, terminalId}` 二元组（Phase 3 多终端钩子零成本预留） | 完成 |
 | P0-3b | 切 parallel | pi-session 单行 `'sequential'`→`'parallel'`；切换前三查（SafetyGate 并发安全 / 审计事件顺序 / Pi SDK 事件流单飞行假设），任一不过即暂停回报；含断言版并发测试（4×→≈1× 对照） | 完成（三查通过，结论记入提交说明） |
-| P0-2 | service 单审批 | 审批卡呈现三段事务意图；三模式回归测试矩阵；root 路径 sudo 缓存复用核查 | 待做 |
+| P0-2 | service 单审批 | 审批卡呈现三段事务意图；三模式回归测试矩阵；root 路径 sudo 缓存复用核查 | 完成（矩阵进 CI：ask/permissive 恰 1 卡、ai-review 无卡/升级恰 1 卡、preflight/check 零请求；root 三步凭据缓存集成测试锁定只索密一次） |
 | P0-5 | 审批续期 | 软到期提醒（10min）+ 续期（累计 ≤5 次 × 10min，硬截止首发 +60min）+ 硬上限取消；计时权收敛 worker server 单点；`decide-approval` 过期校验改用 hardExpiresAt（软过期后仍可批准） | 待做 |
 | P0-6 | 输入提醒 | TTL 过期/投递失败推送式主动提醒（静默窗口无用户交互事件必达 renderer）+ 未聚焦系统通知 | 待做 |
 | P0-7 | 提示词重写 | 26 工具 description + executionGuidelines 能力说明书化；否定式 <10% 门禁；PROMPT_VERSION → 2026-12.1 | 待做 |

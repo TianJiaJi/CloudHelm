@@ -1,13 +1,15 @@
-import { expect, it, vi } from 'vitest';
-import { SafetyGate, HostSerialExecutor } from '@cloudhelm/application';
-import { BashAnalyzer } from '@cloudhelm/adapters';
-import { serviceQuery, serviceLogQuery, isReadOnlyQuery, type ApprovalRequester, type OperationResult, type OperationScope, type ProposedOperation } from '@cloudhelm/core';
+import { describe, expect, it, vi } from 'vitest';
+import { InteractionCoordinator, SafetyGate, HostSerialExecutor, TerminalManager } from '@cloudhelm/application';
+import { BashAnalyzer, type SshTransport } from '@cloudhelm/adapters';
+import { serviceQuery, serviceLogQuery, isReadOnlyQuery, type ApprovalRequester, type InputRequest, type OperationResult, type OperationScope, type ProposedOperation, type RawTerminal, type RiskEvaluator } from '@cloudhelm/core';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { createServiceTool } from '../../../apps/desktop/src/worker/service-tool.js';
+import { OperationInputBridge } from '../../../apps/desktop/src/worker/operation-input-bridge.js';
 import { LocalFileAccess } from '../../../apps/desktop/src/worker/local-file-access.js';
 
 const loaded = 'LoadState=loaded\nCanStart=yes\nNeedDaemonReload=no\nJob=\nActiveState=active\nResult=success\nInvocationID=fixture-invocation\nExecMainStatus=0';
-function setup(reply: (command: string) => Partial<OperationResult> = () => ({ status: 'succeeded', stdoutTail: loaded }), approve = false) {
+function setup(reply: (command: string) => Partial<OperationResult> = () => ({ status: 'succeeded', stdoutTail: loaded }), approve = false,
+  mode: 'ask' | 'ai-review' | 'permissive' = 'permissive', assessment: 'allow' | 'review' = 'allow') {
   const commands: string[] = [];
   const scopes: OperationScope[] = [];
   let rootReady = true;
@@ -16,7 +18,7 @@ function setup(reply: (command: string) => Partial<OperationResult> = () => ({ s
     if (sessionId !== 'confirmed-root' || !rootReady) throw new Error('Confirmed root session expired');
     return 'root-terminal';
   });
-  const host: RuntimeHost = { id: 'host', label: 'test', address: 'localhost', port: 22, username: 'user', auth: 'agent', status: 'connected', defaultMode: 'permissive', protectedPaths: [], policyRevision: 1 };
+  const host: RuntimeHost = { id: 'host', label: 'test', address: 'localhost', port: 22, username: 'user', auth: 'agent', status: 'connected', defaultMode: mode, protectedPaths: [], policyRevision: 1 };
   const serial = new HostSerialExecutor({ execute: async (op) => {
     const command = op.kind === 'command' ? op.command : ''; commands.push(command); scopes.push(structuredClone(op.scope));
     const observed = command === 'id -u' ? { status: 'succeeded' as const, stdoutTail: '1000\n' } : reply(command);
@@ -27,7 +29,8 @@ function setup(reply: (command: string) => Partial<OperationResult> = () => ({ s
   } });
   const audit = { proposed: vi.fn(async (_operation: ProposedOperation) => {}), decided: vi.fn(), completed: vi.fn() };
   const requestApproval = vi.fn(async (_request: Parameters<ApprovalRequester['requestApproval']>[0]): Promise<boolean> => approve);
-  const gate = new SafetyGate({ analyzer: new BashAnalyzer(), evaluator: { evaluate: async () => 'allow' }, approvals: { requestApproval },
+  const evaluate = vi.fn<RiskEvaluator['evaluate']>(async () => assessment);
+  const gate = new SafetyGate({ analyzer: new BashAnalyzer(), evaluator: { evaluate }, approvals: { requestApproval },
     executor: serial, audit, lease: { currentGeneration: () => 1, isAgentOwner: () => true }, settings: () => ({ mode: host.defaultMode, revision: host.policyRevision }) });
   const tool = createServiceTool({ hosts: [host], localFiles: new LocalFileAccess([]), ensureTerminal,
     scope: (_host, terminalId) => ({ taskId: 'task', hostId: 'host', cwd: '/', runAs: terminalId === 'root-terminal' ? 'root' : 'user',
@@ -39,7 +42,7 @@ function setup(reply: (command: string) => Partial<OperationResult> = () => ({ s
       const outcome = await safety.execute(operation, signal);
       return { result: outcome.result, readOnly: outcome.readOnly, content: [{ type: 'text', text: outcome.result?.stdoutTail ?? outcome.decision.reason }], details: undefined, isError: outcome.result?.status !== 'succeeded' };
     } }, gate);
-  return { tool, commands, scopes, ensureTerminal, audit, serial, host, requestApproval, expireRoot: () => { rootReady = false; } };
+  return { tool, commands, scopes, ensureTerminal, audit, serial, host, requestApproval, evaluate, expireRoot: () => { rootReady = false; } };
 }
 it('uses one confirmed root session for preflight, restart and verification without identity fallback', async () => {
   const f = setup(undefined, true);
@@ -148,4 +151,104 @@ it('mints read-only capability only for the exact bounded systemd query grammar'
   for (const query of [serviceQuery('nginx.service'), serviceLogQuery('nginx.service')]) expect(isReadOnlyQuery(await analyzer.analyze(query))).toBe(true);
   for (const query of ['systemctl restart nginx.service', 'journalctl --vacuum-size=1M', serviceQuery('nginx.service') + ' --host=elsewhere', serviceLogQuery('nginx.service') + ' --output-fields=MESSAGE']) expect(isReadOnlyQuery(await analyzer.analyze(query))).toBe(false);
   expect(() => serviceQuery('nginx.service; rm -rf /')).toThrow();
+});
+
+describe('P0-2 three-mode restart approval matrix', () => {
+  it.each(['ask', 'permissive'] as const)('restart in %s mode raises exactly one manual approval; preflight and check stay automatic', async (mode) => {
+    const f = setup(undefined, true, mode);
+    const result = await f.tool.execute('mode', { hostId: 'host', unit: 'nginx.service', action: 'restart' });
+    expect(result.isError).toBe(false);
+    expect(f.commands).toEqual([serviceQuery('nginx.service'), 'systemctl restart -- nginx.service', serviceQuery('nginx.service')]);
+    const requests = f.requestApproval.mock.calls.map(([request]) => request.operation);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ kind: 'command', command: 'systemctl restart -- nginx.service', serviceUnit: 'nginx.service' });
+    expect(f.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('restart in ai-review mode is pre-reviewed by the independent reviewer without a manual card', async () => {
+    const f = setup(undefined, true, 'ai-review', 'allow');
+    const result = await f.tool.execute('ai', { hostId: 'host', unit: 'nginx.service', action: 'restart' });
+    expect(result.isError).toBe(false);
+    expect(f.requestApproval).not.toHaveBeenCalled();
+    expect(f.evaluate).toHaveBeenCalledTimes(1);
+    expect(f.evaluate.mock.calls[0]![0]).toMatchObject({ kind: 'command', command: 'systemctl restart -- nginx.service' });
+  });
+
+  it('an uncertain independent verdict escalates to exactly one manual card in ai-review mode', async () => {
+    const f = setup(undefined, true, 'ai-review', 'review');
+    const result = await f.tool.execute('escalated', { hostId: 'host', unit: 'nginx.service', action: 'restart' });
+    expect(result.isError).toBe(false);
+    expect(f.evaluate).toHaveBeenCalledTimes(1);
+    const requests = f.requestApproval.mock.calls.map(([request]) => request.operation);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ kind: 'command', command: 'systemctl restart -- nginx.service' });
+  });
+});
+
+it('reuses one sudo password across the three reviewed root-path steps without re-prompting (P0-2)', async () => {
+  const commands: string[] = [];
+  const challenges: Array<{ id: string; answer: string | null }> = [];
+  const inputs: InputRequest[] = [];
+  let shows = 0;
+  let authentication: ((challenge: { id: string; prompt?: string }) => void) | undefined;
+  let data: ((text: string) => void) | undefined;
+  let exit: ((code: number | undefined) => void) | undefined;
+  const raw: RawTerminal = {
+    onData: (listener) => { data = listener; }, onExit: (listener) => { exit = listener; }, onClose() {}, close() {}, resize() {},
+    write() { throw new Error('Credentials must never enter business stdin'); },
+    onAuthentication: (listener) => { authentication = listener; },
+    answerAuthentication: (_id, answer) => {
+      challenges.push({ id: _id, answer });
+      const command = commands.at(-1) ?? '';
+      queueMicrotask(() => {
+        if (command.includes('restart')) { data?.(''); exit?.(0); return; }
+        shows += 1;
+        data?.(shows === 1 ? loaded : loaded.replace('fixture-invocation', 'fixture-invocation-new'));
+        exit?.(0);
+      });
+      return true;
+    },
+    execute: async (command) => {
+      commands.push(command);
+      queueMicrotask(() => {
+        if (command === 'id -u') { data?.('1000\n'); exit?.(0); return; }
+        authentication?.({ id: `sudo-${commands.length}`, prompt: 'sudo' });
+      });
+    }
+  };
+  const terminals = new TerminalManager({ data() {}, state() {} });
+  const terminalId = terminals.open('host', raw, 'task', '/');
+  const interactions = new InteractionCoordinator(terminals, { opened: (request) => {
+    inputs.push(request); queueMicrotask(() => void interactions.answer(request.id, 'fixture-password'));
+  }, closed() {} });
+  const reuse = vi.fn();
+  const bridge = new OperationInputBridge(terminals, { connectionGeneration: () => 1 } as unknown as SshTransport, interactions, undefined, reuse);
+  const requestApproval = vi.fn<ApprovalRequester['requestApproval']>(async () => true);
+  const gate = new SafetyGate({ analyzer: new BashAnalyzer(), evaluator: { evaluate: vi.fn<RiskEvaluator['evaluate']>(async () => 'allow') },
+    approvals: { requestApproval }, executor: new HostSerialExecutor(bridge),
+    audit: { proposed: vi.fn(async () => {}), decided: vi.fn(), completed: vi.fn() }, lease: terminals,
+    settings: () => ({ mode: 'permissive' as const, revision: 1 }) });
+  const host: RuntimeHost = { id: 'host', label: 'test', address: 'localhost', port: 22, username: 'user', auth: 'agent', status: 'connected', defaultMode: 'permissive', protectedPaths: [], policyRevision: 1 };
+  const tool = createServiceTool({ hosts: [host], localFiles: new LocalFileAccess([]), ensureTerminal: async () => terminalId,
+    scope: (_host, id) => ({ taskId: 'task', hostId: 'host', cwd: '/', runAs: 'user', loginAs: 'user',
+      terminalId: id, terminalGeneration: terminals.currentGeneration(id), policyRevision: 1,
+      allowedWorkingRoots: [], protectedPaths: [], goal: 'restart' }),
+    runOperation: async (safety, operation, signal) => {
+      if (operation.kind === 'command' && operation.command.startsWith('sudo ') && !operation.scope.sessionId) operation.scope.runAs = 'root';
+      const outcome = await safety.execute(operation, signal);
+      return { result: outcome.result, readOnly: outcome.readOnly, content: [{ type: 'text', text: outcome.result?.stdoutTail ?? outcome.decision.reason }], details: undefined, isError: outcome.result?.status !== 'succeeded' };
+    } }, gate);
+  const result = await tool.execute('root-cache', { hostId: 'host', unit: 'nginx.service', action: 'restart', privilege: 'root' });
+  expect(result.isError).toBe(false);
+  expect(result.details).toMatchObject({ code: 'service-active-observed', invocationId: 'fixture-invocation-new' });
+  expect(commands).toEqual(['id -u', `sudo -- ${serviceQuery('nginx.service')}`,
+    'sudo -- systemctl restart -- nginx.service', `sudo -- ${serviceQuery('nginx.service')}`]);
+  expect(inputs).toHaveLength(1);
+  expect(challenges).toHaveLength(3);
+  expect(challenges.every((challenge) => challenge.answer === 'fixture-password')).toBe(true);
+  expect(reuse).toHaveBeenCalledTimes(2);
+  const approvals = requestApproval.mock.calls.map(([request]) => request.operation)
+    .filter((operation): operation is Extract<ProposedOperation, { kind: 'command' }> => operation.kind === 'command')
+    .map((operation) => operation.command);
+  expect(approvals).toEqual(['sudo -- systemctl restart -- nginx.service']);
 });

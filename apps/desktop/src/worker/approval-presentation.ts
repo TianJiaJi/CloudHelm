@@ -29,9 +29,15 @@ export function approvalPresentation(request: ApprovalRequest): { title: string;
   const detail = redactOutput(request.reason).replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 900);
   const summary = reasons[request.ruleId];
   const reason = summary ? `${summary}${detail && detail !== summary ? `；具体依据：${detail}` : ''}` : detail;
+  // Only the service tool's restart step reaches review with a serviceUnit binding,
+  // and it is proposed solely after its read-only preflight passed.
+  const serviceRestart = operation.kind === 'command' && operation.serviceUnit !== undefined
+    && operation.command.includes('systemctl restart');
   return {
     title: `批准这次${label}`,
-    explanation: `AI 请求执行下方的${label}。触发规则 ${request.ruleId}：${reason}。请根据显示的具体操作决定，批准仅适用于这一次。`,
+    explanation: `AI 请求执行下方的${label}。触发规则 ${request.ruleId}：${reason}。`
+      + (serviceRestart ? '这是一次受控三段服务事务：只读预检已通过；本操作重启该服务；随后将自动核验 InvocationID/ActiveState/Result，通过后才会报告服务 active。' : '')
+      + '请根据显示的具体操作决定，批准仅适用于这一次。',
     recovery: operation.kind === 'command' ? '执行后核验实际结果；若结果未知，先确认远端状态。'
       : '结构化文件操作会尝试保留恢复副本；执行后显示副本路径。'
   };

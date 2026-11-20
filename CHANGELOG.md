@@ -31,6 +31,7 @@
 - 执行通道并发激活（P0-3b）：Pi 会话外层工具执行切为 parallel，`operation-scheduler` 会话参数激活——写全局互斥（每任务一次一条写流水线）、分析器确认只读最高 4 条流水线并发、严格 FIFO 起跑且读不得插队更早排队写；切换前三查通过（SafetyGate 并发安全、审计事件按操作 ID 有序、Pi SDK 并行事件流无单飞行假设，结果记入提交说明）；codemode 检查放宽为仅要求 agent 绑定并移除临时模式切换（codemode 自身按工具级 sequential 钉住，脚本与本批其他工具不重叠）；断言版并发测试进 CI：4 条慢只读总墙钟 ≈ 单条（对照 P0-0 基线 ≈4×）。
 - 新增执行通道瞬态重试矩阵（P0-1）：仅传输层证明"从未派发"（`not-dispatched` 且零效果）的分析器确认只读命令按 500ms/1500ms 退避自动重试至多 3 次，每次全新 operationId 重走完整 preflight → SafetyGate 流水线；在途超时/未知结果即使只读也不自动重试，且反馈固定携带"远端可能仍在执行此命令，禁止盲目重发；先用只读方式确认状态"警示；写操作零重试（fail-closed），Pi 引擎 `replay:'never'` 不动、两层重试不叠加。
 - 工具参数校验失败改为字段级报错（typebox `Value.Errors`，至多 3 条）：字段路径、失败约束与实收 JSON 类型，不回显原始值，防止凭据经错误信息进入模型上下文；保留 fail-closed。
+- `manage_service` 重启审批卡现呈现完整三段事务意图（P0-2）：只读预检已通过、本操作重启该服务、随后自动核验 InvocationID/ActiveState/Result 才报 active，纯呈现层不改 gate 与指纹；三模式回归测试矩阵进 CI——ask/permissive 恰 1 张人工卡（仅重启步）、ai-review 走独立预审无卡（不确定升级恰 1 卡）、preflight/check 三模式零请求；root 路径三步复用同一内存 sudo 凭据缓存（经 `OperationInputBridge` 绑定 `{task,host,terminal,generation}` 键），集成测试锁定全程只索密一次、后两步缓存命中。
 - 物理删除停用的旧 `edit_remote_file` 工具（原 `available:false` 永不激活）：工具定义、注册表项、提示词适用性投影与专属测试一并移除，工具面不再包含该死路入口；`write_remote_file` 携带替换哈希仍早拒绝。
 - 新增 Agent 架构重构路线图权威文档（`docs/AGENT_REFACTOR_ROADMAP.md`）：红线七条、现状核查两处修正（restart 三模式卡数矩阵、审批过期整轮暂停语义）与 Phase 0-4 验收基线入仓，后续重构论证以仓库为准；配套只读并发墙钟测量脚本记录基线（4 条并发只读 ≈4× 单条）。
 - 自动测试、专用 fixture、UI／Markdown／AI 面板和 Electron 探针统一集中到 `Tests/`；同步导入、依赖锁、类型／lint／行数／版本检查，并阻止生产代码依赖测试。更新开发、架构、安全与验收指南，清理过期临时交接。

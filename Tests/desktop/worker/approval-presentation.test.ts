@@ -31,4 +31,31 @@ describe('approval presentation', () => {
     request.reason = 'x'.repeat(5000);
     expect(approvalPresentation(request).explanation.length).toBeLessThan(1200);
   });
+
+  it('presents the three-phase service transaction on a manage_service restart approval (P0-2)', () => {
+    const scope = { taskId: 'task', hostId: 'host', cwd: '/', runAs: 'root', loginAs: 'user',
+      terminalId: 'terminal', terminalGeneration: 1, policyRevision: 1, allowedWorkingRoots: [], protectedPaths: [], goal: 'restart' };
+    const restart = approvalPresentation({ id: 'approval', fingerprint: 'fingerprint', ruleId: 'high-impact-command',
+      reason: '可能改变主机访问、服务可用性，或大范围删除数据', expiresAt: Date.now() + 60_000,
+      operation: { id: 'operation', kind: 'command', command: 'sudo -- systemctl restart -- nginx.service',
+        serviceUnit: 'nginx.service', privilege: 'root', scope } } satisfies ApprovalRequest);
+    expect(restart.explanation).toContain('只读预检已通过');
+    expect(restart.explanation).toContain('本操作重启该服务');
+    expect(restart.explanation).toContain('InvocationID/ActiveState/Result');
+    expect(restart.explanation).not.toContain('\n');
+  });
+
+  it('keeps the transaction copy off ordinary restarts and read-only service steps', () => {
+    const scope = { taskId: 'task', hostId: 'host', cwd: '/', runAs: 'user', terminalId: 'terminal',
+      terminalGeneration: 1, policyRevision: 1, allowedWorkingRoots: [], protectedPaths: [], goal: 'restart' };
+    const ordinary = approvalPresentation({ id: 'approval', fingerprint: 'fingerprint', ruleId: 'high-impact-command',
+      reason: '可能改变主机访问、服务可用性，或大范围删除数据', expiresAt: Date.now() + 60_000,
+      operation: { id: 'operation', kind: 'command', command: 'systemctl restart nginx', scope } } satisfies ApprovalRequest);
+    expect(ordinary.explanation).not.toContain('只读预检已通过');
+    const readOnly = approvalPresentation({ id: 'approval', fingerprint: 'fingerprint', ruleId: 'high-impact-command',
+      reason: '可能改变主机访问、服务可用性，或大范围删除数据', expiresAt: Date.now() + 60_000,
+      operation: { id: 'operation', kind: 'command', command: 'systemctl show nginx.service',
+        serviceUnit: 'nginx.service', scope } } satisfies ApprovalRequest);
+    expect(readOnly.explanation).not.toContain('只读预检已通过');
+  });
 });
