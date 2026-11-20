@@ -36,7 +36,10 @@ export const useTheme = create<ThemeState>((set, get) => ({
       if (get().mode === 'system') set({ resolved: apply('system') });
     });
     void window.cloudhelm?.appearanceSettings().then((settings) => {
-      if (settings.mode !== get().mode) set({ mode: settings.mode, resolved: apply(settings.mode) });
+      // Idempotent re-apply: the preload already wrote the same resolved value
+      // before first paint; hosts without a preload (UI smoke fixture) rely on
+      // this write to sync dataset.theme with the persisted mode.
+      set({ mode: settings.mode, resolved: apply(settings.mode) });
     }).catch(() => undefined);
   }
 }));
