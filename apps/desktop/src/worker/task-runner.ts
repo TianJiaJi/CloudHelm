@@ -20,7 +20,6 @@ import { createTaskRiskEvaluator, needsTaskReviewer, resolveTaskReviewer } from 
 import { TaskReviewLifetime } from './task-review-lifetime.js';
 import { taskSessionEvents } from './task-session-events.js';
 import type { TaskSignals } from './task-signals.js';
-export type { TaskSignals } from './task-signals.js';
 import { TaskRequestBudget, budgetPauseNotice } from './task-request-budget.js';
 import { taskPreparation, assertPreparedInput, type PreparationSnapshot } from './task-preparation.js';
 import { authorizeTaskInput } from './task-input-authorization.js';

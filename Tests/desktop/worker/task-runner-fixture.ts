@@ -6,7 +6,7 @@ import { RequestBudgetAuthority } from '../../../apps/desktop/src/main/request-b
 import { createBudgetRequestHandler } from '../../../apps/desktop/src/main/request-budget-broker.js';
 import { redactOutput, RequestBudgetError } from '@cloudhelm/core';
 import { TaskRunner as ProductionTaskRunner } from '../../../apps/desktop/src/worker/task-runner.js';
-export type { TaskSignals } from '../../../apps/desktop/src/worker/task-runner.js';
+export type { TaskSignals } from '../../../apps/desktop/src/worker/task-signals.js';
 
 const cleanups: Array<() => void> = [];
 const diagnostics: Array<() => unknown> = [];
