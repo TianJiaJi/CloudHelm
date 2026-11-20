@@ -193,6 +193,14 @@ export class SshCommandTerminal implements RawTerminal {
           } else if (outcome.exitCode === 125 && !outcome.markerSeen) {
             // The wrapper reports a failed directory change before sudo ever starts.
             this.failure({ failureKind: 'permission-denied', effects: 'none' });
+          } else if (outcome.exitCode === 1 && outcome.markerSeen && outcome.sudoDenied) {
+            // sudo accepted the credential but the sudoers policy refused the
+            // account: the marker proves the prompt ran and sudo's denial exit
+            // proves the reviewed payload never started, so a separately
+            // reviewed su alternative is offerable instead of a blind retry.
+            this.failure({ failureKind: 'authentication-failed', effects: 'none',
+              privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied',
+                source: 'transport', businessCommand: 'not-started', recovery: 'confirm-alternative' } as const });
           }
         } else if (outcome.suAuthenticationFailed && outcome.exitCode === 1) {
           // su rejects the password and exits without retrying: the task must

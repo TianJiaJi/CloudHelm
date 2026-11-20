@@ -132,6 +132,27 @@ it('distinguishes a failed directory change from sudo-driven 125 exits', async (
   expect(marked.exited).toHaveBeenCalledExactlyOnceWith(125);
 });
 
+it('classifies a transport-proven sudoers denial as authorization-denied with the payload not started', async () => {
+  const denied = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, sudoDenied: true });
+  await denied.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
+  expect(denied.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'none',
+    privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied', source: 'transport',
+      businessCommand: 'not-started', recovery: 'confirm-alternative' } });
+  expect(denied.exited).toHaveBeenCalledExactlyOnceWith(1);
+
+  // Without the denial evidence or the marker window the exit stays unclassified:
+  // only sudo's own denial after a real prompt proves the payload never started.
+  const unproven = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false });
+  await unproven.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
+  expect(unproven.failure).not.toHaveBeenCalled();
+  expect(unproven.exited).toHaveBeenCalledExactlyOnceWith(1);
+
+  const unmarked = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: false, sudoMissing: false, sudoDenied: true });
+  await unmarked.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
+  expect(unmarked.failure).not.toHaveBeenCalled();
+  expect(unmarked.exited).toHaveBeenCalledExactlyOnceWith(1);
+});
+
 it('settles unknown outcomes without replaying and fails closed without the native PTY transport', async () => {
   const unknown = ptyFixture({ state: 'unknown', reason: 'aborted' });
   await unknown.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });

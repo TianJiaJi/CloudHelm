@@ -6,7 +6,7 @@ import { renderNativeExecCommand } from './native-exec-command.js';
 export type NativePtyOutcome =
   | { state: 'not-dispatched'; reason: 'authorization-expired' }
   | { state: 'exited'; exitCode: number; markerSeen: boolean; sudoMissing: boolean;
-      suAuthenticationFailed?: boolean; suMissing?: boolean; suUserMissing?: boolean }
+      suAuthenticationFailed?: boolean; suMissing?: boolean; suUserMissing?: boolean; sudoDenied?: boolean }
   | { state: 'signaled'; signal: string; coreDumped: boolean }
   | { state: 'unknown'; reason: 'allocation' | 'timeout' | 'aborted' | 'channel-error' | 'missing-exit' | 'authorization-expired' | 'output-limit' };
 
@@ -28,6 +28,10 @@ const SUDO_FAILURE = 'Sorry, try again.';
 /** Shell-reported sudo absence (dash, bash-as-sh, BusyBox), never sudo's own child
  * diagnostics; the busybox multi-call stub also means sudo is unavailable. */
 const SUDO_MISSING = /(?:^|[\r\n])(?:(?!sudo:)[^\r\n]{0,128}sudo: (?:command )?not found|sudo: applet not found)/u;
+/** C-locale sudoers authorization denial, mirroring describeSudoOutcome's patterns:
+ * the credential may be accepted, the policy still refuses the account, and sudo's
+ * own exit means the reviewed payload never started. */
+const SUDO_DENIED = /(?:^|[\r\n])(?:sudo:[^\r\n]{0,256}(?:not allowed to execute|not in the sudoers|may not run sudo)|[a-z_][a-z0-9_.-]{0,63}[$]? is not in the sudoers file\b|Sorry,\s*user [^\r\n]{1,128} (?:is not allowed to execute|may not run sudo)\b)/iu;
 /** pam's su password prompt; su reads the answer on the same line, no newline. */
 const SU_PROMPT = 'Password:';
 /** C-locale pam su failure notice; it follows the prompt without a line break
@@ -81,6 +85,7 @@ class LiveNativePtySession {
   private suppressedBytes = 0;
   private markerSeenOnce = false;
   private sudoMissing = false;
+  private sudoDenied = false;
   private suAuthenticationFailed = false;
   private suMissing = false;
   private suUserMissing = false;
@@ -130,7 +135,8 @@ class LiveNativePtySession {
                   ...(this.suAuthenticationFailed ? { suAuthenticationFailed: true } : {}),
                   ...(this.suMissing ? { suMissing: true } : {}),
                   ...(this.suUserMissing ? { suUserMissing: true } : {}) }
-                : { state: 'exited', exitCode: code, markerSeen: this.markerSeenOnce, sudoMissing: this.sudoMissing }
+                : { state: 'exited', exitCode: code, markerSeen: this.markerSeenOnce, sudoMissing: this.sudoMissing,
+                  ...(this.sudoDenied ? { sudoDenied: true } : {}) }
               : typeof name === 'string' && /^[A-Z0-9]{1,24}$/u.test(name)
                 ? { state: 'signaled', signal: name, coreDumped: coreDumped === true }
                 : undefined;
@@ -235,6 +241,7 @@ class LiveNativePtySession {
       if (this.suppressing) this.swallowedFailure = true;
     }
     if (!this.sudoMissing && SUDO_MISSING.test(features)) this.sudoMissing = true;
+    if (!this.sudoDenied && SUDO_DENIED.test(features)) this.sudoDenied = true;
     this.featureTail = features.slice(-256);
     // The marker search runs over the raw stream, even inside a suppressed region:
     // sudo can re-prompt without emitting the post-read newline first.

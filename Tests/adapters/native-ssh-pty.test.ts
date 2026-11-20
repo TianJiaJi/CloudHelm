@@ -188,6 +188,40 @@ it('detects a shell-reported missing sudo but never mistakes sudo\'s own child d
   expect(await child.handle.result).toStrictEqual({ state: 'exited', exitCode: 127, markerSeen: false, sudoMissing: false });
 });
 
+it('flags a sudoers authorization denial after an accepted credential without classifying retry exhaustion', async () => {
+  const denied = open();
+  feed(denied, PROMPT);
+  expect(denied.handle.answer(challenge(denied), 'secret')).toBe(true);
+  feed(denied, '\nadmin is not in the sudoers file.  This incident will be reported.\n');
+  expect(denied.data).toHaveBeenCalledExactlyOnceWith('admin is not in the sudoers file.  This incident will be reported.\n');
+  denied.client.channel!.emit('exit', 1);
+  denied.client.channel!.emit('close');
+  expect(await denied.handle.result).toStrictEqual({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, sudoDenied: true });
+  expect(recorded(denied)).not.toContain('secret');
+
+  const restricted = open();
+  feed(restricted, PROMPT);
+  expect(restricted.handle.answer(challenge(restricted), 'secret')).toBe(true);
+  feed(restricted, '\nsudo: Sorry, user admin is not allowed to execute \'/bin/id\' as root on host.\n');
+  restricted.client.channel!.emit('exit', 1);
+  restricted.client.channel!.emit('close');
+  expect(await restricted.handle.result).toStrictEqual({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, sudoDenied: true });
+
+  const exhausted = open();
+  feed(exhausted, PROMPT);
+  expect(exhausted.handle.answer(challenge(exhausted), 'wrong')).toBe(true);
+  feed(exhausted, '\nSorry, try again.\n');
+  feed(exhausted, PROMPT);
+  expect(exhausted.handle.answer(challenge(exhausted), 'wrong')).toBe(true);
+  feed(exhausted, '\nSorry, try again.\n');
+  feed(exhausted, PROMPT);
+  expect(exhausted.handle.answer(challenge(exhausted), 'wrong')).toBe(true);
+  feed(exhausted, '\nsudo: 3 incorrect password attempts\n');
+  exhausted.client.channel!.emit('exit', 1);
+  exhausted.client.channel!.emit('close');
+  expect(await exhausted.handle.result).toStrictEqual({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false });
+});
+
 it('keeps the window answerable while the byte cap lifts suppression on a silent prompt region', async () => {
   const opened = open();
   feed(opened, PROMPT);

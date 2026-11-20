@@ -40,6 +40,8 @@ function fixture(uid = '1000') {
 }
 const missing: Partial<OperationResult> = { status: 'failed', effects: 'none', exitCode: 127,
   privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable', source: 'transport', businessCommand: 'not-started', recovery: 'confirm-alternative' } };
+const denied: Partial<OperationResult> = { status: 'failed', failureKind: 'authentication-failed', effects: 'none', exitCode: 1,
+  privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied', source: 'transport', businessCommand: 'not-started', recovery: 'confirm-alternative' } };
 const suRejected: Partial<OperationResult> = { status: 'failed', failureKind: 'authentication-failed', effects: 'none', exitCode: 1,
   stdoutTail: '', requiresUserAction: true,
   privilege: { method: 'su', stage: 'authentication', code: 'authentication-rejected', source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } };
@@ -77,6 +79,14 @@ describe('operation-level privilege routing', () => {
     expect(result.details).toMatchObject({ priorOperationId: 'business' });
     // The confirmed route is lease-keyed: a repeat dispatches the wrap without a second request.
     await f.run(); expect(f.requestRoot).toHaveBeenCalledOnce(); expect(f.commands().at(-1)).toBe(wrapped);
+  });
+  it('offers the stateless su route after a transport-proven sudoers authorization denial', async () => {
+    const f = fixture(); f.state.failure = denied; const result = await f.run();
+    expect(f.requestRoot).toHaveBeenCalledOnce();
+    expect(f.requestRoot.mock.calls[0]![3]).toContain('sudo 授权阶段拒绝');
+    expect(f.requestRoot.mock.calls[0]![5]).toBe('su');
+    expect(f.commands()).toEqual(['id -u', 'sudo -- stat /root/example', await f.wrap()]);
+    expect(result.details).toMatchObject({ priorOperationId: 'business' });
   });
   it('clears the confirmed su route only for transport-classified su outcomes, keeping it for unknown results', async () => {
     const rejected = fixture(); rejected.state.failure = missing;
