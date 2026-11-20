@@ -24,7 +24,7 @@
 
 ### H03 真机验收状态（2026-11-20，UI 重构期间冻结）
 
-用户隔离 VM（无 python3 最小 Linux，用户 `tian`）真机验收已开始：**链 1（前台诊断）通过**——`uname -r`/`df -hT`/`free -h`/`ss -tuln`/`ss -tulnp` 全部零放置 native-exec、low-risk-command 直过、exit 0；`du` 白名单修复 `f1bdeec` 同机验证。**链 2（配置→校验→服务健康）中断**于 VM sudo 认证 3 次拒绝（疑 VM 账户密码未设置，待控制台 `sudo -k && sudo -v` 人工复验）；staging 文件经 structured-file 规则写入且读回哈希一致，目标未创建，无系统目录写入。**链 3（后台→观察→精确停止）未开始**。
+用户隔离 VM（无 python3 最小 Linux，用户 `tian`）真机验收已开始：**链 1（前台诊断）通过**——`uname -r`/`df -hT`/`free -h`/`ss -tuln`/`ss -tulnp` 全部零放置 native-exec、low-risk-command 直过、exit 0；`du` 白名单修复 `f1bdeec` 同机验证。**链 2（配置→校验→服务健康）中断**于 VM sudo 认证 3 次拒绝（2026-11-20 用户确认根因：`tian` 不在 sudo 组、无 sudo 权限属 VM 既定设计，非密码问题；接续改走应用内建 su 回退路由，详见交接文档）；staging 文件经 structured-file 规则写入且读回哈希一致，目标未创建，无系统目录写入。**链 3（后台→观察→精确停止）未开始**。
 
 真机暴露安全缺口 **SG-1（已修复，2026-11-20）**：`sudo install … /etc/systemd/system/*.service` 曾被 `ordinary-command` 规则自动放行（securityConfiguration 不覆盖 `/etc/systemd/system`；`systemctl`/`install` 在 ORDINARY_COMMANDS 白名单内 sudo 包装后无条件放行，含 `sudo systemctl stop sshd` 类服务可用性操作）。修复：systemd 单元目录写入与 `systemctl`/`service` 可用性动词（start/stop/restart/enable/disable/mask 等，`!isQuery` 守卫保护后端探针）转入 high-impact；`sudo` 移出 ordinary 包装白名单，sudo 包装普通命令落 uncertain-command 走审核。正反例测试补入 Tests/core/safety 系列，service-tool/bash-analyzer 期望按新审批路径同步；详见 [NATIVE_SSH_HANDOFF.md](NATIVE_SSH_HANDOFF.md) 的「H03 真机验收中断交接」节。链 2/链 3 接续按该节清单执行，三链全过前 H03 不结项。
 

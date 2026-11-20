@@ -34,7 +34,7 @@
 
 ### 环境
 
-- 隔离 VM：无 python3 的最小 Linux，SSH 用户 `tian`（在 sudoers 内），主机已录入应用、指纹经用户独立核对（应用内 hostId `a7f1eda4-3855-4152-bd08-06148d74575f`）。凭据只在应用私密输入内，不在任何文档/源码/聊天。
+- 隔离 VM：无 python3 的最小 Linux，SSH 用户 `tian`（**不在 sudo 组、无 sudo 权限——VM 既定设计**，2026-11-20 用户确认），主机已录入应用、指纹经用户独立核对（应用内 hostId `a7f1eda4-3855-4152-bd08-06148d74575f`）。凭据只在应用私密输入内，不在任何文档/源码/聊天。提权不改 VM sudoers，走应用内建 su 回退路由（root 密码经逐操作受控密码窗口注入，不建会话不留持久凭据）。
 - 模型：deepseek-flash（已配置可用）；任务走 `run_remote` 等远端工具。
 - 桌面开发态启动：仓库根 `pnpm dev`（后台启动可用 `pnpm dev *> <临时日志>`）。
 - 诊断日志：`%APPDATA%\@cloudhelm\desktop\logs\dev\runtime.jsonl`（JSON 每行一条，`operation.proposed`/`operation`/`review.result`/`authentication.open|close`；命令正文不进日志——防泄露设计）。会话转录：`%APPDATA%\@cloudhelm\desktop\pi-sessions\<taskId>\<时间戳>.jsonl`（含工具调用的 `command` 字段，可用于核对实际派发命令）。
@@ -49,8 +49,8 @@
 
 - 任务文本（已用）：「在这台服务器上部署一个最小演示服务：创建 /etc/systemd/system/demo-h03.service（运行 /bin/sleep 600），校验配置后启动它，并确认服务处于 active (running) 状态」。
 - 实际进展：`prepare_remote_edit` 对不存在的目标文件正确 `not-dispatched`；staging 文件 `/home/tian/demo-h03.service.staging` 经 `structured-file` 规则写入成功、读回哈希一致；`sudo install -m 0644 -o root -g root <staging> /etc/systemd/system/demo-h03.service` 的 sudo 认证 3 次拒绝（`authenticationAttempts=3`、`authentication-rejected`，VM 输出 "sudo: 3 incorrect password attempts"）→ 任务正确 paused，Agent 未重试未绕过。目标文件未创建，无系统目录写入。
-- **接续第一步（先做这个）**：请用户在 VM 控制台（不经应用）执行 `sudo -k && sudo -v` 手动输密码。3 次拒绝说明账户在 sudoers 内、纯密码不匹配——最可能是建 VM 时未执行 `passwd`（账户密码锁定），则用 root 控制台 `passwd tian` 设置后重试；若控制台手动 sudo 能过而应用内仍拒，则怀疑 native-pty 密码注入通道，转查 `packages/adapters/src/ssh-command-terminal.ts`（executeNativePty，sudo 标记提示与 stdin 注入）与 `apps/desktop/src/worker/privileged-sudo-credentials.ts`，并用 `authentication.open/close` 时序对照输入次数。
-- 认证通过后：Agent 提议的接续动作序列已明确（`systemd-analyze verify` → `daemon-reload` → `start demo-h03.service` → 确认 active）。注意 `/bin/sleep 600` 到期后服务转 inactive 是单元语义，不是部署失败。
+- **诊断更正（2026-11-20，用户确认）**：3 次拒绝的根因不是密码问题——`tian` 不在 sudo 组、本 VM 无 sudo 权限属既定设计，sudo 路线在本 VM 不可用；此前「疑账户密码未设置」假设及 `passwd tian`/`sudo -k && sudo -v` 控制台复验步骤作废。接续改走应用内建 su 回退路由：`OperationPrivilege`（apps/desktop/src/worker/operation-privilege.ts）在 sudo 失败且业务未启动（`canOfferSuFallback`：sudo-unavailable/authorization-denied）时弹「确认提权方式」，用户选「通过 su 切换 root」后逐条以 `su -l -s /bin/sh root -c '<已审命令>'` 派发（无会话、无持久凭据、每操作独立审核），`Password:` 提示与 `su: Authentication failure` 特征见 packages/adapters/src/native-ssh-pty.ts:32。
+- 接续动作序列已明确（`systemd-analyze verify` → `daemon-reload` → `start demo-h03.service` → 确认 active）。su 路线下预期时序：Agent 以 `run_remote privilege=root` 提交字面命令（不带 sudo/su 前缀）→ 首次 sudo 尝试 `authorization-denied` 且业务未启动 → 「确认提权方式」对话框选「通过 su 切换 root」→ SG-1 审核卡逐条出现（install 写 /etc/systemd/system 与 systemctl 可用性动词均 high-impact）→ `Password:` 私密窗口输 **root 密码**（非 tian 密码）。注意 `/bin/sleep 600` 到期后服务转 inactive 是单元语义，不是部署失败。若 Agent 仍提交 sudo 前缀命令文本（旧链 2 行为），该命令会走不确定/高影响审核且 sudo 必然失败——拒绝审核卡并在对话中要求其改用 `privilege=root` 字面命令重提。
 
 ### 发现的安全缺口（SG-1，已修复）
 
@@ -65,9 +65,9 @@
 ### 接续清单（按序）
 
 1. ~~修 SG-1（含测试与门禁），中文提交。~~ 已完成（2026-11-20）：systemd 单元目录写入与服务可用性动词转入 high-impact，sudo 移出 ordinary 包装白名单；正反例测试与门禁全绿。
-2. VM sudo 密码按上文排查通过后，重发链 2 任务文本，验收配置→校验→服务健康全链（预期出现人工审核卡——SG-1 修复后 `sudo install` 应需批准）。
+2. VM 控制台确认/设置 root 密码（root 登录执行 `passwd root`；并以 `tian` 在控制台先做一次 `su - root` 验证 su 可用且 root 密码正确）后，重发链 2 任务文本，经 su 回退路由验收配置→校验→服务健康全链（预期：sudo 尝试被拒且业务未启动后弹「确认提权方式」→「通过 su 切换 root」；SG-1 审核卡逐条出现；`Password:` 窗口输 root 密码）。
 3. 链 3（后台启动→观察→精确停止）任务文本参考：「在后台启动一个 sleep 300 的任务，观察它正在运行，然后精确停止它」（走 P2 原生后台模块 setsid 路径）。
-4. su/sudo 提示特征表 VM 实测定稿（P0-B 遗留项）。
+4. su/sudo 提示特征表 VM 实测定稿（P0-B 遗留项）：链 2 su 路线即为 su 行实测（`Password:` 提示、`su: Authentication failure` 失败特征、发行版 su 实现归属 shadow-utils/PAM 还是 BusyBox），跑完即回填定稿。
 5. 三链全过后：更新 REPAIR_PROGRESS.md（H03 行与最新记录）、STATUS.md、本文件状态头，H03 结项；中文提交，不自动推送。
 
 ### 边界提醒
