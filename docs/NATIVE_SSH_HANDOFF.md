@@ -52,7 +52,7 @@
 - **接续第一步（先做这个）**：请用户在 VM 控制台（不经应用）执行 `sudo -k && sudo -v` 手动输密码。3 次拒绝说明账户在 sudoers 内、纯密码不匹配——最可能是建 VM 时未执行 `passwd`（账户密码锁定），则用 root 控制台 `passwd tian` 设置后重试；若控制台手动 sudo 能过而应用内仍拒，则怀疑 native-pty 密码注入通道，转查 `packages/adapters/src/ssh-command-terminal.ts`（executeNativePty，sudo 标记提示与 stdin 注入）与 `apps/desktop/src/worker/privileged-sudo-credentials.ts`，并用 `authentication.open/close` 时序对照输入次数。
 - 认证通过后：Agent 提议的接续动作序列已明确（`systemd-analyze verify` → `daemon-reload` → `start demo-h03.service` → 确认 active）。注意 `/bin/sleep 600` 到期后服务转 inactive 是单元语义，不是部署失败。
 
-### 发现的安全缺口（已记录未修复，接续时优先修）
+### 发现的安全缺口（SG-1，已修复）
 
 **SG-1：ordinary-command 规则自动放行 root 写系统目录与服务管理命令。** 真机证据：上述 `sudo install … /etc/systemd/system/demo-h03.service` 被自动放行（`proposed`→`review.result allow` 仅 5ms，零人工审核，任意审查模式；日志 2026-11-19T18:35:49.396Z–.403Z，操作 ID `25cd681f-c737-4c84-8d9d-e72c430f8997`）。三层根因：
 
@@ -60,11 +60,11 @@
 2. `install`、`systemctl`、`docker` 等在 `ORDINARY_COMMANDS`（safety.ts:15）；sudo 包装后 `ordinaryCommand()`（safety.ts:247）无条件放行（safety.ts:405），不区分审查模式。推论：`sudo systemctl stop sshd`、`sudo systemctl disable --now <unit>` 等影响主机/连接可用性的操作同样免审（`systemctl` 不在 `HIGH_IMPACT_COMMANDS` safety.ts:19）。
 3. 风险排序倒置：同轮只读 `du` 变体需人工批准，root 写系统目录免审。
 
-修复方向（未实施，实施时补正反例测试进 Tests/core/safety 相关用例）：`/etc/systemd/system`、`/usr/lib/systemd/system` 写入目标纳入 securityConfiguration/high-impact 路径；`systemctl` 的 `enable/disable/mask/stop/restart`（至少影响连接与服务可用性的子集）纳入 high-impact；重估 ordinary-command 快速路径对 sudo 包装命令的适用边界。修复会改变链 2 的审批路径（`sudo install` 应转为人工审核），属预期行为，同步更新测试期望。
+**已修复（2026-11-20）**：`securityConfiguration` 纳入 `/etc/systemd/system/` 与 `/^(?:usr\/)?lib\/systemd\/system\//`；新增 `SERVICE_AVAILABILITY_ACTIONS` 动词集，`systemctl`/`service` 的可用性变更动作（start/stop/restart/enable/disable/mask 等）经 `!isQuery` 守卫（保护后端 `systemctl show` 探针语法）转入 high-impact；`sudo` 移出 `ordinaryCommand()` 包装白名单——sudo 包装的普通命令不再免审，落 uncertain-command 走 ask/evaluate。正反例测试补入 `Tests/core/safety-risk-matrix.test.ts`（真实 SG-1 命令、服务动词、sudo 包装边界、后端探针回归）与 `Tests/core/safety.test.ts`（systemd 单元文件写入 tier、探针守卫）；bash-analyzer 与 service-tool 测试期望按新审批路径同步（服务重启经 SafetyGate 需人工批准，`ruleId: high-impact-command`）。修复改变链 2 审批路径（`sudo install` 应转为人工审核），属预期。
 
 ### 接续清单（按序）
 
-1. 修 SG-1（含测试与门禁），中文提交。
+1. ~~修 SG-1（含测试与门禁），中文提交。~~ 已完成（2026-11-20）：systemd 单元目录写入与服务可用性动词转入 high-impact，sudo 移出 ordinary 包装白名单；正反例测试与门禁全绿。
 2. VM sudo 密码按上文排查通过后，重发链 2 任务文本，验收配置→校验→服务健康全链（预期出现人工审核卡——SG-1 修复后 `sudo install` 应需批准）。
 3. 链 3（后台启动→观察→精确停止）任务文本参考：「在后台启动一个 sleep 300 的任务，观察它正在运行，然后精确停止它」（走 P2 原生后台模块 setsid 路径）。
 4. su/sudo 提示特征表 VM 实测定稿（P0-B 遗留项）。
@@ -72,7 +72,7 @@
 
 ### 边界提醒
 
-- 未修复 SG-1 前，不要把本 VM 之外的主机接入应用（ordinary-command 免审缺口在真实环境同样生效）。
+- SG-1 已修复：ordinary-command 不再免审 root 写系统目录与服务可用性变更；本 VM 之外主机接入前仍建议先跑完链 2/链 3 验收。
 - 密码/指纹/私密配置不写入任何文档、源码、命令或日志；本节 hostId 为应用内非秘密标识。
 - 本节不改变迁移契约四不变量；H03 保持“进行中”，不因链 1 通过而提前结项。
 

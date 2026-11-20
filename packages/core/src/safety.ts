@@ -18,6 +18,10 @@ const ORDINARY_COMMANDS = new Set(['mkdir', 'touch', 'cp', 'mv', 'install', 'tee
 const OPAQUE_COMMANDS = new Set(['bash', 'sh', 'zsh', 'fish', 'python', 'python3', 'node', 'perl', 'ruby', 'php', 'eval', 'source', '.']);
 const HIGH_IMPACT_COMMANDS = new Set(['useradd', 'userdel', 'usermod', 'groupadd', 'groupdel', 'passwd', 'chpasswd',
   'iptables', 'ip6tables', 'nft', 'ufw', 'firewall-cmd', 'shutdown', 'reboot', 'poweroff']);
+/** Service-manager actions that change what code runs now or at boot, or take the host down. */
+const SERVICE_AVAILABILITY_ACTIONS = new Set(['enable', 'reenable', 'disable', 'mask', 'unmask', 'link',
+  'start', 'stop', 'restart', 'try-restart', 'reload-or-restart', 'force-reload', 'force-stop', 'kill', 'isolate',
+  'reboot', 'poweroff', 'halt', 'suspend', 'hibernate', 'kexec', 'rescue', 'emergency']);
 
 function decision(verdict: SafetyDecision['verdict'], ruleId: string, reason: string): SafetyDecision {
   return { verdict, ruleId, reason };
@@ -212,7 +216,8 @@ function isLowRiskCommand(analysis: CommandAnalysis, operation: ProposedOperatio
 
 function securityConfiguration(value: string, cwd: string | null): boolean {
   const target = literalPath(value, cwd);
-  return !!target && (/^\/etc\/(?:ssh\/|sudoers(?:\.d\/|$)|sysctl\.d\/|iptables\/)/u.test(target)
+  return !!target && (/^\/etc\/(?:ssh\/|sudoers(?:\.d\/|$)|sysctl\.d\/|iptables\/|systemd\/system\/)/u.test(target)
+    || /^\/(?:usr\/)?lib\/systemd\/system\//u.test(target)
     || /^\/root\/\.ssh\//u.test(target) || /\/\.ssh\/authorized_keys$/u.test(target));
 }
 
@@ -226,9 +231,16 @@ function highImpactCommand(analysis: CommandAnalysis, cwd: string): string | nul
       ? call.semantics.tar.paths.some((effect) => effect.kind === 'write'
         && securityConfiguration(effect.path, resolveCommandDirectory(effect.directory, cwd)))
       : call.args.some((arg) => securityConfiguration(arg, callDirectory(call, cwd)))))) {
-    return 'Changes SSH, sudo, or host security configuration';
+    return 'Changes SSH, sudo, service unit, or host security configuration';
   }
   if (names.some((name) => HIGH_IMPACT_COMMANDS.has(name))) return 'Changes account access, firewall, or host availability';
+  // The backend service probe keeps its exact query shape; any service-manager
+  // action outside it that changes availability or persistence stays high impact.
+  if (analysis.calls.some((call) => {
+    const name = path.posix.basename(call.name);
+    return ['systemctl', 'service'].includes(name) && !isQuery(call)
+      && call.args.some((arg) => SERVICE_AVAILABILITY_ACTIONS.has(arg));
+  })) return 'Changes service or host availability through service management';
   if (analysis.calls.some((call) => {
     const name = path.posix.basename(call.name);
     if (name === 'rm' && isRecursive(call.args)) return true;
@@ -251,7 +263,10 @@ function ordinaryCommand(analysis: CommandAnalysis): boolean {
       && analysis.redirectTargets.length === 1 && !analysis.calls[0]!.dynamic;
   }
   if (analysis.hasCompound && analysis.steps?.length !== 1) return false;
-  if (analysis.calls.slice(0, -1).some((item) => !['sudo', 'env', 'command', 'exec', 'nohup', 'nice', 'time', 'timeout', 'setsid']
+  // A privileged wrapper ends the ordinary fast path: root reach makes
+  // "bounded ordinary command" a false claim, mirroring the query machinery,
+  // which never auto-approves sudo-wrapped queries either.
+  if (analysis.calls.slice(0, -1).some((item) => !['env', 'command', 'exec', 'nohup', 'nice', 'time', 'timeout', 'setsid']
     .includes(path.posix.basename(item.name)))) return false;
   const call = analysis.calls.at(-1)!;
   const name = path.posix.basename(call.name);
@@ -407,7 +422,7 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
   if (operation.kind === 'write-file' && operation.fileEdit && operation.privilege === 'root')
     return highImpactDecision('privileged-file-edit', 'Commit exact reviewed content and metadata using operation-bound root authentication', settings);
   if (highImpactFile(operation)) {
-    return highImpactDecision('high-impact-file', 'Changes host access or security configuration', settings);
+    return highImpactDecision('high-impact-file', 'Changes host access, service unit, or security configuration', settings);
   }
   // Recovery material removal is always reviewed regardless of identity or mode:
   // an explicit, bounded, per-name decision; never a silent automatic cleanup.

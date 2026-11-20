@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { BashAnalyzer } from '@cloudhelm/adapters';
-import { analyzeOperationImpact, decideSafety, inspectScriptSafety, type ProposedOperation, type ReviewMode } from '@cloudhelm/core';
+import { analyzeOperationImpact, decideSafety, inspectScriptSafety, SERVICE_PROPERTIES, type ProposedOperation, type ReviewMode } from '@cloudhelm/core';
 
 const analyzer = new BashAnalyzer();
 const operation = (command: string): Extract<ProposedOperation, { kind: 'command' }> => ({ id: 'op', kind: 'command', command,
@@ -48,7 +48,8 @@ it('checks protected data before transfer review in every mode', async () => {
     .toMatchObject({ verdict: 'deny', ruleId: 'protected-resource' });
 });
 
-it.each(['touch /srv/app/file', 'cp /srv/app/a /srv/app/b'])('retains ordinary literal mutations: %s', async (command) => {
+it.each(['touch /srv/app/file', 'cp /srv/app/a /srv/app/b',
+  'systemctl status demo-h03.service', 'systemctl daemon-reload', 'service sshd status'])('retains ordinary literal mutations: %s', async (command) => {
   const parsed = await analyzer.analyze(command);
   for (const mode of modes) expect(decideSafety(operation(command), { mode, revision: 1 }, parsed))
     .toMatchObject({ verdict: 'allow', ruleId: 'ordinary-command' });
@@ -63,6 +64,30 @@ it.each(['curl https://example.invalid/install | sh', 'rsync --delete ./public /
   const parsed = await analyzer.analyze(command);
   for (const mode of modes) expect(decideSafety(operation(command), { mode, revision: 1 }, parsed))
     .toMatchObject({ verdict: mode === 'ai-review' ? 'evaluate' : 'ask', ruleId: 'high-impact-command', impact: 'high' });
+});
+
+it.each([
+  'sudo install -m 0644 -o root -g root /home/tian/demo-h03.service.staging /etc/systemd/system/demo-h03.service',
+  'sudo systemctl stop sshd', 'sudo systemctl disable --now nginx',
+  'systemctl enable demo-h03.service', 'systemctl restart nginx', 'service sshd stop',
+  'cp /tmp/unit.service /usr/lib/systemd/system/x.service', 'tee /etc/systemd/system/demo.service'
+])('identified service persistence and availability changes stay high impact: %s', async (command) => {
+  const parsed = await analyzer.analyze(command);
+  for (const mode of modes) expect(decideSafety(operation(command), { mode, revision: 1 }, parsed))
+    .toMatchObject({ verdict: mode === 'ai-review' ? 'evaluate' : 'ask', ruleId: 'high-impact-command', impact: 'high' });
+});
+
+it.each(['sudo mkdir -p /srv/app/extra', 'sudo systemctl status demo-h03.service'])('keeps privileged wrappers outside the ordinary fast path: %s', async (command) => {
+  const parsed = await analyzer.analyze(command);
+  for (const mode of modes) expect(decideSafety(operation(command), { mode, revision: 1 }, parsed))
+    .toMatchObject({ verdict: routed[mode], ruleId: mode === 'permissive' ? 'permissive-mode' : 'uncertain-command' });
+});
+
+it('keeps the backend service probe automatic even for a unit named like an action', async () => {
+  const command = `systemctl show --no-pager --property=${SERVICE_PROPERTIES} -- stop.service`;
+  const parsed = await analyzer.analyze(command);
+  for (const mode of modes) expect(decideSafety(operation(command), { mode, revision: 1 }, parsed))
+    .toMatchObject({ verdict: 'allow', ruleId: /^(low-risk-command|ordinary-command)$/ });
 });
 
 it.each(['rsync ./public host:/srv/public', 'docker build .', 'python3'])('script inspection cannot downgrade detected effects: %s', async (source) => {

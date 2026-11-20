@@ -39,7 +39,7 @@ describe('deterministic safety policy', () => {
   it.each([
     ['pwd', 'allow', 'allow', 'allow'],
     ['apt-get install -y curl', 'ask', 'evaluate', 'allow'],
-    ['systemctl restart nginx', 'allow', 'allow', 'allow'],
+    ['systemctl restart nginx', 'ask', 'evaluate', 'ask'],
     ['rm -rf /srv/app/cache', 'ask', 'evaluate', 'ask'],
     ['python3 -c "print(1)"', 'ask', 'evaluate', 'allow'],
     ['sh ./deploy.sh', 'ask', 'evaluate', 'allow'],
@@ -94,7 +94,7 @@ describe('deterministic safety policy', () => {
       { mode: 'ask', revision: 1 }, await analyzer.analyze(value)).verdict;
     expect(await decide('cp /srv/private-write/input /srv/app/output')).toBe('allow');
     expect(await decide('cp /srv/app/input /srv/private-read/output')).toBe('allow');
-    expect(await decide('sudo cp /srv/private-write/input /srv/app/output')).toBe('allow');
+    expect(await decide('sudo cp /srv/private-write/input /srv/app/output')).toBe('ask');
     expect(await decide('cp /srv/private-read/input /srv/app/output')).toBe('deny');
     expect(await decide('cp /srv/app/input /srv/private-write/output')).toBe('deny');
     expect(await decide('cat /srv/private-read/input')).toBe('deny');
@@ -109,7 +109,7 @@ describe('deterministic safety policy', () => {
   it('routes detected package code to review but keeps ordinary mutation without an AI request in level two', async () => {
     const compose = command('docker compose up -d');
     expect(decideSafety(compose, { mode: 'ai-review', revision: 1 }, await analyzer.analyze(compose.command)).verdict).toBe('evaluate');
-    const operation = command('systemctl restart nginx');
+    const operation = command('touch /srv/app/deploy.ready');
     expect(decideSafety(operation, { mode: 'ai-review', revision: 1 }, await analyzer.analyze(operation.command)).verdict).toBe('allow');
   });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CommandAnalysis, CommandCall, OperationScope, ProposedOperation, ReviewMode, SafetySettings } from '../../packages/core/src/model.js';
 import { decideSafety, inspectScriptSafety } from '../../packages/core/src/safety.js';
+import { SERVICE_PROPERTIES } from '../../packages/core/src/service-observation.js';
 
 const call = (name: string, args: string[] = [], dynamic = false): CommandCall => ({ name, args, dynamic, redirects: false });
 
@@ -59,6 +60,23 @@ describe('three-tier review matrix', () => {
   it.each(tier)('in %s mode a security-configuration file change resolves to %s', (mode, verdict) => {
     expect(decideSafety(write('/etc/ssh/sshd_config'), settings(mode)))
       .toMatchObject({ verdict, ruleId: 'high-impact-file', impact: 'high' });
+  });
+
+  it.each(tier)('in %s mode a systemd unit file change resolves to %s', (mode, verdict) => {
+    for (const target of ['/etc/systemd/system/demo-h03.service', '/usr/lib/systemd/system/demo-h03.service',
+      '/lib/systemd/system/demo-h03.service']) {
+      expect(decideSafety(write(target), settings(mode)))
+        .toMatchObject({ verdict, ruleId: 'high-impact-file', impact: 'high' });
+    }
+  });
+
+  it('keeps the exact backend service probe automatic for a unit named like an action', () => {
+    const probe = ['show', '--no-pager', `--property=${SERVICE_PROPERTIES}`, '--', 'stop.service'];
+    const calls = [call('systemctl', probe)];
+    for (const mode of modes) {
+      expect(decideSafety(command(`systemctl ${probe.join(' ')}`), settings(mode), analysis(calls)))
+        .toMatchObject({ verdict: 'allow', ruleId: /^(low-risk-command|ordinary-command)$/ });
+    }
   });
 
   it.each([

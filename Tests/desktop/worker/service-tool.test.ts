@@ -1,13 +1,13 @@
 import { expect, it, vi } from 'vitest';
 import { SafetyGate, HostSerialExecutor } from '@cloudhelm/application';
 import { BashAnalyzer } from '@cloudhelm/adapters';
-import { serviceQuery, serviceLogQuery, isReadOnlyQuery, type OperationResult, type OperationScope, type ProposedOperation } from '@cloudhelm/core';
+import { serviceQuery, serviceLogQuery, isReadOnlyQuery, type ApprovalRequester, type OperationResult, type OperationScope, type ProposedOperation } from '@cloudhelm/core';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import { createServiceTool } from '../../../apps/desktop/src/worker/service-tool.js';
 import { LocalFileAccess } from '../../../apps/desktop/src/worker/local-file-access.js';
 
 const loaded = 'LoadState=loaded\nCanStart=yes\nNeedDaemonReload=no\nJob=\nActiveState=active\nResult=success\nInvocationID=fixture-invocation\nExecMainStatus=0';
-function setup(reply: (command: string) => Partial<OperationResult> = () => ({ status: 'succeeded', stdoutTail: loaded })) {
+function setup(reply: (command: string) => Partial<OperationResult> = () => ({ status: 'succeeded', stdoutTail: loaded }), approve = false) {
   const commands: string[] = [];
   const scopes: OperationScope[] = [];
   let rootReady = true;
@@ -26,7 +26,8 @@ function setup(reply: (command: string) => Partial<OperationResult> = () => ({ s
     return result;
   } });
   const audit = { proposed: vi.fn(async (_operation: ProposedOperation) => {}), decided: vi.fn(), completed: vi.fn() };
-  const gate = new SafetyGate({ analyzer: new BashAnalyzer(), evaluator: { evaluate: async () => 'allow' }, approvals: { requestApproval: async () => false },
+  const requestApproval = vi.fn(async (_request: Parameters<ApprovalRequester['requestApproval']>[0]): Promise<boolean> => approve);
+  const gate = new SafetyGate({ analyzer: new BashAnalyzer(), evaluator: { evaluate: async () => 'allow' }, approvals: { requestApproval },
     executor: serial, audit, lease: { currentGeneration: () => 1, isAgentOwner: () => true }, settings: () => ({ mode: host.defaultMode, revision: host.policyRevision }) });
   const tool = createServiceTool({ hosts: [host], localFiles: new LocalFileAccess([]), ensureTerminal,
     scope: (_host, terminalId) => ({ taskId: 'task', hostId: 'host', cwd: '/', runAs: terminalId === 'root-terminal' ? 'root' : 'user',
@@ -38,15 +39,18 @@ function setup(reply: (command: string) => Partial<OperationResult> = () => ({ s
       const outcome = await safety.execute(operation, signal);
       return { result: outcome.result, readOnly: outcome.readOnly, content: [{ type: 'text', text: outcome.result?.stdoutTail ?? outcome.decision.reason }], details: undefined, isError: outcome.result?.status !== 'succeeded' };
     } }, gate);
-  return { tool, commands, scopes, ensureTerminal, audit, serial, host, expireRoot: () => { rootReady = false; } };
+  return { tool, commands, scopes, ensureTerminal, audit, serial, host, requestApproval, expireRoot: () => { rootReady = false; } };
 }
 it('uses one confirmed root session for preflight, restart and verification without identity fallback', async () => {
-  const f = setup();
+  const f = setup(undefined, true);
   const result = await f.tool.execute('root', { hostId: 'host', unit: 'nginx.service', action: 'restart', sessionId: 'confirmed-root' });
   expect(result.isError).toBe(false);
   expect(f.commands).toHaveLength(3);
   expect(f.scopes.every((scope) => scope.sessionId === 'confirmed-root' && scope.terminalId === 'root-terminal' && scope.runAs === 'root')).toBe(true);
   expect(f.ensureTerminal.mock.calls.every(([, sessionId]) => sessionId === 'confirmed-root')).toBe(true);
+  const restartApprovals = f.requestApproval.mock.calls.filter(([request]) => request.operation.kind === 'command'
+    && request.operation.command.includes('restart'));
+  expect(restartApprovals).toHaveLength(1);
 });
 it('stops if the confirmed session expires after preflight, without switching to an ordinary terminal', async () => {
   const f: ReturnType<typeof setup> = setup(() => { f.expireRoot(); return { stdoutTail: loaded }; });
@@ -81,11 +85,12 @@ it('does not restart if preflight claims success without a definite exit', async
   expect(f.commands).toHaveLength(1);
 });
 it('routes all sudo-requested steps through one root intent without contaminating a later current-identity query', async () => {
-  const f = setup();
+  const f = setup(undefined, true);
   await f.tool.execute('sudo', { hostId: 'host', unit: 'nginx.service', action: 'restart', sudo: true });
   expect(f.scopes.map((scope) => scope.runAs)).toEqual(['user', 'root', 'root', 'root']);
   await f.tool.execute('current', { hostId: 'host', unit: 'nginx.service', action: 'inspect', privilege: 'current' });
   expect(f.scopes.at(-1)?.runAs).toBe('user');
+  expect(f.requestApproval).toHaveBeenCalledTimes(1);
 });
 it('honours root intent for service logs and rejects conflicting current/sudo before allocation', async () => {
   const f = setup();
@@ -106,12 +111,16 @@ it('front-loads every operation reference and bounds the combined service result
   expect(result.details).toMatchObject({ recovery: { hostId: 'host', unit: 'nginx.service' }, outputTruncated: true });
 });
 it('preflights, reviews the actual restart, then verifies using the stable unit and invocation reference', async () => {
-  const f = setup();
+  const f = setup(undefined, true);
   const result = await f.tool.execute('call', { hostId: 'host', unit: 'nginx.service', action: 'restart', sudo: true });
   expect(result.isError).toBe(false);
   expect(f.commands).toEqual(['id -u', `sudo -- ${serviceQuery('nginx.service')}`,
     'sudo -- systemctl restart -- nginx.service', `sudo -- ${serviceQuery('nginx.service')}`]);
   expect(f.audit.proposed).toHaveBeenCalledTimes(4);
+  const restartApprovals = f.requestApproval.mock.calls.filter(([request]) => request.operation.kind === 'command'
+    && request.operation.command === 'sudo -- systemctl restart -- nginx.service');
+  expect(restartApprovals).toHaveLength(1);
+  expect(restartApprovals[0]![0].ruleId).toBe('high-impact-command');
   expect(result.content[0]?.text).toContain('fixture-invocation');
 });
 it.each(['LoadState=not-found', loaded.replace('Job=', 'Job=42')])('never restarts a missing unit or one with an outstanding job', async (output) => {
@@ -120,7 +129,7 @@ it.each(['LoadState=not-found', loaded.replace('Job=', 'Job=42')])('never restar
   expect(f.commands).toHaveLength(1);
 });
 it('allows reconnect inspection while refusing replay after a disconnected restart', async () => {
-  const f = setup((command) => command.includes('restart') ? { status: 'unknown', stdoutTail: '' } : { stdoutTail: loaded });
+  const f = setup((command) => command.includes('restart') ? { status: 'unknown', stdoutTail: '' } : { stdoutTail: loaded }, true);
   await f.tool.execute('call', { hostId: 'host', unit: 'nginx.service', action: 'restart' });
   expect((await f.tool.execute('inspect', { hostId: 'host', unit: 'nginx.service', action: 'inspect' })).isError).toBe(false);
   expect((await f.tool.execute('retry', { hostId: 'host', unit: 'nginx.service', action: 'restart' })).isError).toBe(true);
@@ -130,7 +139,7 @@ it('rechecks policy at each step and reports an unhealthy service without anothe
   const f = setup((command) => { if (command.includes('show')) f.host.policyRevision++; return { stdoutTail: loaded }; });
   expect((await f.tool.execute('call', { hostId: 'host', unit: 'nginx.service', action: 'restart' })).isError).toBe(true);
   expect(f.commands).toHaveLength(1);
-  const unhealthy = setup((command) => ({ stdoutTail: command.includes('show') ? loaded.replace('ActiveState=active', 'ActiveState=failed') : '' }));
+  const unhealthy = setup((command) => ({ stdoutTail: command.includes('show') ? loaded.replace('ActiveState=active', 'ActiveState=failed') : '' }), true);
   expect((await unhealthy.tool.execute('call', { hostId: 'host', unit: 'nginx.service', action: 'restart' })).isError).toBe(true);
   expect(unhealthy.commands.filter((command) => command.includes('restart'))).toHaveLength(1);
 });
