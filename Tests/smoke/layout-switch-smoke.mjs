@@ -59,14 +59,20 @@ try {
   assert.equal((await lastCall('layout')).settings.mode, 'agent', '切换布局必须持久化为 agent');
   assert.ok(sameSpot(await switcher.boundingBox(), sshSpot), '布局开关在两种布局下必须处于同一坐标');
   await page.locator('span[class*="crumb"] strong', { hasText: '梳理磁盘占用' }).waitFor();
-  await page.locator('section[aria-label="终端抽屉"]').waitFor();
+  // Agent-mode defaults: the terminal drawer starts retracted and hosts in the
+  // tree start collapsed.
+  assert.equal(await page.locator('section[aria-label="终端抽屉"]').count(), 0, 'Agent 模式的终端抽屉应默认收起');
+  await page.getByRole('button', { name: '展开 生产服务器' }).waitFor();
 
   // Agent-mode shortcuts: Ctrl+J toggles the drawer, Ctrl+K focuses the tree
   // search, Ctrl+N starts a new conversation.
   await page.keyboard.press('Control+j');
-  await page.locator('section[aria-label="终端抽屉"]').waitFor({ state: 'detached' });
-  await page.keyboard.press('Control+j');
   await page.locator('section[aria-label="终端抽屉"]').waitFor();
+  // The center column must carry the assistant panel surface so panel-scoped
+  // rules (floating 回到最新 pill, suggestion and plan-toggle styling) apply.
+  await page.locator('div[class*="stream"][class*="panel"]').first().waitFor();
+  await page.keyboard.press('Control+j');
+  await page.locator('section[aria-label="终端抽屉"]').waitFor({ state: 'detached' });
   await page.keyboard.press('Control+k');
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '搜索主机与对话', 'Ctrl+K 应聚焦主机树搜索框');
   await page.keyboard.press('Control+n');

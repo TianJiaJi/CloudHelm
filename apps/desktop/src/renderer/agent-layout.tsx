@@ -10,6 +10,7 @@ import type { LayoutProps } from './layout-props.js';
 import { PanelSurface, Pill, SegmentedControl, type SegmentedOption } from './ui/index.js';
 import { contextUsagePresentation } from './context-usage.js';
 import type { StreamFilter } from './conversation-transcript.js';
+import panelStyles from './agent-panel.module.css';
 import styles from './agent-layout.module.css';
 
 const streamFilterOptions: SegmentedOption<StreamFilter>[] = [
@@ -53,7 +54,7 @@ export function AgentLayout({ connecting, hiddenInputs, appVersion, navigate, co
                 onValueChange={(next: StreamFilter) => setStreamFilter(next)} size="compact" ariaLabel="筛选对话流" /></span>
               <button aria-pressed={drawerOpen} onClick={() => useUi.getState().toggleDrawer()}><Icon name="terminal" size={13} />终端</button>
             </header>
-            <div className={styles.stream}>
+            <div className={`${styles.stream} ${panelStyles.panel}`}>
               {snapshot ? <StreamArea snapshot={snapshot} host={activeHost} conversation={conversation} report={reportConversationError} hiddenInputs={hiddenInputs} openInput={openInput} streamFilter={streamFilter} />
                 : <div className={styles.loading}>正在加载…</div>}
             </div>

@@ -29,7 +29,7 @@ export function HostTree({ connecting, appVersion, navigate, connectHost, openHo
   const activeHostId = useUi((state) => state.activeHostId);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<TreeView>('all');
-  const [collapsed, setCollapsed] = useState<string[]>([]);
+  const [expandedHosts, setExpandedHosts] = useState<string[]>([]);
   const search = useRef<HTMLInputElement>(null);
   useEffect(() => {
     registerHostTreeSearch(() => search.current?.focus());
@@ -72,13 +72,13 @@ export function HostTree({ connecting, appVersion, navigate, connectHost, openHo
       {sections.map((section) => {
         const lineage = section.host ? hostLineage(section.host, snapshot?.hosts ?? []) : [];
         const working = snapshot?.conversations.find((item) => item.hostIds.some((id) => lineage.includes(id)) && WORKING_STATUSES.has(item.status));
-        const open = !collapsed.includes(section.key);
+        const open = section.host ? expandedHosts.includes(section.key) : true;
         return <div key={section.key} className={styles.node}>
           {section.host
             ? <div className={`${styles.row} ${activeHostId && lineage.includes(activeHostId) ? styles.selected : ''}`}
               onContextMenu={(event) => openContextMenu(event, hostActions(section.host!), `${section.host!.label} 主机操作`)}>
               <button className={styles.caret} data-open={open} aria-label={open ? `折叠 ${section.host!.label}` : `展开 ${section.host!.label}`}
-                aria-expanded={open} onClick={() => setCollapsed((ids) => ids.includes(section.key) ? ids.filter((id) => id !== section.key) : [...ids, section.key])}><Icon name="chevron" size={11} /></button>
+                aria-expanded={open} onClick={() => setExpandedHosts((ids) => ids.includes(section.key) ? ids.filter((id) => id !== section.key) : [...ids, section.key])}><Icon name="chevron" size={11} /></button>
               <button className={styles.rowSelect} onClick={() => navigate(() => void connectHost(section.host!.id))}
                 title={`${section.host!.username}@${section.host!.address}:${section.host!.port}`} disabled={connecting.includes(section.host!.id)}>
                 <Icon name="server" /><span>{section.host!.label}<small>{connecting.includes(section.host!.id) ? '正在连接…' : working ? statusLabel[working.status] : `${section.host!.username}@${section.host!.address}`}</small></span>

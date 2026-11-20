@@ -92,7 +92,7 @@ export const useUi = create<UiState>((set) => ({
   conversationSelection: {}, currentRequests: {}, agentPanelOpen: true, agentPanelWidth: 400, settingsOpen: false,
   // The preload resolved the persisted layout before first paint; mirror it.
   layoutMode: typeof document !== 'undefined' && document.documentElement.dataset.layout === 'agent' ? 'agent' : 'ssh',
-  drawerOpen: true, drawerHeight: 260, auxPanelWidth: 440,
+  drawerOpen: false, drawerHeight: 260, auxPanelWidth: 440,
   setSnapshot: (snapshot) => set((state) => projectSnapshot(state, snapshot)),
   applyEvent: (event) => set((state) => {
     if (event.type === 'snapshot') return projectSnapshot(state, event.value);
