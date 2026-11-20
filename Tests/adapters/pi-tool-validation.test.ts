@@ -30,6 +30,36 @@ it('rejects invalid nested schema types but does not reinterpret literal data as
   expect(() => assertStrictToolArguments({ anyOf: [{ type: 'unsupported' }] }, 1)).toThrow('未执行');
   expect(() => assertStrictToolArguments(Type.Object({ value: Type.Literal('unsupported-schema') }), { value: 'unsupported-schema' })).not.toThrow();
 });
+it('reports field-level failures: path, constraint and received type, never raw values', () => {
+  try { assertStrictToolArguments(schema, { ...valid, port: 'synthetic-secret-port' }); throw new Error('expected rejection'); }
+  catch (error) {
+    const text = String(error);
+    expect(text).toContain('未执行');
+    expect(text).toContain('/port');
+    expect(text).toContain('"constraint":"type"');
+    expect(text).toContain('"received":"string"');
+    expect(text).not.toContain('synthetic-secret-port');
+  }
+});
+it('caps failure items at three and reports received JSON types only', () => {
+  try {
+    assertStrictToolArguments(schema, { command: 42, port: 'x', paths: 5, enabled: 'no', extra: 'raw-value' });
+    throw new Error('expected rejection');
+  } catch (error) {
+    const items = JSON.parse(String(error).match(/失败项：(\[.*\])$/u)![1]!) as Array<{ path: string; constraint: string; received: string }>;
+    expect(items.length).toBeLessThanOrEqual(3);
+    for (const item of items) {
+      expect(typeof item.path).toBe('string');
+      expect(typeof item.constraint).toBe('string');
+      expect(['string', 'number', 'boolean', 'object', 'array', 'null', 'undefined']).toContain(item.received);
+    }
+    expect(String(error)).not.toContain('raw-value');
+  }
+});
+it('reports the root path for a non-object payload', () => {
+  try { assertStrictToolArguments(schema, 'synthetic-scalar'); throw new Error('expected rejection'); }
+  catch (error) { expect(String(error)).toContain('(root)'); expect(String(error)).not.toContain('synthetic-scalar'); }
+});
 it('revalidates at the actual tool entry after extension preflight', async () => {
   const execute = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ok' }], details: undefined }));
   const tool = toPiTool({ name: 'inspect', label: 'Inspect', description: 'Inspect', parameters: schema, replay: 'never', execute });

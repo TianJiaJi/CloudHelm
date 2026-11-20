@@ -7,7 +7,7 @@ import { createBackgroundJobTool } from './background-job-tool.js';
 import { createBackgroundOperations, type BackgroundOperations } from './background-operations.js';
 import { createWorkspaceContextTools } from './workspace-context.js';
 import { applyOperationDecision, applyOperationObservation } from './operation-observation.js';
-import { blockedOperationFeedback, operationToolResult } from './operation-feedback.js';
+import { operationToolResult } from './operation-feedback.js';
 import { decideTaskCompletion } from './task-completion.js';
 import { VerificationRoundTracker } from './verification-round.js';
 import { verificationSource } from './verification-source.js';
@@ -39,7 +39,7 @@ import { deriveInputIntent, TaskIntent } from './task-intent.js';
 import { createRemoteTools } from './remote-tools.js';
 import { createTaskPrompt } from './task-prompt.js';
 import { createTaskApprovals } from './task-approval.js';
-import { taskOperationPreflight } from './task-operation-preflight.js';
+import { runOperationPipeline } from './operation-retry.js';
 import { reviewCoordination } from './review-coordination.js';
 import { reviewDeniedOperation } from './task-denial-review.js';
 import { WorkJournal } from './work-journal.js';
@@ -460,18 +460,19 @@ export class TaskRunner {
   private async performOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined,
     hostLabel: string, manualReview = false, onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']) {
     this.assertRemoteActive();
-    const prepared = await taskOperationPreflight(operation, { privileged: this.privileged, analyzer: this.analyzer, environment: this.environment,
-      operations: () => this.operationViews(), replayProtected: this.replayProtected,
-      hostBlocked: (hostId) => this.pendingOutcomeBlocker(hostId) }, manualReview);
-    if (!('operation' in prepared)) return prepared;
-    operation = prepared.operation;
-    const outcome = await gate.execute(operation, signal, manualReview,
-      operation.kind === 'command' && operation.executionMode === 'background'
-        ? { onProcessStarted: (event) => this.background.started(operation.id, event) } : { onFileInspection });
-    this.coordinateDecision(outcome.decision);
-    if (!outcome.result) return blockedOperationFeedback(operation.id, outcome.decision.ruleId,
-      `Executed: false; effects: none. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}`, undefined, outcome.readOnly);
-    const result = outcome.result;
+    const final = await runOperationPipeline({ gate, signal, manualReview,
+      preflight: { privileged: this.privileged, analyzer: this.analyzer, environment: this.environment,
+        operations: () => this.operationViews(), replayProtected: this.replayProtected, hostBlocked: (hostId) => this.pendingOutcomeBlocker(hostId) },
+      gateObserver: (candidate) => candidate.kind === 'command' && candidate.executionMode === 'background'
+        ? { onProcessStarted: (event) => this.background.started(candidate.id, event) } : { onFileInspection },
+      coordinateDecision: (decision) => this.coordinateDecision(decision),
+      onRetry: (previousOperationId, nextAttempt) => this.diagnostic({ event: 'operation.retry', operationId: previousOperationId,
+        attempt: nextAttempt, failureKind: 'not-dispatched', hostId: operation.scope.hostId })
+    }, operation);
+    if ('feedback' in final) return final.feedback;
+    operation = final.operation;
+    const outcome = final.outcome;
+    const result = outcome.result!;
     if (this.background.detached(operation.id) || operation.kind === 'command' && operation.processControl) return operationToolResult(result, hostLabel, outcome.readOnly, operation.scope);
     if (result.requiresUserAction) {
       this.blockRemote(result.privilege ? privilegeGuidance(result.privilege) : '认证未通过或当前认证形式需要人工接管，已暂停。请处理后手动继续，AI 不会自动改换方式重试。', false, 'interrupted');

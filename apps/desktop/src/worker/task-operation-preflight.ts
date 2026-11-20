@@ -7,9 +7,7 @@ import { aptNeedsPtyStdin, inputPlan } from './operation-input-plan.js';
 import { blockedOperationFeedback } from './operation-feedback.js';
 
 type Feedback = Awaited<ReturnType<RemoteToolDependencies['runOperation']>>;
-/** Resolve identity and reject replay/unsupported authentication before review.
- * This is not authorization: every admitted operation must still pass SafetyGate. */
-export async function taskOperationPreflight(operation: ProposedOperation, deps: {
+export interface TaskOperationPreflightDeps {
   privileged?: PrivilegedTaskAccess;
   analyzer: CommandAnalyzer;
   environment?: HostEnvironmentAccess;
@@ -17,7 +15,10 @@ export async function taskOperationPreflight(operation: ProposedOperation, deps:
   replayProtected: ReadonlySet<string>;
   /** Known dispatch blockers (unresolved host outcomes) discovered before review. */
   hostBlocked?(hostId: string): string | undefined;
-}, manualReview = false): Promise<{ operation: ProposedOperation } | Feedback> {
+}
+/** Resolve identity and reject replay/unsupported authentication before review.
+ * This is not authorization: every admitted operation must still pass SafetyGate. */
+export async function taskOperationPreflight(operation: ProposedOperation, deps: TaskOperationPreflightDeps, manualReview = false): Promise<{ operation: ProposedOperation } | Feedback> {
     if (operation.kind !== 'command' || !operation.processControl) operation = await deps.privileged?.prepare?.(operation) ?? operation;
     // Transport selection is backend-owned; never accept a model/tool-supplied route.
     if (operation.kind === 'command') {
