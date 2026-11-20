@@ -24,12 +24,12 @@ describe('layout mode state', () => {
     useUi.getState().setLayoutMode('agent');
     expect(useUi.getState().layoutMode).toBe('agent');
   });
-  it('toggles the terminal drawer', () => {
-    expect(useUi.getState().drawerOpen).toBe(true);
-    useUi.getState().toggleDrawer();
+  it('toggles the terminal drawer from its closed default', () => {
     expect(useUi.getState().drawerOpen).toBe(false);
     useUi.getState().toggleDrawer();
     expect(useUi.getState().drawerOpen).toBe(true);
+    useUi.getState().toggleDrawer();
+    expect(useUi.getState().drawerOpen).toBe(false);
   });
   it('clamps the drawer height to a usable minimum', () => {
     useUi.getState().setDrawerHeight(40);
