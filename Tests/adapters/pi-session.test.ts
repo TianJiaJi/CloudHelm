@@ -73,7 +73,7 @@ describe('native Pi session compatibility', () => {
     expect(f.fixture.requests[1]?.tools?.map((tool) => tool.function.name).sort()).toEqual(['ask_user', 'codemode', 'observe', 'tool_search']);
   });
 
-  it('executes parallel model tool calls one at a time so reviews and commands never overlap', async () => {
+  it('pins non-query tools to sequential execution so unreviewed tool kinds never overlap', async () => {
     let requests = 0;
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
@@ -96,6 +96,29 @@ describe('native Pi session compatibility', () => {
     releaseFirst();
     await prompt;
     expect(order).toEqual(['first:start', 'first:end', 'second:start', 'second:end']);
+  });
+
+  it('executes query-access tool calls concurrently under the parallel outer mode (P0-3b)', async () => {
+    let requests = 0;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started: string[] = [];
+    const tool = (name: string) => ({
+      name, label: name, description: name, parameters: Type.Object({}), replay: 'never' as const,
+      access: 'query' as const,
+      execute: async () => {
+        started.push(name);
+        await held;
+        return { content: [{ type: 'text' as const, text: 'ok' }], details: undefined };
+      }
+    });
+    const f = await setup(async () => ++requests === 1
+      ? { calls: [{ id: 'a', name: 'first', arguments: {} }, { id: 'b', name: 'second', arguments: {} }] }
+      : { text: 'done' }, { tools: [tool('first'), tool('second')] });
+    const prompt = f.session.prompt('run both');
+    await vi.waitFor(() => expect(started).toEqual(['first', 'second'])); // both run before either finishes
+    release();
+    await prompt;
   });
 
   it('fails closed before transport if the backend system projection is unavailable', async () => {

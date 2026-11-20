@@ -25,9 +25,9 @@ export interface SchedulerKey {
   terminalId: string;
 }
 
-/** Per-lane concurrency budget. Phase 0 keeps every slot at 1, which reduces the
- * scheduler to strict serialCall semantics; enabling read concurrency changes
- * these limits only, never the structure. */
+/** Per-lane concurrency budget. FULLY_SERIAL_LIMITS reduces the scheduler to
+ * strict serialCall semantics; CONVERSATION_LIMITS is the live conversation
+ * budget since P0-3b. */
 export interface SchedulerLimits {
   /** Hard in-flight cap for one key; 1 = strict serial. */
   total: number;
@@ -38,6 +38,12 @@ export interface SchedulerLimits {
 }
 
 export const FULLY_SERIAL_LIMITS: SchedulerLimits = { total: 1, writes: 1, reads: 1 };
+
+/** Conversation-lane budget (P0-3b): writes stay mutually exclusive per task,
+ * analyzer-confirmed reads run up to 4 pipelines concurrently in strict
+ * submission order. Same-host dispatch ordering remains the host executor's
+ * invariant; this budget only bounds how many pipelines may be in flight. */
+export const CONVERSATION_LIMITS: SchedulerLimits = { total: 5, writes: 1, reads: 4 };
 
 interface Entry {
   klass: OperationClass;
@@ -54,9 +60,9 @@ interface Lane {
 
 const newLane = (): Lane => ({ unstarted: [], inFlight: 0, writesInFlight: 0, readsInFlight: 0 });
 
-/** Drop-in replacement for the task-runner serialCall chain with identical strict
- * FIFO semantics, plus the read/write classification data structures that the
- * concurrency switch (P0-3b) activates by changing limits only. */
+/** Drop-in replacement for the task-runner serialCall chain. The conversation
+ * lane runs with CONVERSATION_LIMITS (P0-3b): exclusive writes, capped
+ * concurrent reads, strict FIFO starts; the default stays fail-closed serial. */
 export class OperationScheduler {
   private readonly lanes = new Map<string, Map<string, Lane>>();
 

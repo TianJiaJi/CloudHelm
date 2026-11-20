@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ProposedOperation } from '../../../packages/core/src/model.js';
 import type { CommandAnalyzer } from '../../../packages/core/src/ports.js';
 import { BashAnalyzer } from '../../../packages/adapters/src/bash-analyzer.js';
-import { classifyForScheduling, FULLY_SERIAL_LIMITS, OperationScheduler, type SchedulerKey } from '../../../apps/desktop/src/worker/operation-scheduler.js';
+import { classifyForScheduling, CONVERSATION_LIMITS, FULLY_SERIAL_LIMITS, OperationScheduler, type SchedulerKey } from '../../../apps/desktop/src/worker/operation-scheduler.js';
 
 const analyzer = new BashAnalyzer();
 const failingAnalyzer = { analyze: () => Promise.reject(new Error('analyzer unavailable')) } as unknown as CommandAnalyzer;
@@ -85,5 +85,89 @@ describe('OperationScheduler fully-serial equivalence (P0-3a)', () => {
     const second = scheduler.run(key, command('b'), failingAnalyzer, async () => 'b');
     expect(await Promise.all([first, second])).toEqual(['a', 'b']);
     expect(await scheduler.run(key, command('c'), failingAnalyzer, async () => 'c')).toBe('c');
+  });
+});
+
+describe('OperationScheduler conversation concurrency (P0-3b)', () => {
+  const DELAY_MS = 50;
+
+  it('runs four slow read pipelines concurrently: wall clock ≈ one, not four (P0-0 baseline was ≈4×)', async () => {
+    const scheduler = new OperationScheduler(CONVERSATION_LIMITS);
+    let active = 0;
+    let maxActive = 0;
+    const slowRead = (id: string) => scheduler.run(key, structured(id, 'inspect-file'), failingAnalyzer, async () => {
+      active++; maxActive = Math.max(maxActive, active);
+      await delay(DELAY_MS);
+      active--;
+      return id;
+    });
+    const started = performance.now();
+    const ids = await Promise.all(['r1', 'r2', 'r3', 'r4'].map(slowRead));
+    const batchMs = performance.now() - started;
+    expect(ids).toEqual(['r1', 'r2', 'r3', 'r4']);
+    expect(maxActive).toBe(4);
+    expect(batchMs).toBeLessThan(DELAY_MS * 4);
+  });
+
+  it('keeps writes globally mutually exclusive in submission order', async () => {
+    const scheduler = new OperationScheduler(CONVERSATION_LIMITS);
+    const events: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const write = (id: string, ms: number) => scheduler.run(key, structured(id, 'write-file'), failingAnalyzer, async () => {
+      active++; maxActive = Math.max(maxActive, active);
+      events.push(`start:${id}`);
+      await delay(ms);
+      events.push(`end:${id}`);
+      active--;
+      return id;
+    });
+    expect(await Promise.all([write('w1', 15), write('w2', 5), write('w3', 5)])).toEqual(['w1', 'w2', 'w3']);
+    expect(events).toEqual(['start:w1', 'end:w1', 'start:w2', 'end:w2', 'start:w3', 'end:w3']);
+    expect(maxActive).toBe(1);
+  });
+
+  it('never lets a read start before an earlier queued write starts (head-of-lane FIFO)', async () => {
+    const scheduler = new OperationScheduler(CONVERSATION_LIMITS);
+    let releaseFirst!: () => void;
+    const held = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const started: string[] = [];
+    const first = scheduler.run(key, structured('w1', 'write-file'), failingAnalyzer, async () => { started.push('w1'); await held; return 'w1'; });
+    await vi.waitFor(() => expect(started).toEqual(['w1']));
+    const queuedWrite = scheduler.run(key, structured('w2', 'write-file'), failingAnalyzer, async () => { started.push('w2'); return 'w2'; });
+    const laterRead = scheduler.run(key, structured('r1', 'inspect-file'), failingAnalyzer, async () => { started.push('r1'); return 'r1'; });
+    await delay(5);
+    expect(started).toEqual(['w1']); // the queued write and the read both wait behind the in-flight write
+    releaseFirst();
+    expect(await Promise.all([first, queuedWrite, laterRead])).toEqual(['w1', 'w2', 'r1']);
+    expect(started).toEqual(['w1', 'w2', 'r1']); // w2 starts before r1 even though r1's read slots are free
+  });
+
+  it('does not block a read pipeline behind an in-flight write (cross-host ordering belongs to the host executor)', async () => {
+    const scheduler = new OperationScheduler(CONVERSATION_LIMITS);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started: string[] = [];
+    const write = scheduler.run(key, structured('w1', 'write-file'), failingAnalyzer, async () => { started.push('w1'); await held; return 'w1'; });
+    await vi.waitFor(() => expect(started).toEqual(['w1']));
+    const read = scheduler.run(key, structured('r1', 'inspect-file'), failingAnalyzer, async () => { started.push('r1'); return 'r1'; });
+    expect(await read).toBe('r1'); // read pipeline proceeds while the write is still in flight
+    release();
+    expect(await write).toBe('w1');
+  });
+
+  it('schedules a classification failure as a write that holds the write slot', async () => {
+    const scheduler = new OperationScheduler(CONVERSATION_LIMITS);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started: string[] = [];
+    const unclassifiable = scheduler.run(key, command('bad'), failingAnalyzer, async () => { started.push('bad'); await held; return 'bad'; });
+    await vi.waitFor(() => expect(started).toEqual(['bad']));
+    const write = scheduler.run(key, structured('w1', 'write-file'), failingAnalyzer, async () => { started.push('w1'); return 'w1'; });
+    await delay(5);
+    expect(started).toEqual(['bad']); // the fail-closed write classification holds the exclusive write slot
+    release();
+    expect(await Promise.all([unclassifiable, write])).toEqual(['bad', 'w1']);
+    expect(started).toEqual(['bad', 'w1']);
   });
 });

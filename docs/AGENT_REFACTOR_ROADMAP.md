@@ -43,7 +43,7 @@
 | 维度 | 基线值 | 锚点 |
 |---|---|---|
 | restart 三模式卡数 | ask/permissive 各 1 卡；ai-review AI 预审；preflight/check 三模式 0 卡 | `Tests/core/safety-risk-matrix.test.ts`（进 CI） |
-| 只读并发墙钟 | **4 条并发只读 ≈ 245.6ms（单条 60.3ms，≈×4.1）**——当前 `serialCall` 全串行 | `scripts/measure-readonly-concurrency.mjs` 实跑 2026-11-21（不进 CI）；断言版测试随 P0-3b 进 CI |
+| 只读并发墙钟 | **4 条并发只读 ≈ 245.6ms（单条 60.3ms，≈×4.1）**——切换前 `serialCall` 全串行 | `scripts/measure-readonly-concurrency.mjs` 实跑 2026-11-21（不进 CI）；断言版测试已随 P0-3b 进 CI（4 慢只读 maxActive=4、总墙钟 < 单条 ×4） |
 | 提示词否定式占比 | executionGuidelines 严格否定句式按 bullet 计 **50%** | `apps/desktop/src/worker/agent-prompt.ts`（P0-7 前人工口径） |
 | 系统提示字符数 | 门禁 ≤ 12000 字符 | `Tests/desktop/worker/task-runner-authorization.test.ts`（进 CI） |
 
@@ -53,7 +53,7 @@
 |---|---|---|
 | 代码级基线 | fixture 测试锁定三模式卡数矩阵、12000 字符门禁 | 是（已有） |
 | 并发墙钟测量脚本 | `scripts/measure-readonly-concurrency.mjs` 实跑记录数字入上表 | 否 |
-| 断言版并发测试 | 4 条慢 query 墙钟 ≈ 单条断言 | 随 P0-3b 提交（scheduler 已建、parallel 已切，全绿 = 并发生效 + 断言通过，天然自洽） |
+| 断言版并发测试 | 4 条慢 query 墙钟 ≈ 单条断言 | 已随 P0-3b 提交（scheduler 已建、parallel 已切，全绿 = 并发生效 + 断言通过，天然自洽） |
 | VM 门控运行时基线 | 协议如下，环境可用即执行；VM 验收当前冻结（H03），不阻塞代码级工作 | 否 |
 
 **VM 门控运行时基线协议**（推导变实证，消除"代码与测试同错"的同义反复风险）：
@@ -65,11 +65,11 @@
 
 | # | 单元 | 核心动作 | 状态 |
 |---|---|---|---|
-| P0-0 | 基线与文档回写 | 本文件 + 测量脚本 + 基线锚点 | 进行中 |
-| P0-4 | 删僵尸工具 | 物理删除 `edit_remote_file`（`available:()=>false` 永不激活）及全部引用 | 待做 |
-| P0-1 | 重试矩阵 | `operation-retry.ts` 瞬态二分（执行前连接失败才自动重试；执行中超时/在途失败不自动重试且携带"禁止盲目重发"警示）；写零重试；参数错误字段级报错 | 待做 |
-| P0-3a | 调度器等价重构 | `operation-scheduler.ts` 接管 `serialCall`，行为仍全串行；调度键 `{taskId, terminalId}` 二元组（Phase 3 多终端钩子零成本预留） | 待做 |
-| P0-3b | 切 parallel | pi-session 单行 `'sequential'`→`'parallel'`；切换前三查（SafetyGate 并发安全 / 审计事件顺序 / Pi SDK 事件流单飞行假设），任一不过即暂停回报；含断言版并发测试（4×→≈1× 对照） | 待做 |
+| P0-0 | 基线与文档回写 | 本文件 + 测量脚本 + 基线锚点 | 完成 |
+| P0-4 | 删僵尸工具 | 物理删除 `edit_remote_file`（`available:()=>false` 永不激活）及全部引用 | 完成 |
+| P0-1 | 重试矩阵 | `operation-retry.ts` 瞬态二分（执行前连接失败才自动重试；执行中超时/在途失败不自动重试且携带"禁止盲目重发"警示）；写零重试；参数错误字段级报错 | 完成 |
+| P0-3a | 调度器等价重构 | `operation-scheduler.ts` 接管 `serialCall`，行为仍全串行；调度键 `{taskId, terminalId}` 二元组（Phase 3 多终端钩子零成本预留） | 完成 |
+| P0-3b | 切 parallel | pi-session 单行 `'sequential'`→`'parallel'`；切换前三查（SafetyGate 并发安全 / 审计事件顺序 / Pi SDK 事件流单飞行假设），任一不过即暂停回报；含断言版并发测试（4×→≈1× 对照） | 完成（三查通过，结论记入提交说明） |
 | P0-2 | service 单审批 | 审批卡呈现三段事务意图；三模式回归测试矩阵；root 路径 sudo 缓存复用核查 | 待做 |
 | P0-5 | 审批续期 | 软到期提醒（10min）+ 续期（累计 ≤5 次 × 10min，硬截止首发 +60min）+ 硬上限取消；计时权收敛 worker server 单点；`decide-approval` 过期校验改用 hardExpiresAt（软过期后仍可批准） | 待做 |
 | P0-6 | 输入提醒 | TTL 过期/投递失败推送式主动提醒（静默窗口无用户交互事件必达 renderer）+ 未聚焦系统通知 | 待做 |

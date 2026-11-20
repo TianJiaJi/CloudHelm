@@ -40,7 +40,7 @@ import { createRemoteTools } from './remote-tools.js';
 import { createTaskPrompt } from './task-prompt.js';
 import { createTaskApprovals } from './task-approval.js';
 import { runOperationPipeline } from './operation-retry.js';
-import { OperationScheduler } from './operation-scheduler.js';
+import { CONVERSATION_LIMITS, OperationScheduler } from './operation-scheduler.js';
 import { reviewCoordination } from './review-coordination.js';
 import { reviewDeniedOperation } from './task-denial-review.js';
 import { WorkJournal } from './work-journal.js';
@@ -79,8 +79,8 @@ export class TaskRunner {
   private stopping = false;
   private status: TaskStatus = 'draft';
   private resumeReason?: ResumeReason;
-  /** One remote operation at a time: a queued call re-checks activity after the previous finishes. */
-  private readonly scheduler = new OperationScheduler();
+  /** Writes stay mutually exclusive per task; analyzer-confirmed read pipelines may run up to four at once. */
+  private readonly scheduler = new OperationScheduler(CONVERSATION_LIMITS);
   private readonly runOperation = (gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string, manualReview = false,
     onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']) => this.scheduler.run({ taskId: this.task.id, terminalId: 'conversation' },
     operation, this.analyzer, () => this.background.run(operation, signal, () => this.performOperation(gate, operation, signal, hostLabel, manualReview, onFileInspection)));

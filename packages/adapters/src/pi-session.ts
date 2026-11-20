@@ -146,7 +146,7 @@ class PiConversationSession implements ConversationSession {
       const allowed = messages.filter((message) => inputVisible(message, options.inputHistoryAllowed));
       return transform ? transform(allowed, signal) : allowed;
     };
-    agent.toolExecution = 'sequential'; // outer remote review/execution never overlaps; bounded script queries have their own slots
+    agent.toolExecution = 'parallel'; // concurrency is bounded downstream by the operation scheduler: writes stay exclusive, reads capped
     queryPolicy.bindAgent(agent);
     queryPolicy.bindCallOrigin((id) => this.lifecycle.originFor(id));
     const prepare = agent.prepareNextTurnWithContext;

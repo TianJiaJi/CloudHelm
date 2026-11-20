@@ -162,22 +162,21 @@ export class PiQueryPolicy {
             }
           }
         };
-        const agent = this.agent;
-        if (!agent || agent.toolExecution !== 'sequential') {
-          clearTimeout(deadline); controller.abort(); throw new Error('Sequential outer tool policy unavailable');
+        if (!this.agent) {
+          clearTimeout(deadline); controller.abort(); throw new Error('Outer tool policy agent binding unavailable');
         }
         try {
           assertCurrent();
-          // The pinned Core run captured sequential outer execution before this call. The script itself
-          // is also sequential; only the SDK nested runner reads this live mode. All mutations remain model-only.
-          agent.toolExecution = 'parallel';
+          // Outer execution is parallel, but codemode itself is pinned sequential at the tool
+          // level, so a script never overlaps other tool calls of its batch. The script's own
+          // nested queries stay bounded by slots/limits here; all mutations remain model-only.
           const writes: Array<() => void> = [];
           const result = await this.cacheWrites.run(writes, () => scripts.run(bound, () => native.execute(id,
             { code: `// @options: {"timeout_ms":15000,"max_output_tokens":4096}\n${code}` }, bound, update, safeContext)));
           assertCurrent();
           if (!result.isError) for (const commit of writes) { assertCurrent(); commit(); }
           return result;
-        } finally { agent.toolExecution = 'sequential'; clearTimeout(deadline); controller.abort(new Error('Query script ended')); }
+        } finally { clearTimeout(deadline); controller.abort(new Error('Query script ended')); }
       }
     };
   }
