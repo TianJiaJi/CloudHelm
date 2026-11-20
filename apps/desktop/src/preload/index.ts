@@ -9,10 +9,20 @@ const initialAppearance = ipcRenderer.sendSync('cloudhelm:initial-appearance') a
 const resolvedTheme = initialAppearance.mode === 'system'
   ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
   : initialAppearance.mode;
-document.documentElement.dataset.theme = resolvedTheme;
 // Same for the layout mode: the store reads this before its first render.
 const initialLayout = ipcRenderer.sendSync('cloudhelm:initial-layout') as StoredLayoutSettings;
-document.documentElement.dataset.layout = initialLayout.mode;
+
+// In a sandboxed renderer the preload runs before the parser creates <html>,
+// so the attributes are written as soon as the document element appears —
+// still ahead of the deferred entry module that initializes the stores.
+const applyInitialDocumentState = (): void => {
+  if (!document.documentElement) return;
+  document.removeEventListener('readystatechange', applyInitialDocumentState);
+  document.documentElement.dataset.theme = resolvedTheme;
+  document.documentElement.dataset.layout = initialLayout.mode;
+};
+if (document.documentElement) applyInitialDocumentState();
+else document.addEventListener('readystatechange', applyInitialDocumentState);
 
 const api: DesktopAPI = {
   openReferenceDraft: (scope) => invoke('open-reference-draft', scope),
