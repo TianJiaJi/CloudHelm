@@ -33,6 +33,7 @@
 - 工具参数校验失败改为字段级报错（typebox `Value.Errors`，至多 3 条）：字段路径、失败约束与实收 JSON 类型，不回显原始值，防止凭据经错误信息进入模型上下文；保留 fail-closed。
 - `manage_service` 重启审批卡现呈现完整三段事务意图（P0-2）：只读预检已通过、本操作重启该服务、随后自动核验 InvocationID/ActiveState/Result 才报 active，纯呈现层不改 gate 与指纹；三模式回归测试矩阵进 CI——ask/permissive 恰 1 张人工卡（仅重启步）、ai-review 走独立预审无卡（不确定升级恰 1 卡）、preflight/check 三模式零请求；root 路径三步复用同一内存 sudo 凭据缓存（经 `OperationInputBridge` 绑定 `{task,host,terminal,generation}` 键），集成测试锁定全程只索密一次、后两步缓存命中。
 - 审批等待引入软到期提醒与续期（P0-5）：到期计时权收敛 worker server 单点（gate 删除内部计时器与软过期后置改判，过期只经 `ApprovalInterruptedError` 回流）；软到期（10 分钟）发 `approval-reminder` 事件并保持批准/拒绝可用，硬截止（首发 +60 分钟）取消；每张审批卡累计续期 ≤5 次 × 10 分钟（逼近硬截止时截短），续期只延等待窗口、绝不改变绑定内容与指纹，`stillCurrent()`/`isAuthorized()` 复核链一行不动；`decide-approval` 过期校验改用 hardExpiresAt（软过期后仍可批准），未聚焦系统通知覆盖软到期提醒；fake-timer 状态机测试进 CI（续期重武装提醒、五次上限+硬截止取消、软提醒不取消且事后仍可批准）。
+- 排队消息静默窗口必达（P0-6）：核查确认 worker TTL 到期 → `commitInput` 持久化 → Main 快照 publish 全链已通（`app-state.commitInput` 每次提交同步重发快照），补推送链路断言测试进 CI——fake timer 推进到 TTL 后 worker 无任何用户输入即提交 `expired` 回执并发出事件，Main `commitInput` 同步发布携带过期回执的快照；窗口未聚焦时 `expired`/`failed` 迁移发系统通知（镜像审批提醒模式；启动/恢复路径的 `recovered` 过期不经通知通道）。
 - 物理删除停用的旧 `edit_remote_file` 工具（原 `available:false` 永不激活）：工具定义、注册表项、提示词适用性投影与专属测试一并移除，工具面不再包含该死路入口；`write_remote_file` 携带替换哈希仍早拒绝。
 - 新增 Agent 架构重构路线图权威文档（`docs/AGENT_REFACTOR_ROADMAP.md`）：红线七条、现状核查两处修正（restart 三模式卡数矩阵、审批过期整轮暂停语义）与 Phase 0-4 验收基线入仓，后续重构论证以仓库为准；配套只读并发墙钟测量脚本记录基线（4 条并发只读 ≈4× 单条）。
 - 自动测试、专用 fixture、UI／Markdown／AI 面板和 Electron 探针统一集中到 `Tests/`；同步导入、依赖锁、类型／lint／行数／版本检查，并阻止生产代码依赖测试。更新开发、架构、安全与验收指南，清理过期临时交接。

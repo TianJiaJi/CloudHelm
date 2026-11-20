@@ -272,7 +272,12 @@ void app.whenReady().then(async () => {
       && (event.type === 'approval-open' || event.type === 'input-open' || event.type === 'approval-reminder')) {
       new Notification({ title: 'CloudHelm', body: event.type === 'approval-reminder' ? '一项审批已超时，请尽快处理或续期。' : 'AI 需要你处理一项请求。' }).show();
     }
-  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event), (command) => state.requestBudget(command), (operation) => state.commitOperation(operation), (value) => state.commitInput(value));
+  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event), (command) => state.requestBudget(command), (operation) => state.commitOperation(operation), (value) => {
+    state.commitInput(value);
+    if (!testWindow.hidden && !window?.isFocused() && Notification.isSupported()
+      && (value.status === 'expired' || value.status === 'failed'))
+      new Notification({ title: 'CloudHelm', body: '一条排队消息已过期或未投递，请回看消息队列。' }).show();
+  });
   // Reclassify only provably read-only completed legacy commands before the
   // worker restores host locks. Ambiguous commands remain blocked.
   await state.normalizeHistoricalQueries(new BashAnalyzer());

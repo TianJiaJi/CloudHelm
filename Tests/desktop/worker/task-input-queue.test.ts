@@ -76,9 +76,13 @@ it('does not activate an input stopped during its selection acknowledgment', asy
 it('expires pending native inputs without waking a model', async () => {
   vi.useFakeTimers();
   try {
-    const f = fixture(); await f.queue.enqueue(input);
+    const committed: ConversationInput[] = [];
+    const f = fixture(async (value) => { committed.push(value); });
+    await f.queue.enqueue(input);
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expect(f.queue.snapshot()[0]).toMatchObject({ status: 'expired', reason: 'expired' });
+    expect(committed).toContainEqual(expect.objectContaining({ id: 'input', status: 'expired', reason: 'expired' }));
+    expect(f.publish).toHaveBeenCalledWith(expect.objectContaining({ id: 'input', status: 'expired' }));
     expect(f.native.cancelQueuedInput).toHaveBeenCalledExactlyOnceWith('input');
     expect(f.activate).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }

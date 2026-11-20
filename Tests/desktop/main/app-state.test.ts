@@ -101,6 +101,18 @@ it('commits only an existing conversation/host binding and propagates storage fa
   expect(() => f.state.commitOperation(value)).toThrow('scope');
 });
 
+it('publishes the expired queued-input receipt to the renderer without user interaction', () => {
+  const f = setup(), task = f.state.createTask('Synthetic queue push', [], 'fixture', []);
+  const receipt = { version: 1 as const, id: 'queued-input', taskId: task.id, kind: 'followUp' as const,
+    text: 'follow-up', intent: 'follow-up', authorizationKey: 'scope', createdAt: 1, updatedAt: 1, expiresAt: 61 };
+  f.state.commitInput({ ...receipt, status: 'queued' });
+  const snapshots = () => f.events.filter((event): event is Extract<AppEvent, { type: 'snapshot' }> => event.type === 'snapshot');
+  expect(snapshots().at(-1)?.value.queuedInputs).toContainEqual(expect.objectContaining({ id: 'queued-input', status: 'queued' }));
+  f.state.commitInput({ ...receipt, status: 'expired', reason: 'expired', updatedAt: 2 });
+  expect(snapshots().at(-1)?.value.queuedInputs).toContainEqual(expect.objectContaining({ id: 'queued-input', status: 'expired', reason: 'expired' }));
+  expect(f.store.get('conversation-inputs', 'queued-input')).toMatchObject({ status: 'expired' });
+});
+
 it('reads only the requested owned operation log and rejects invalid recipients/cursors before storage', () => {
   const { state, store } = setup();
   const task = state.createTask('Synthetic log', [], 'fixture', []); task.hostIds = ['host'];
