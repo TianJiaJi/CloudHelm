@@ -6,8 +6,9 @@ import type { TaskSignals } from './task-signals.js';
 type ApprovalOperation = Parameters<ApprovalRequester['requestApproval']>[0]['operation'];
 
 /** Projection and wait lifecycle only; the gate/worker retain approval authority. */
-export function createTaskApprovals(signals: Pick<TaskSignals, 'requestApproval' | 'cancelApproval'>,
+export function createTaskApprovals(signals: Pick<TaskSignals, 'requestApproval' | 'cancelApproval' | 'extendApproval'>,
   preview: (operation: ApprovalOperation) => string, waiting: () => void, settled: () => void): ApprovalRequester {
+  const extendApproval = signals.extendApproval;
   return {
     requestApproval: async (request) => {
       waiting();
@@ -21,11 +22,13 @@ export function createTaskApprovals(signals: Pick<TaskSignals, 'requestApproval'
         cwd: request.operation.scope.cwd, impact: request.impact,
         targets: request.targets?.map((target) => redactOutput(target)),
         recovery: presentation.recovery,
-        expiresAt: request.expiresAt
+        expiresAt: request.expiresAt,
+        hardExpiresAt: request.hardExpiresAt
       };
       try { return await signals.requestApproval(view); }
       finally { settled(); }
     },
-    cancelApproval: (id) => signals.cancelApproval(id)
+    cancelApproval: (id) => signals.cancelApproval(id),
+    extendApproval: extendApproval ? (id, extendMs) => extendApproval(id, extendMs) : undefined
   };
 }

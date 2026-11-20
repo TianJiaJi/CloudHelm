@@ -28,6 +28,8 @@ export interface ApprovalRequester {
    * adapters reject with ApprovalInterruptedError instead of resolving false. */
   requestApproval(request: ApprovalRequest): Promise<boolean>;
   cancelApproval?(requestId: string): void;
+  /** Extends only the wait window within its hard ceiling; never rebinds content. */
+  extendApproval?(requestId: string, extendMs: number): Promise<{ expiresAt: number; hardExpiresAt: number } | undefined>;
 }
 
 /** Trusted supervised-process observation. Not proof of target authentication or readiness. */

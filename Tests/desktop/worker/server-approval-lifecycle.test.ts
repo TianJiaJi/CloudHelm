@@ -9,6 +9,8 @@ vi.mock('electron', () => ({ safeStorage: { isEncryptionAvailable: () => false }
 interface ApprovalPort { requestApproval(view: ApprovalView): Promise<boolean>; cancelApproval(id: string): void }
 const view = (): ApprovalView => ({ id: 'review', taskId: 'task', operationId: 'op', hostId: 'host',
   fingerprint: 'bound-fingerprint', title: 'fixture', explanation: 'fixture', preview: 'customctl inspect', expiresAt: Date.now() + 1000 });
+/** Soft deadline 10 minutes out, hard ceiling 60 minutes out. */
+const renewable = (): ApprovalView => ({ ...view(), expiresAt: Date.now() + 600_000, hardExpiresAt: Date.now() + 3_600_000 });
 afterEach(() => vi.useRealTimers());
 function setup(send?: (message: RuntimeMessage) => void) {
   vi.useFakeTimers();
@@ -74,4 +76,52 @@ it('rejects an already expired request before opening a card', async () => {
   const f = setup(), request = view(); request.expiresAt = Date.now();
   await expect(f.port.requestApproval(request)).rejects.toMatchObject({ outcome: 'expired' });
   expect(f.messages).toHaveLength(0); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('re-arms the reminder when renewed and reports the remaining window', async () => {
+  const f = setup(), request = renewable(), pending = f.port.requestApproval(request);
+  const count = (type: string) => f.messages.filter((message) => 'event' in message && message.event.type === type).length;
+  const openedWith = (renewals: number | undefined) => f.messages.filter((message) => 'event' in message
+    && message.event.type === 'approval-open' && message.event.value.renewals === renewals).length;
+  await vi.advanceTimersByTimeAsync(9 * 60_000);
+  expect(openedWith(undefined)).toBe(1);
+  await expect(f.server.dispatch({ method: 'renew-approval', approvalId: 'review' })).resolves.toMatchObject({
+    expiresAt: request.expiresAt + 600_000, hardExpiresAt: request.hardExpiresAt });
+  expect(openedWith(1)).toBe(1);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(count('approval-reminder')).toBe(0);
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(count('approval-reminder')).toBe(1);
+  expect(count('approval-close')).toBe(0);
+  f.port.cancelApproval('review');
+  await expect(pending).rejects.toMatchObject({ outcome: 'canceled' });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('caps renewal at five per approval and cancels at the hard deadline', async () => {
+  const f = setup(), request = renewable(), pending = f.port.requestApproval(request);
+  let expiresAt = request.expiresAt;
+  for (let renewal = 1; renewal <= 5; renewal++) {
+    expiresAt += 600_000;
+    await expect(f.server.dispatch({ method: 'renew-approval', approvalId: 'review' })).resolves.toMatchObject({ expiresAt });
+    expect(f.messages.filter((message) => 'event' in message && message.event.type === 'approval-open'
+      && message.event.value.renewals === renewal)).toHaveLength(1);
+  }
+  await expect(f.server.dispatch({ method: 'renew-approval', approvalId: 'review' })).rejects.toThrow('审批续期不可用或次数已用尽');
+  const failed = expect(pending).rejects.toMatchObject({ outcome: 'expired' });
+  await vi.advanceTimersByTimeAsync(3_600_000);
+  await failed;
+  expect(f.messages.filter((message) => 'event' in message && message.event.type === 'approval-close')).toHaveLength(1);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('reminds at the soft deadline without cancelling and still decides afterwards', async () => {
+  const f = setup(), pending = f.port.requestApproval(renewable());
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(f.messages.filter((message) => 'event' in message && message.event.type === 'approval-reminder')).toHaveLength(1);
+  expect(f.messages.filter((message) => 'event' in message && message.event.type === 'approval-close')).toHaveLength(0);
+  await f.server.dispatch({ method: 'decide-approval', approvalId: 'review', approved: true });
+  await expect(pending).resolves.toBe(true);
+  expect(f.messages.filter((message) => 'event' in message && message.event.type === 'approval-close')).toHaveLength(1);
+  expect(vi.getTimerCount()).toBe(0);
 });

@@ -33,6 +33,10 @@ function safeReviewBasis(reason: string): string {
   return redactOutput(reason).replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 900);
 }
 
+/** Soft approval window before the reminder; the hard ceiling is server-enforced. */
+const APPROVAL_SOFT_MS = 10 * 60_000;
+const APPROVAL_HARD_MS = 60 * 60_000;
+
 export class SafetyGate {
   private readonly inFlight = new Set<string>();
 
@@ -185,13 +189,14 @@ export class SafetyGate {
           await this.deps.audit.decided(operation.id, canceled, fingerprint);
           return { decision: canceled };
         }
+        const requestedAt = Date.now();
         const request = { id: randomUUID(), operation, fingerprint, ruleId: safety.ruleId, reason: safety.reason,
           impact: safety.impact,
           targets: operation.kind === 'command' ? [...new Set([
             ...(analysis?.redirectTargets ?? []),
             ...(analysis?.calls.flatMap((call) => call.args.filter((arg) => /^(?:\/|\.\.?\/)/u.test(arg))) ?? [])
           ])].slice(0, 8) : [operation.kind === 'upload' ? operation.remotePath : operation.path],
-          scriptSha256: inspectedScript?.sha256, expiresAt: Date.now() + 10 * 60_000 };
+          scriptSha256: inspectedScript?.sha256, expiresAt: requestedAt + APPROVAL_SOFT_MS, hardExpiresAt: requestedAt + APPROVAL_HARD_MS };
         const approvalSignal = reviewSignal ? AbortSignal.any([reviewSignal, ...(signal ? [signal] : [])]) : signal;
         const approval = stillCurrent() ? await this.awaitApproval(request, approvalSignal) : 'stale';
         const staleReview = !signal?.aborted && reviewSignal?.aborted
@@ -261,7 +266,6 @@ export class SafetyGate {
     };
     const stopped = new Promise<'expired' | 'canceled'>((resolve) => { interrupt = resolve; });
     const stop = () => { close(); interrupt('canceled'); };
-    const timer = setTimeout(() => { close(); interrupt('expired'); }, Math.max(0, request.expiresAt - Date.now()));
     signal?.addEventListener('abort', stop, { once: true });
     let result: 'approved' | 'denied' | 'expired' | 'canceled' | 'stale' | 'unavailable' = 'unavailable';
     try {
@@ -275,11 +279,12 @@ export class SafetyGate {
       result = error instanceof ApprovalInterruptedError && ['canceled', 'expired', 'stale'].includes(error.outcome)
         ? error.outcome : 'unavailable';
     } finally {
-      clearTimeout(timer);
       signal?.removeEventListener('abort', stop);
       close();
     }
     if (cleanupFailed) return 'unavailable';
-    return signal?.aborted ? 'canceled' : Date.now() >= request.expiresAt ? 'expired' : result;
+    // Expiry authority is the approval port: a soft-deadline pass here is a
+    // renewal window, not an automatic refusal. Only an abort overrides the reply.
+    return signal?.aborted ? 'canceled' : result;
   }
 }

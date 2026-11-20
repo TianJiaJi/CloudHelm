@@ -290,6 +290,10 @@ export interface ApprovalView {
   recovery?: string;
   preview: string;
   expiresAt: number;
+  /** Absolute renewal ceiling enforced by the worker server. */
+  hardExpiresAt?: number;
+  /** Renewals already consumed from the allowed maximum. */
+  renewals?: number;
 }
 
 export interface InputRequestView {
@@ -460,6 +464,7 @@ export interface DesktopAPI {
   cancelClarification(taskId: string, requestId: string): Promise<void>;
   stopOperation(conversationId: string): Promise<void>;
   decideApproval(approvalId: string, approved: boolean): Promise<void>;
+  renewApproval(approvalId: string): Promise<{ expiresAt: number; hardExpiresAt: number }>;
   answerInput(requestId: string, answer: string): Promise<void>;
   cancelInput(requestId: string): Promise<void>;
   pauseConversation(taskId: string): Promise<void>;

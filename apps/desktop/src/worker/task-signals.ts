@@ -11,4 +11,5 @@ export interface TaskSignals {
     | { type: 'operation'; value: OperationView } | { type: 'task-status'; taskId: string; status: TaskStatus; summary?: string; resumeReason?: ResumeReason; requestCount?: number }): void;
   requestApproval(view: ApprovalView): Promise<boolean>;
   cancelApproval(id: string): void;
+  extendApproval?(id: string, extendMs: number): Promise<{ expiresAt: number; hardExpiresAt: number } | undefined>;
 }

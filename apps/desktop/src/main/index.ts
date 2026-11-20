@@ -196,6 +196,7 @@ function registerIpc(): void {
   ipcMain.handle('cloudhelm:stop-terminal', (_event, terminalId: string) => runtime.call({ method: 'stop-terminal', terminalId }));
   ipcMain.handle('cloudhelm:resize', (_event, terminalId: string, cols: number, rows: number) => runtime.call({ method: 'resize', terminalId, cols, rows }));
   ipcMain.handle('cloudhelm:decide-approval', (_event, approvalId: string, approved: boolean) => runtime.call({ method: 'decide-approval', approvalId, approved }));
+  ipcMain.handle('cloudhelm:renew-approval', (_event, approvalId: string) => runtime.call({ method: 'renew-approval', approvalId }));
   ipcMain.handle('cloudhelm:request-ai-denial-review', (_event, taskId: string, operationId: string) => {
     const operation = state.snapshot().operations.find((item) => item.id === operationId && item.taskId === taskId);
     if (!operation?.manualReviewAvailable || operation.ruleId !== 'ai-review-deny') throw new Error('该操作不可人工复核');
@@ -268,8 +269,8 @@ void app.whenReady().then(async () => {
     if (event.type === 'terminal-command' || event.type === 'terminal-data' || event.type === 'terminal-state') references.record(event);
     state.record(event);
     if (!testWindow.hidden && !window?.isFocused() && Notification.isSupported()
-      && (event.type === 'approval-open' || event.type === 'input-open')) {
-      new Notification({ title: 'CloudHelm', body: 'AI 需要你处理一项请求。' }).show();
+      && (event.type === 'approval-open' || event.type === 'input-open' || event.type === 'approval-reminder')) {
+      new Notification({ title: 'CloudHelm', body: event.type === 'approval-reminder' ? '一项审批已超时，请尽快处理或续期。' : 'AI 需要你处理一项请求。' }).show();
     }
   }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event), (command) => state.requestBudget(command), (operation) => state.commitOperation(operation), (value) => state.commitInput(value));
   // Reclassify only provably read-only completed legacy commands before the

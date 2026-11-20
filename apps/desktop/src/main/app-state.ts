@@ -588,7 +588,7 @@ export class AppState {
   }
 
   record(event: AppEvent | { type: 'approval-open'; value: AppSnapshot['approvals'][number] }
-    | { type: 'approval-close'; id: string } | { type: 'operation'; value: OperationView }
+    | { type: 'approval-close'; id: string } | { type: 'approval-reminder'; id: string } | { type: 'operation'; value: OperationView }
     | { type: 'input-open'; value: InputRequestView } | { type: 'input-close'; id: string }
     | { type: 'task-status'; taskId: string; status: TaskView['status']; summary?: string; resumeReason?: ResumeReason; requestCount?: number }
     | { type: 'host-status'; hostId: string; status: HostView['status'] }): void {

@@ -140,6 +140,15 @@ const api: DesktopAPI = {
   },
   listRemote: async () => [{ name: 'service', isDirectory: true, size: 0 }, { name: 'README.md', isDirectory: false, size: 512 }],
   decideApproval: async (id, approved) => { calls.push({ kind: 'approval', id, approved }); view.approvals = view.approvals.filter((item) => item.id !== id); sync(); },
+  renewApproval: async (id) => {
+    const approval = view.approvals.find((item) => item.id === id);
+    if (!approval) throw new Error('Approval expired');
+    const extended = Math.min(Math.max(approval.expiresAt, Date.now()) + 600_000, approval.hardExpiresAt ?? approval.expiresAt);
+    approval.expiresAt = extended;
+    approval.renewals = (approval.renewals ?? 0) + 1;
+    sync();
+    return { expiresAt: extended, hardExpiresAt: approval.hardExpiresAt ?? extended };
+  },
   answerInput: async (id, answer) => { calls.push({ kind: 'answer', id, answer }); view.inputs = view.inputs.filter((item) => item.id !== id); sync(); },
   listModelProviders: async () => [{ id: 'openai', name: 'OpenAI', defaultBaseUrl: 'https://api.openai.com/v1', models: [{ id: 'gpt-5.4', name: 'GPT-5.4' }] }],
   modelProviderSettings: async () => ({ hasKey: true }),

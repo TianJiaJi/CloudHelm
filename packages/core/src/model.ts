@@ -178,6 +178,8 @@ export interface ApprovalRequest {
   targets?: string[];
   scriptSha256?: string;
   expiresAt: number;
+  /** Server-enforced absolute deadline; soft expiry only reminds until here. */
+  hardExpiresAt?: number;
 }
 
 export interface InputRequest {

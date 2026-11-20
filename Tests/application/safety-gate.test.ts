@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ApprovalRequest, ProposedOperation } from '@cloudhelm/core';
+import { ApprovalInterruptedError, type ApprovalRequest, type ProposedOperation } from '@cloudhelm/core';
 import { SafetyGate } from '../../packages/application/src/safety-gate.js';
 
 const operation: ProposedOperation = { id: 'op', kind: 'command', command: 'python3 -c "print(1)"', scope: {
@@ -61,7 +61,7 @@ describe('SafetyGate pre-commit authorization', () => {
     expect(fixture.execute).not.toHaveBeenCalled();
   });
 
-  it('distinguishes a user refusal from an expired request', async () => {
+  it('distinguishes a user refusal from a port-side expiry', async () => {
     const refused = setup();
     const pendingRefusal = refused.gate.execute(operation);
     await vi.waitFor(() => expect(refused.requestApproval).toHaveBeenCalledOnce());
@@ -69,15 +69,27 @@ describe('SafetyGate pre-commit authorization', () => {
     expect((await pendingRefusal).decision.ruleId).toBe('human-denied');
     expect(refused.execute).not.toHaveBeenCalled();
 
+    let interrupt!: (error: Error) => void;
     const expired = setup();
+    expired.requestApproval.mockImplementation(() => new Promise<boolean>((_resolve, reject) => { interrupt = reject; }));
     const pendingExpiry = expired.gate.execute({ ...operation, id: 'expiry' });
     await vi.waitFor(() => expect(expired.requestApproval).toHaveBeenCalledOnce());
-    const expiresAt = expired.requestApproval.mock.calls[0]![0].expiresAt;
-    const now = vi.spyOn(Date, 'now').mockReturnValue(expiresAt + 1);
+    interrupt(new ApprovalInterruptedError('expired'));
+    expect((await pendingExpiry).decision.ruleId).toBe('approval-expired');
+    expect(expired.execute).not.toHaveBeenCalled();
+  });
+
+  it('executes a soft-expired approval the port still accepts inside the hard window', async () => {
+    const fixture = setup();
+    const pending = fixture.gate.execute({ ...operation, id: 'soft-expired' });
+    await vi.waitFor(() => expect(fixture.requestApproval).toHaveBeenCalledOnce());
+    const request = fixture.requestApproval.mock.calls[0]![0];
+    expect(request.hardExpiresAt).toBeGreaterThan(request.expiresAt);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(request.expiresAt + 1);
     try {
-      expired.approve(true);
-      expect((await pendingExpiry).decision.ruleId).toBe('approval-expired');
-      expect(expired.execute).not.toHaveBeenCalled();
+      fixture.approve(true);
+      expect((await pending).decision.ruleId).toBe('human-approved');
+      expect(fixture.execute).toHaveBeenCalledOnce();
     } finally { now.mockRestore(); }
   });
 });

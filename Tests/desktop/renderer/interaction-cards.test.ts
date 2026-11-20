@@ -29,3 +29,18 @@ it('does not invent a working directory or derive one from the target', () => {
   expect(output).toContain('工作目录：未知');
   expect(output).toContain('操作目标：/root/test/test.py');
 });
+it('keeps decisions available after a soft expiry inside the hard window', () => {
+  const now = Date.now();
+  const output = html({ ...approval, expiresAt: now - 1000, hardExpiresAt: now + 3_600_000, renewals: 0 });
+  expect(output).toContain('已超时，请尽快决定或续期');
+  expect(output).toContain('剩余续期 5/5 次');
+  expect(output).toMatch(/最晚 \d{2}:\d{2} 截止/u);
+  expect(output).not.toContain('请求已过期');
+  expect(output).not.toContain('disabled');
+});
+it('keeps the legacy single-deadline card disabled after expiry', () => {
+  const output = html({ ...approval, expiresAt: Date.now() - 1000 });
+  expect(output).toContain('请求已过期');
+  expect(output).toContain('disabled');
+  expect(output).not.toContain('剩余续期');
+});

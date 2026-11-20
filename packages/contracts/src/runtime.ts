@@ -54,6 +54,7 @@ export type RuntimeCall =
   | { method: 'cancel-queued-input'; taskId: string; inputId: string }
   | { method: 'task-message'; queueMode?: import('./conversation-input.js').ConversationInputKind; intent?: string; taskId: string; text: string; preparedRevision?: string; document?: import('./message-content.js').MessageDocument }
   | { method: 'decide-approval'; approvalId: string; approved: boolean }
+  | { method: 'renew-approval'; approvalId: string }
   | { method: 'answer-input'; requestId: string; answer: string }
   | { method: 'cancel-input'; requestId: string }
   | { method: 'pause-task' | 'resume-task'; taskId: string }
@@ -76,6 +77,7 @@ export type RuntimeMessage =
   | { event: AppEvent }
   | { event: { type: 'approval-open'; value: ApprovalView } }
   | { event: { type: 'approval-close'; id: string } }
+  | { event: { type: 'approval-reminder'; id: string } }
   | { event: { type: 'input-open'; value: InputRequestView } }
   | { event: { type: 'input-close'; id: string } }
   | { event: { type: 'operation'; value: OperationView } }

@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { SafetyGate } from '@cloudhelm/application';
-import { ApprovalInterruptedError, type ProposedOperation, type SafetyDecision } from '@cloudhelm/core';
+import { ApprovalInterruptedError, type ApprovalRequest, type ProposedOperation, type SafetyDecision } from '@cloudhelm/core';
 
 const operation: ProposedOperation = { id: 'op', kind: 'command', command: 'customctl inspect', scope: {
   taskId: 'task', hostId: 'host', cwd: '/', runAs: 'user', terminalId: 'terminal', terminalGeneration: 1,
@@ -9,8 +9,17 @@ afterEach(() => vi.useRealTimers());
 function setup(cleanupFails = false) {
   vi.useFakeTimers();
   let reply!: (approved: boolean) => void;
-  const requestApproval = vi.fn(() => new Promise<boolean>((resolve) => { reply = resolve; }));
-  const cancelApproval = vi.fn(() => { if (cleanupFails) throw new Error('synthetic-private-cleanup-detail'); });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The worker server owns expiry: the fake port interrupts at the request's
+  // soft deadline instead of resolving false, mirroring the production contract.
+  const requestApproval = vi.fn((request: ApprovalRequest) => new Promise<boolean>((resolve, reject) => {
+    timer = setTimeout(() => reject(new ApprovalInterruptedError('expired')), Math.max(0, request.expiresAt - Date.now()));
+    reply = (approved: boolean) => { if (timer !== undefined) clearTimeout(timer); resolve(approved); };
+  }));
+  const cancelApproval = vi.fn(() => {
+    if (timer !== undefined) { clearTimeout(timer); timer = undefined; }
+    if (cleanupFails) throw new Error('synthetic-private-cleanup-detail');
+  });
   const execute = vi.fn(), decisions: SafetyDecision[] = [];
   const gate = new SafetyGate({ analyzer: { analyze: async (raw) => ({ raw, calls: [{ name: 'customctl', args: ['inspect'],
     dynamic: false, redirects: false }], redirectTargets: [], hasExpansion: false, hasPipeline: false,

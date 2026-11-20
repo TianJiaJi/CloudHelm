@@ -82,6 +82,7 @@ const api: DesktopAPI = {
   cancelClarification: (taskId, requestId) => invoke('cancel-clarification', taskId, requestId),
   stopOperation: (id) => invoke('stop-operation', id),
   decideApproval: (approvalId, approved) => invoke('decide-approval', approvalId, approved),
+  renewApproval: (approvalId) => invoke('renew-approval', approvalId),
   answerInput: (requestId, answer) => invoke('answer-input', requestId, answer),
   cancelInput: (requestId) => invoke('cancel-input', requestId),
   pauseConversation: (taskId) => invoke('pause-task', taskId),

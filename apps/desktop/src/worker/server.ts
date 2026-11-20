@@ -26,6 +26,24 @@ import { InputCommitClient } from './input-commit-client.js';
 import { OperationCommitClient } from './operation-commit-client.js';
 import { RequestBudgetClient } from './request-budget-client.js';
 
+/** Each renewal adds this much decision time, capped by the hard deadline. */
+const APPROVAL_RENEWAL_MS = 10 * 60_000;
+const APPROVAL_MAX_RENEWALS = 5;
+
+/** Server-owned approval wait state; soft expiry reminds, hard expiry cancels. */
+interface PendingApproval {
+  taskId: string;
+  hostId: string;
+  expiresAt: number;
+  hardExpiresAt: number;
+  renewals: number;
+  view: ApprovalView;
+  reminder?: ReturnType<typeof setTimeout>;
+  hardTimeout?: ReturnType<typeof setTimeout>;
+  resolve(allowed: boolean): void;
+  reject(error: Error): void;
+}
+
 export class WorkerServer {
   private readonly budget: RequestBudgetClient;
   private readonly operationCommits: OperationCommitClient;
@@ -57,8 +75,7 @@ export class WorkerServer {
   private readonly connectionAttempts = new Map<string, AbortController>();
   private readonly interactions: InteractionCoordinator;
   private readonly tasks = new Map<string, TaskRunner>();
-  private readonly pendingApprovals = new Map<string, { taskId: string; hostId: string; expiresAt: number;
-    resolve(allowed: boolean): void; reject(error: Error): void }>();
+  private readonly pendingApprovals = new Map<string, PendingApproval>();
   private readonly pendingInputs = new Map<string, { connectionId: string; expiresAt: number; resolve(answer: string | null): void; timeout: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly send: (message: RuntimeMessage) => void) {
@@ -258,7 +275,8 @@ export class WorkerServer {
             diagnostic: (diagnostic) => this.send({ diagnostic: safeDiagnostic(diagnostic) }),
             event: (event) => this.post({ event } as RuntimeMessage),
             requestApproval: (view) => this.requestApproval(view),
-            cancelApproval: (id) => this.cancelApproval(id)
+            cancelApproval: (id) => this.cancelApproval(id),
+            extendApproval: async (id, extendMs) => this.extendApproval(id, extendMs)
           }, (operationId, cursor) => this.readLog(call.task.id, operationId, cursor), this.privileged.forTask(call.task.id),
           { id: call.task.session.id, directory: call.sessionDirectory, restore: !!call.restored }, {
             inspect: (operation, scriptPath) => this.ssh.inspectScript(operation.scope.hostId,
@@ -315,10 +333,15 @@ export class WorkerServer {
         if (call.document) this.deliveredMessages.add(call.document.requestId);
         return;
       }
+      case 'renew-approval': {
+        const renewed = this.extendApproval(call.approvalId, APPROVAL_RENEWAL_MS);
+        if (!renewed) throw new Error('审批续期不可用或次数已用尽');
+        return renewed;
+      }
       case 'decide-approval': {
         const pending = this.pendingApprovals.get(call.approvalId);
         if (!pending) throw new Error('Approval expired');
-        if (Date.now() >= pending.expiresAt) {
+        if (Date.now() >= pending.hardExpiresAt) {
           this.cancelApproval(call.approvalId, 'expired');
           throw new Error('Approval expired');
         }
@@ -507,18 +530,57 @@ export class WorkerServer {
     if (view.expiresAt <= Date.now()) return Promise.reject(new ApprovalInterruptedError('expired'));
     if (this.pendingApprovals.has(view.id)) return Promise.reject(new Error('Approval already pending'));
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => this.cancelApproval(view.id, 'expired'), view.expiresAt - Date.now());
-      const pending = { taskId: view.taskId, hostId: view.hostId, expiresAt: view.expiresAt,
-        resolve: (allowed: boolean) => { clearTimeout(timeout); queueMicrotask(() => resolve(allowed)); },
-        reject: (error: Error) => { clearTimeout(timeout); reject(error); } };
+      // Views without a hard ceiling keep the soft deadline as the hard one.
+      const hardExpiresAt = Math.max(view.hardExpiresAt ?? view.expiresAt, view.expiresAt);
+      const pending: PendingApproval = { taskId: view.taskId, hostId: view.hostId, expiresAt: view.expiresAt,
+        hardExpiresAt, renewals: 0, view: structuredClone(view),
+        resolve: (allowed: boolean) => { this.clearApprovalTimers(pending); queueMicrotask(() => resolve(allowed)); },
+        reject: (error: Error) => { this.clearApprovalTimers(pending); reject(error); } };
       // Register before publishing: even an immediate reply must bind this recipient.
       this.pendingApprovals.set(view.id, pending);
-      try { this.post({ event: { type: 'approval-open', value: view } }); }
-      catch {
+      try {
+        this.armApprovalTimers(pending);
+        this.post({ event: { type: 'approval-open', value: view } });
+      } catch {
         this.pendingApprovals.delete(view.id);
         pending.reject(new Error('Approval channel unavailable'));
       }
     });
+  }
+
+  /** The soft deadline reminds without cancelling; the hard deadline cancels. */
+  private armApprovalTimers(pending: PendingApproval): void {
+    if (pending.hardExpiresAt > pending.expiresAt) {
+      pending.reminder = setTimeout(() => {
+        pending.reminder = undefined;
+        try { this.post({ event: { type: 'approval-reminder', id: pending.view.id } }); }
+        catch { this.cancelApproval(pending.view.id, 'canceled'); }
+      }, Math.max(0, pending.expiresAt - Date.now()));
+    }
+    pending.hardTimeout = setTimeout(() => this.cancelApproval(pending.view.id, 'expired'),
+      Math.max(0, pending.hardExpiresAt - Date.now()));
+  }
+
+  private clearApprovalTimers(pending: PendingApproval): void {
+    if (pending.reminder !== undefined) { clearTimeout(pending.reminder); pending.reminder = undefined; }
+    if (pending.hardTimeout !== undefined) { clearTimeout(pending.hardTimeout); pending.hardTimeout = undefined; }
+  }
+
+  /** Renewal extends only the wait window; bindings, content, and fingerprints stay fixed. */
+  private extendApproval(id: string, extendMs: number): { expiresAt: number; hardExpiresAt: number } | undefined {
+    const pending = this.pendingApprovals.get(id);
+    if (!pending || pending.renewals >= APPROVAL_MAX_RENEWALS || pending.hardExpiresAt <= pending.expiresAt) return undefined;
+    const expiresAt = Math.min(Math.max(pending.expiresAt, Date.now()) + extendMs, pending.hardExpiresAt);
+    if (expiresAt <= Date.now()) return undefined;
+    pending.expiresAt = expiresAt;
+    pending.renewals++;
+    pending.view = { ...pending.view, expiresAt, hardExpiresAt: pending.hardExpiresAt, renewals: pending.renewals };
+    this.clearApprovalTimers(pending);
+    try {
+      this.armApprovalTimers(pending);
+      this.post({ event: { type: 'approval-open', value: pending.view } });
+    } catch { this.cancelApproval(id, 'canceled'); return undefined; }
+    return { expiresAt, hardExpiresAt: pending.hardExpiresAt };
   }
 
   private settleApproval(id: string, value: boolean | ApprovalInterruptedError): boolean {
