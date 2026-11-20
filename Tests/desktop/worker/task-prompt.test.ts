@@ -25,7 +25,7 @@ it('refreshes bounded backend applicability and file preview/commit hints withou
   expect(Object.keys(first.tools)).toEqual(expect.arrayContaining(['apply_remote_edit', 'restore_remote_edit', 'discard_remote_edit', 'check_remote_edit', 'list_remote_recovery', 'cleanup_remote_recovery']));
   expect(first.tools).not.toHaveProperty('request_root_session');
   expect(first.tools).toMatchObject({ inspect_host_environment: true, query_operation_history: true,
-    prepare_remote_edit: 'conditional', edit_remote_file: false, apply_remote_edit: 'conditional', restore_remote_edit: 'conditional', check_remote_edit: 'conditional' });
+    prepare_remote_edit: 'conditional', apply_remote_edit: 'conditional', restore_remote_edit: 'conditional', check_remote_edit: 'conditional' });
   expect(first).toMatchObject({ tools: { read_selected_text_file: false, list_selected_directory: false, upload_selected_file: false,
     read_operation_log: true, submit_verification: false, record_reconciled_result: false }, reportCount: 0, unresolvedCount: 0 });
   // Recovery-safety guidance (C03/C05) legitimately grew the prompt; 9400 keeps the bound meaningful.

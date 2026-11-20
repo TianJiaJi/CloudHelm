@@ -1,7 +1,6 @@
 import { FileEditService } from './file-edit-service.js';
 import { controlledFileTools } from './controlled-file-tools.js';
 import { createServiceTool } from './service-tool.js';
-import { createRemoteFileEditTool } from './remote-file-edit-tool.js';
 import { createRemoteFilePrepareTool } from './remote-file-prepare-tool.js';
 import { OperationPrivilege } from './operation-privilege.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -152,7 +151,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
       }
     };
   const tools = [createServiceTool(deps, gate),
-    tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files), createRemoteFileEditTool(deps, gate),
+    tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files),
     writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
   // Pre-dispatch refusals create no operation record, so surface a fixed reason code
   // for diagnosis. The code is allowlisted; arguments and content never reach the log.

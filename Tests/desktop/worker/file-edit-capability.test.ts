@@ -16,12 +16,9 @@ function fixture() {
   return { tools, readRemoteFile, ensureTerminal, runOperation };
 }
 
-it('does not advertise the legacy edit commit while metadata-preserving replacement is unavailable', async () => {
-  const f = fixture(), tool = f.tools.find((tool) => tool.name === 'edit_remote_file')!;
-  expect(tool.available?.()).toBe(false);
-  expect(await tool.execute('legacy', { hostId: 'host', path: '/srv/config', expectedSha256: 'a'.repeat(64), oldText: '80', newText: '90' } as never))
-    .toMatchObject({ isError: true, details: { code: 'remote-edit-unsupported', execution: 'not-started' } });
-  expect(f.readRemoteFile).not.toHaveBeenCalled(); expect(f.ensureTerminal).not.toHaveBeenCalled(); expect(f.runOperation).not.toHaveBeenCalled();
+it('removed the legacy edit commit tool from the registry entirely', () => {
+  const f = fixture();
+  expect(f.tools.find((tool) => tool.name === 'edit_remote_file')).toBeUndefined();
 });
 
 it('refuses a known unsupported replacement hash before terminal allocation or review', async () => {

@@ -29,7 +29,7 @@ export function createTaskPrompt(task: TaskView, hosts: RuntimeHost[], operation
     const projection = { version: 1, ...(sudoContexts?.length ? { sudoContexts } : {}), tools: {
       inspect_host_environment: remote, query_operation_history: remote && owned.length > 0,
       run_remote: remote, stop_remote_job: remote && owned.some((op) => op.executionJob?.status === 'running'), write_remote_file: remote, delete_remote_file: remote, manage_service: remote,
-      prepare_remote_edit: remote ? 'conditional' : false, edit_remote_file: false,
+      prepare_remote_edit: remote ? 'conditional' : false,
       apply_remote_edit: remote ? 'conditional' : false, restore_remote_edit: remote ? 'conditional' : false,
       discard_remote_edit: remote ? 'conditional' : false, check_remote_edit: remote ? 'conditional' : false,
       list_remote_recovery: remote ? 'conditional' : false, cleanup_remote_recovery: remote ? 'conditional' : false,
