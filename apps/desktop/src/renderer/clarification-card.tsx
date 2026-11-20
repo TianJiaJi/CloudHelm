@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClarificationAnswer, ClarificationRequest } from '@cloudhelm/contracts';
-import { Card } from './ui/index.js';
+import { Button, Card } from './ui/index.js';
 import styles from './clarification-card.module.css';
 
 const drafts = new Map<string, Record<string, ClarificationAnswer>>();
@@ -44,7 +44,7 @@ export function ClarificationCard({ request }: { request: ClarificationRequest }
         </fieldset>;
       })}
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {pending && <footer><button type="button" disabled={busy} onClick={() => void submit(true)}>停止本轮</button><button type="submit" disabled={busy || !complete}>{busy ? '提交中…' : '提交并继续'}</button></footer>}
+      {pending && <footer><Button disabled={busy} onClick={() => void submit(true)}>停止本轮</Button><Button variant="primary" type="submit" disabled={busy || !complete}>{busy ? '提交中…' : '提交并继续'}</Button></footer>}
       {request.status === 'expired' && <p className={styles.hint}>运行已结束或应用已重启，请发送新消息继续。</p>}
     </form>
   </Card>;

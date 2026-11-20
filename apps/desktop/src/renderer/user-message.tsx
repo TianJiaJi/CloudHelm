@@ -6,6 +6,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { discardReferenceDraft, holdDraftReferences } from './reference-drafts.js';
 import type { ConversationMessage, ReferenceDraftScope } from '@cloudhelm/contracts';
 import { Icon } from './ui-helpers.js';
+import { Button } from './ui/index.js';
 import { copyEntries } from './clipboard.js';
 import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
 import styles from './user-message.module.css';
@@ -127,8 +128,8 @@ export function UserMessage({ message, canEdit, report }: {
       {locked && !editDraft?.discarding && message.document && <small role="status">{editDraft?.compressing ? '正在压缩…' : '正在准备发送…'} {editDraft?.summaryRequests && `摘要请求 ${editDraft.summaryRequests.used}/${editDraft.summaryRequests.limit} `}<button type="button" onClick={() => {
         const id = draftFor(editorKey).request?.id; if (id) void window.cloudhelm.cancelMessage(id).catch((error: unknown) => report(String(error)));
       }}>取消发送</button></small>}
-      <div className={styles.editorActions}><button type="button" disabled={busy || locked} onClick={cancel}>取消</button>
-        <button type="submit" className={ui.primary} disabled={busy || locked || !canEdit || (message.document ? !editParts?.length || JSON.stringify(editParts) === JSON.stringify(message.document.parts) : !draft.trim() || draft.trim() === message.text.trim())}>{busy ? '发送中…' : '发送修改'}</button></div>
+      <div className={styles.editorActions}><Button size="compact" disabled={busy || locked} onClick={cancel}>取消</Button>
+        <Button variant="primary" size="compact" type="submit" disabled={busy || locked || !canEdit || (message.document ? !editParts?.length || JSON.stringify(editParts) === JSON.stringify(message.document.parts) : !draft.trim() || draft.trim() === message.text.trim())}>{busy ? '发送中…' : '发送修改'}</Button></div>
     </form> : message.document ? <MessageContent document={message.document} /> : <p>{message.text}</p>}
     <span className={styles.copyStatus} role="status">{copyState === 'copied' ? '消息已复制' : copyState === 'failed' ? '复制失败，请重试或手动选择消息。' : ''}</span>
   </article>;

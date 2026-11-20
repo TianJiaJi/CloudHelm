@@ -1,6 +1,7 @@
 import type { HostCredentialsPatch, HostDraft, HostView, SshConnectionSettings } from '@cloudhelm/contracts';
 import { SSH_ALGORITHM_CHOICES } from '@cloudhelm/contracts';
 import { NumberInput } from './number-input.js';
+import { Button } from './ui/index.js';
 import styles from './host-editor.module.css';
 
 export interface HostEditorFields {
@@ -72,7 +73,7 @@ export function AuthenticationFields(props: HostEditorFields): React.JSX.Element
     {keyEnabled && <>
       <label htmlFor="private-key-path">私钥路径</label><div className={styles.file}>
         <input id="private-key-path" required value={draft.privateKeyPath ?? ''} onChange={(event) => update({ privateKeyPath: event.target.value })} placeholder="选择私钥文件，或输入完整路径" />
-        <button type="button" disabled={props.selectingKey} onClick={props.selectKey}>{props.selectingKey ? '选择中…' : '选择文件'}</button>
+        <Button size="compact" disabled={props.selectingKey} onClick={props.selectKey}>{props.selectingKey ? '选择中…' : '选择文件'}</Button>
       </div><SecretField props={props} field="passphrase" label="私钥口令（如有）" />
     </>}
     <SecretField props={props} field="password" label={keyEnabled ? 'SSH 密码（后备认证）' : 'SSH 密码'} />

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppSnapshot, ModelProfileDraft, ModelProviderSettings, ModelProviderView, ReviewSelection } from '@cloudhelm/contracts';
 import { errorMessage, inlineError } from './error-presentation.js';
 import { ShortcutSettings } from './shortcut-settings.js';
-import { MenuSurface } from './ui/index.js';
+import { Button, MenuSurface } from './ui/index.js';
 import { useMenuAnchor } from './composer-controls.js';
 import { Icon } from './ui-helpers.js';
 import { useTheme } from './theme-store.js';
@@ -241,9 +241,9 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
   return <section className={styles.page} aria-label="模型设置" aria-busy={busy !== null}>
     <header className={styles.header}>
       <div><p className={styles.eyebrow}>偏好设置</p><h1>模型设置</h1></div>
-      <button type="button" className={styles.button} disabled={busy !== null} onClick={() => requestNavigation({ close: true })}>
+      <Button disabled={busy !== null} onClick={() => requestNavigation({ close: true })}>
         <span aria-hidden="true">←</span> 返回终端
-      </button>
+      </Button>
     </header>
     <nav className={styles.sections} role="tablist" aria-label="模型接入方式">
       {([{ id: 'api', label: 'API Key', icon: 'key' }, { id: 'subscription', label: '模型订阅 · 未开放', icon: 'subscription' },
@@ -272,7 +272,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
 
       <div className={styles.detail}>
         {loadError ? <div className={styles.loadError} role="alert"><h2>暂时无法读取配置</h2><p>{loadError}</p>
-          <button type="button" className={styles.button} onClick={() => setReload((value) => value + 1)}>重试</button></div>
+          <Button onClick={() => setReload((value) => value + 1)}>重试</Button></div>
           : provider ? <>
             <div className={styles.providerHeading}><div><h2>{provider.name}{isDefault(provider) && <span className={styles.badge}>默认</span>}</h2>
               <p>配置连接并选择新对话使用的模型。</p></div></div>
@@ -288,8 +288,8 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
               <div className={styles.field}><label htmlFor="model-base-url">Base URL</label><div>
                 <div className={styles.urlRow}><input id="model-base-url" type="url" spellCheck={false} value={draft.baseUrl}
                   onChange={(event) => updateDraft({ baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />
-                  <button type="button" className={styles.button} disabled={!provider.defaultBaseUrl}
-                    onClick={() => updateDraft({ baseUrl: provider.defaultBaseUrl ?? '' })}>恢复预置</button></div>
+                  <Button disabled={!provider.defaultBaseUrl}
+                    onClick={() => updateDraft({ baseUrl: provider.defaultBaseUrl ?? '' })}>恢复预置</Button></div>
                 <p className={styles.hint}>{provider.defaultBaseUrl ? '已预置供应商地址，可单独修改。' : '填写自定义服务的 API 地址，支持 HTTPS 或本机 HTTP。'}</p>
               </div></div>
               {custom && <div className={styles.field}><label htmlFor="model-context-window">模型容量</label><div>
@@ -300,8 +300,8 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
                 <p className={styles.hint}>按服务端文档同时填写；留空使用保守的 32000 / 8192。连接测试无法验证容量。</p>
               </div></div>}
               <div className={styles.testRow}>
-                <button type="button" className={styles.button} disabled={!validApi || !hasApiKey || busy !== null}
-                  onClick={() => void testConnection()}><span aria-hidden="true">▷</span>{busy === 'test' ? '正在测试…' : '测试连接'}</button>
+                <Button disabled={!validApi || !hasApiKey || busy !== null}
+                  onClick={() => void testConnection()}><span aria-hidden="true">▷</span>{busy === 'test' ? '正在测试…' : '测试连接'}</Button>
                 <span className={styles.hint}>{busy === 'test' ? '正在使用当前表单连接所选模型…' : '发送一条简短请求，可能产生少量费用。'}</span>
               </div>
             </fieldset>
@@ -328,7 +328,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
       <span className={styles.infoIcon}><SettingsIcon kind="subscription" /></span><h2>模型订阅</h2><span className={styles.badge}>尚未开放</span>
       <p>这里将支持供应商允许的订阅账户登录，并显示账户、授权范围与计费归属。</p>
       <p>当前请使用 API Key 连接模型。订阅登录将使用独立的认证流程，不会自动切换你的凭据或计费方式。</p>
-      <button type="button" className={styles.button} onClick={() => requestNavigation({ section: 'api' })}>配置 API Key</button>
+      <Button onClick={() => requestNavigation({ section: 'api' })}>配置 API Key</Button>
     </div>}
 
     {section === 'review' && <div className={styles.reviewPanel} role="tabpanel" id="model-panel-review" aria-labelledby="model-tab-review">
@@ -393,13 +393,13 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
           : section === 'budget' ? '出站限制立即生效，覆盖所有任务与本机全部模型请求。'
             : section === 'shortcuts' ? '快捷键保存在本机，更改立即生效。'
               : section === 'appearance' ? '外观偏好保存在本机，更改立即生效。' : '当前版本不提供订阅登录。'}</p>
-      <button type="button" className={styles.button} disabled={busy !== null} onClick={() => requestNavigation({ close: true })}>返回</button>
-      {section === 'api' && <button type="button" className={styles.primary} disabled={busy !== null || !validApi}
-        onClick={() => void saveApi()}>{busy === 'save' ? '保存中…' : '保存为默认'}</button>}
-      {section === 'review' && <button type="button" className={styles.primary} disabled={busy !== null}
-        onClick={() => void saveReview()}>{busy === 'save' ? '保存中…' : '保存审核设置'}</button>}
-      {section === 'budget' && <button type="button" className={styles.primary} disabled={busy !== null}
-        onClick={() => void saveOutbound()}>{busy === 'save' ? '保存中…' : '保存出站限制'}</button>}
+      <Button disabled={busy !== null} onClick={() => requestNavigation({ close: true })}>返回</Button>
+      {section === 'api' && <Button variant="primary" disabled={busy !== null || !validApi}
+        onClick={() => void saveApi()}>{busy === 'save' ? '保存中…' : '保存为默认'}</Button>}
+      {section === 'review' && <Button variant="primary" disabled={busy !== null}
+        onClick={() => void saveReview()}>{busy === 'save' ? '保存中…' : '保存审核设置'}</Button>}
+      {section === 'budget' && <Button variant="primary" disabled={busy !== null}
+        onClick={() => void saveOutbound()}>{busy === 'save' ? '保存中…' : '保存出站限制'}</Button>}
     </footer>
     {pending && <UnsavedChanges api={section === 'api'} busy={busy !== null} canSave={section !== 'api' || !!validApi}
       cancel={() => setPending(null)} discard={discardAndNavigate} save={() => void saveAndNavigate()} />}
@@ -428,9 +428,9 @@ function UnsavedChanges({ api, busy, canSave, cancel, discard, save }: {
     onCancel={(event) => { event.preventDefault(); if (!busy) cancel(); }}>
     <h2 id="unsaved-model-title">还有未保存的更改</h2>
     <p>{api ? '保存后，这个供应商和模型将成为新对话的默认配置。' : '保存后，将使用新的 AI 审核设置。'}</p>
-    <div><button type="button" className={styles.button} disabled={busy} autoFocus onClick={cancel}>继续编辑</button>
-      <button type="button" className={styles.button} disabled={busy} onClick={discard}>放弃更改</button>
-      <button type="button" className={styles.primary} disabled={busy || !canSave} onClick={save}>{busy ? '保存中…' : '保存并继续'}</button></div>
+    <div><Button disabled={busy} autoFocus onClick={cancel}>继续编辑</Button>
+      <Button disabled={busy} onClick={discard}>放弃更改</Button>
+      <Button variant="primary" disabled={busy || !canSave} onClick={save}>{busy ? '保存中…' : '保存并继续'}</Button></div>
   </dialog>;
 }
 

@@ -9,7 +9,5 @@
 .option em { font-size: 11px; font-style: normal; margin-left: 6px; color: var(--accent); }
 .card textarea { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
 .card footer { display: flex; justify-content: flex-end; gap: 8px; }
-.card button { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
-.card button[type='submit'] { background: var(--accent); color: var(--accentText); }
 .card button:disabled { opacity: .5; cursor: default; }
 .error { color: var(--dangerText); }

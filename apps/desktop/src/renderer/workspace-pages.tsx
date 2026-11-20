@@ -13,7 +13,7 @@ import { MarkdownMessage } from './markdown-message.js';
 import { presentError } from './error-presentation.js';
 import { copyEntries, copyText } from './clipboard.js';
 import { openContextMenu, type ContextMenuEntry } from './context-menu.js';
-import { Card, Pill } from './ui/index.js';
+import { Card, Button, Pill } from './ui/index.js';
 import styles from './ui.module.css';
 
 export function FilesPage({ hostId, host, report }: { hostId: string; host: string; report(error: string): void }): React.JSX.Element {
@@ -67,9 +67,9 @@ export function FilesPage({ hostId, host, report }: { hostId: string; host: stri
     ], '文件页操作')}>
     <div className={styles.pageHead}><div><small>{host}</small><h2>远程文件</h2></div><Pill>只读 SFTP</Pill></div>
     <form className={styles.pathRow} onSubmit={(event) => { event.preventDefault(); navigate(draft); }}>
-      <button type="button" title="上一级" onClick={() => navigate(path === '/' ? '/' : `${path.replace(/\/$/u, '')}/..`)}><Icon name="arrow" /></button>
-      <input aria-label="远程目录" value={draft} onChange={(event) => setDraft(event.target.value)} /><button>前往</button>
-      <button type="button" disabled={loading} onClick={() => setRefresh((value) => value + 1)}>刷新</button>
+      <Button title="上一级" onClick={() => navigate(path === '/' ? '/' : `${path.replace(/\/$/u, '')}/..`)}><Icon name="arrow" /></Button>
+      <input aria-label="远程目录" value={draft} onChange={(event) => setDraft(event.target.value)} /><Button type="submit">前往</Button>
+      <Button disabled={loading} onClick={() => setRefresh((value) => value + 1)}>刷新</Button>
     </form>
     <p className={styles.note}>只读目录浏览 · {watchFailed ? '自动刷新已停止，请手动重试' : watch ? '可见时每 5 秒刷新' : '自动刷新已关闭'} · {follow ? '跟随人工终端目录' : '目录跟随已关闭'}。需要修改文件时，可在 AI 助手中说明，变更将经过审核。</p>
     <div className={styles.fileTable}><div className={styles.fileHeader}><span>名称</span><span>大小</span></div>
@@ -106,16 +106,16 @@ export function OperationCard({ operation, report }: { operation: OperationView;
     <PrivilegeFeedback value={operation.privilege} />
     {output && <pre className={styles.outputTail}>{output.slice(-1600)}</pre>}
     {operation.manualReviewAvailable && operation.ruleId === 'ai-review-deny' && <div className={styles.cardActions}>
-      <button onClick={() => void capture(() => window.cloudhelm.requestAiDenialReview(operation.taskId, operation.id), report)}>申请人工复核这次操作</button>
+      <Button size="compact" onClick={() => void capture(() => window.cloudhelm.requestAiDenialReview(operation.taskId, operation.id), report)}>申请人工复核这次操作</Button>
     </div>}
     <details><summary>操作详情{operation.exitCode !== undefined ? ` · 退出码 ${operation.exitCode}` : ''}</summary>
       {operation.interruption && <p>用户主动中断（{operation.interruption.source === 'ctrl-c' ? 'Ctrl+C' : operation.interruption.source === 'terminal-close' ? '关闭终端' : '停止按钮'}）；{operation.status === 'unknown' ? '远端结果待核验' : `实际退出码：${operation.exitCode ?? '待确认'}`}。</p>}
       {operation.reason && <p>{operation.reason}</p>}{operation.reconciliation?.kind === 'risk-accepted' && <p>用户已逐条接管未知结果风险：{operation.reconciliation.explanation}。这不是成功证据，也未执行新命令。</p>}{operation.model && <small>{operation.model.provider} · {operation.model.modelId}</small>}
-      <div className={styles.cardActions}>{terminal && <button onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 终端</button>}
-        {operation.logRef && <button onClick={() => setLogOpen(true)}>查看操作日志</button>}</div>
+      <div className={styles.cardActions}>{terminal && <Button size="compact" onClick={() => useUi.getState().openTerminal(terminal.id)}><Icon name="terminal" />打开 AI 终端</Button>}
+        <Button size="compact" onClick={() => setLogOpen(true)}>查看操作日志</Button></div>
     </details>
-    {operation.status === 'running' && !logOpen && <button type="button" onClick={() => setLogOpen(true)}>查看增量日志</button>}
-    {logOpen && <><button type="button" onClick={() => setLogOpen(false)}>收起日志</button><OperationLog key={operation.id} taskId={operation.taskId} operationId={operation.id}
+    {operation.status === 'running' && !logOpen && <Button variant="ghost" size="compact" onClick={() => setLogOpen(true)}>查看增量日志</Button>}
+    {logOpen && <><Button variant="ghost" size="compact" onClick={() => setLogOpen(false)}>收起日志</Button><OperationLog key={operation.id} taskId={operation.taskId} operationId={operation.id}
       live={operation.status === 'running'} report={report} /></>}
   </Card>;
 }
@@ -137,7 +137,7 @@ export function VerificationCard({ conversation, report, compact = false }: { co
     {failure ? <details><summary>查看错误详情</summary><pre className={styles.outputTail}>{failure.details}</pre></details>
       : conversation.report?.access.map((address) => <code className={styles.access} key={address}>{address}</code>)}
     <div className={styles.cardActions}>
-      <button onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</button>
+      <Button size="compact" onClick={() => useUi.getState().openReport(conversation.id)}>{failure ? '查看对话记录' : '查看完整报告'}</Button>
     </div>
   </Card>;
 }

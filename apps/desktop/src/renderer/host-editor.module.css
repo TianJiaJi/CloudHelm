@@ -26,7 +26,7 @@
 .secret { display: flex; flex-direction: column; gap: 8px; }
 .file { display: flex; gap: 8px; margin-top: -8px; }
 .file > input { min-width: 0; flex: 1; }
-.file > button { flex: none; border: 1px solid var(--border); padding: 6px 10px; font-size: 11px; }
+.file > button { flex: none; }
 .order { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .order > li { display: flex; gap: 6px; align-items: center; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; }
 .order > li > span { flex: 1; font-size: 12px; }
@@ -43,8 +43,6 @@
 .testStatus:not(:empty) { padding-block: 12px; border-top: 1px solid var(--border); }
 .footer { display: flex; gap: 9px; align-items: center; flex: none; border-top: 1px solid var(--border); padding: 14px 22px; background: var(--canvas); }
 .footer > small { flex: 1; color: var(--muted); font-size: 10px; }
-.footer button { border: 1px solid var(--border); padding: 8px 15px; font-size: 12px; }
-.editor button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 650px) {
   .body { grid-template-columns: 112px minmax(0, 1fr); }
   .content { padding: 17px 15px; }

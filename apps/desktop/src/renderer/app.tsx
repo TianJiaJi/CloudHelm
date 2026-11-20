@@ -7,6 +7,7 @@ import { useUi, type WorkspaceTab } from './store.js';
 import { HostDialog, SafetyDialog, ConfirmDialog } from './host-dialogs.js';
 import { InputCard } from './interaction-cards.js';
 import { capture } from './ui-helpers.js';
+import { Button } from './ui/index.js';
 import { ErrorDialog } from './error-dialog.js';
 import { useErrorNotices } from './use-error-notices.js';
 import { ContextMenuHost, openContextMenu, type ContextMenuAction, type ContextMenuEntry } from './context-menu.js';
@@ -280,7 +281,7 @@ export function App(): React.JSX.Element {
     {confirmation && <ConfirmDialog title={confirmation.title} confirmLabel={confirmation.label} action={confirmation.action} close={() => setConfirmation(null)} report={setError}>{confirmation.message}</ConfirmDialog>}
     {fingerprint && <div className={styles.scrim}><div className={styles.dialog} role="dialog" aria-modal="true" aria-label="核对 SSH 主机指纹">
       <h2>核对 SSH 主机指纹</h2><p>{hostName(fingerprint.hostId)} 的服务器身份需要确认。请通过可信渠道核对以下指纹；一致后再连接。</p><code className={styles.fingerprint}>{fingerprint.value}</code>
-      <div className={styles.dialogActions}><button onClick={() => setFingerprint(null)}>取消</button><button className={styles.primary} onClick={() => void capture(async () => { const target = fingerprint; await window.cloudhelm.trustHostKey(target.hostId, target.value); setFingerprint(null); await connectHost(target.hostId); }, setError)}>已核对，信任并连接</button></div>
+      <div className={styles.dialogActions}><Button onClick={() => setFingerprint(null)}>取消</Button><Button variant="primary" onClick={() => void capture(async () => { const target = fingerprint; await window.cloudhelm.trustHostKey(target.hostId, target.value); setFingerprint(null); await connectHost(target.hostId); }, setError)}>已核对，信任并连接</Button></div>
     </div></div>}
     {sensitiveInput && <div className={styles.scrim}><InputCard key={sensitiveInput.id} input={sensitiveInput} host={hostName(sensitiveInput.hostId)} report={setError} later={() => setHiddenInputs((items) => [...items, sensitiveInput.id])} /></div>}
     {error && <ErrorDialog key={JSON.stringify([error.code, error.context])} notice={error} close={dismissError} configureModel={() => useUi.getState().setSettingsOpen(true)} />}

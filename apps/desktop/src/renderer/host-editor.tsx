@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { validateHostConnectionSettings, type HostCredentialsPatch, type HostDraft, type HostView } from '@cloudhelm/contracts';
 import { capture, Icon } from './ui-helpers.js';
+import { Button } from './ui/index.js';
 import { HostConnectionTestStatus, useHostConnectionTest } from './host-connection-test.js';
 import { AlgorithmFields, AuthenticationFields, ConnectionFields, GeneralFields, ProxyFields, SessionFields, TerminalFields, X11Fields, type HostEditorFields } from './host-editor-fields.js';
 import ui from './ui.module.css';
@@ -81,10 +82,10 @@ export function HostDialog({ hosts, editing, close, report }: {
     <div className={styles.testStatus}><HostConnectionTestStatus testing={connectionTest.testing} result={connectionTest.result}
       confirm={(id) => void connectionTest.test(id)} dismiss={connectionTest.dismiss} /></div>
     <footer className={styles.footer}>
-      <button type="button" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form && validate(form)) void connectionTest.test(); }}>{connectionTest.testing ? '正在测试…' : '测试连接'}</button>
+      <Button disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form && validate(form)) void connectionTest.test(); }}>{connectionTest.testing ? '正在测试…' : '测试连接'}</Button>
       <small>测试只检查 SSH 连接，不执行启动命令或开启 X11。</small>
-      <button type="button" disabled={saving} onClick={close}>取消</button>
-      <button className={ui.primary} disabled={busy}>{saving ? '保存中…' : '保存'}</button>
+      <Button disabled={saving} onClick={close}>取消</Button>
+      <Button variant="primary" type="submit" disabled={busy}>{saving ? '保存中…' : '保存'}</Button>
     </footer>
   </form></div>;
 }

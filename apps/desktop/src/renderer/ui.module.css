@@ -11,8 +11,6 @@
 .app summary { cursor: pointer; }
 .app pre { overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px; line-height: 1.6; }
 .sidebar { display: flex; flex-direction: column; width: 208px; flex: none; }
-.brand { display: flex; align-items: center; gap: 9px; height: 67px; padding: 0 17px; font-size: 17px; font-weight: 650; letter-spacing: -.5px; }
-.brandIcon { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--accentBorder); border-radius: 8px; color: var(--accent); }
 .sectionHead { display: flex; justify-content: space-between; align-items: center; padding: 13px 15px 9px; color: var(--muted); font-size: 11px; }
 .sectionHead button { padding: 3px; }
 .hostList { max-height: 37vh; overflow: auto; padding: 0 8px 10px; flex: none; }
@@ -56,51 +54,27 @@
 .terminal { position: relative; flex: 1; min-height: 0; overflow: hidden; padding: 12px; background: var(--terminalBg); }
 .terminalViewport { width: 100%; height: 100%; min-height: 0; overflow: hidden; }
 .terminalNewOutput { position: absolute; right: 20px; bottom: 20px; z-index: 2; padding: 5px 11px; border: 1px solid var(--border);
-  border-radius: 999px; background: var(--accent); color: var(--accentText); font-size: 11px; cursor: pointer; box-shadow: 0 6px 18px rgb(0 0 0 / 22%); }
+  border-radius: 999px; background: var(--accent); color: var(--accentText); font-size: 11px; cursor: pointer; box-shadow: var(--shadow-2); }
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: var(--muted); padding: 30px; text-align: center; }
 .emptyGlyph { display: grid; place-items: center; width: 76px; height: 76px; border: 1px solid var(--border); border-radius: 19px; background: var(--raised); color: var(--accent); }
 .empty h1 { margin: 24px 0 8px; font-size: 21px; font-weight: 550; color: var(--text); }
 .empty p { max-width: 350px; font-size: 12px; line-height: 1.7; margin: 0 0 24px; }
-.primary { background: var(--accent) !important; color: var(--accentText) !important; padding: 8px 13px !important; border-radius: 7px; font-size: 12px; font-weight: 600; }
-.primary:hover { filter: brightness(1.06); }
 .error { position: absolute; left: 14px; right: 14px; bottom: 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; z-index: 25; background: var(--dangerBg); color: var(--dangerText); border: 1px solid var(--dangerBorder); border-radius: 8px; padding: 11px 13px; font-size: 12px; line-height: 1.5; }
 .error span { overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
 .error button { padding: 2px; flex: none; }
 .panelResizer { width: 6px; flex: none; margin: 0 -8px; cursor: col-resize; touch-action: none; z-index: 1; }
 .panelResizer:hover { background: var(--accentSoft); border-radius: 3px; }
 .agentPanel { display: flex; flex-direction: column; flex: none; min-height: 0; min-width: 330px; max-width: calc(100vw - 530px); }
-.agentHead { display: flex; align-items: center; justify-content: space-between; min-height: 46px; padding: 0 15px; font-size: 12px; font-weight: 600; }
-.agentHead > span { display: flex; align-items: center; gap: 8px; }
-.agentHead > span svg { color: var(--accent); }
-.agentHead > div { display: flex; gap: 4px; color: var(--muted); }
-.agentHead button { padding: 5px; }
-.assistantContext { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; padding: 0 15px 9px; border-bottom: 1px solid var(--border); font-size: 10px; }
-.assistantContext > span, .assistantContext > small { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
-.assistantContext > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.assistantContext small { font-size: 10px; }
-.agentActions { display: flex; align-items: center; gap: 4px; padding: 7px 12px; border-bottom: 1px solid var(--border); }
-.agentActions .status { margin-right: auto; color: var(--accent); font-size: 10px; }
-.agentActions button { padding: 5px; color: var(--muted); font-size: 10px; }
 .agentActivity { padding: 6px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; line-height: 1.5; }
 .agentActivity[role=alert] { color: var(--warning); }
-.agentScroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; scrollbar-width: thin; }
 .agentWelcome { display: flex; flex-direction: column; align-items: flex-start; padding: 25px 3px; }
-.welcomeIcon { color: var(--accent); }
 .agentWelcome h2 { font-size: 18px; font-weight: 550; margin: 20px 0 9px; }
 .agentWelcome p { margin: 0; color: var(--muted); line-height: 1.8; font-size: 12px; }
-.suggestions { margin-top: 29px; width: 100%; }
-.suggestions > span { display: block; margin-bottom: 11px; color: var(--muted); font-size: 10px; }
-.suggestions p { margin: 8px 0; padding: 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); color: var(--text); font-size: 11px; }
 .message { margin-bottom: 18px; font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
 .message > strong { font-weight: 550; font-size: 11px; }
 .message > p { white-space: pre-wrap; margin: 5px 0; }
 .message > small { font-size: 9px; }
 .userMessage { padding: 12px 13px; border-radius: 10px; background: var(--raised); }
-.planCard { border: 1px solid var(--border); border-radius: 8px; padding: 11px 12px; margin-bottom: 18px; font-size: 11px; }
-.planCard ol { padding: 0; margin: 9px 0 0; list-style: none; }
-.planCard li { display: flex; gap: 9px; color: var(--muted); padding: 5px 0; }
-.planCard li[data-state=running] { color: var(--text); }
-.planCard li[data-state=done] > span { color: var(--accent); }
 .operationCard, .reviewCard { margin: 0 0 12px; padding: 12px; }
 .cardTitle { display: flex; gap: 7px; align-items: center; font-size: 11px; }
 .cardTitle strong { font-weight: 600; }
@@ -115,8 +89,6 @@
 .command { padding: 9px 0 0; margin: 0; font-size: 11px; }
 .outputTail { max-height: 115px; margin: 9px 0 0; color: var(--muted); font-size: 10px !important; overflow: auto; }
 .cardActions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 7px; margin-top: 11px; }
-.cardActions button { padding: 6px 9px; border: 1px solid var(--border); font-size: 10px; }
-.cardActions .primary { font-size: 10px; padding: 6px 10px !important; }
 .reviewCard > small { display: block; margin-top: 7px; font-size: 10px; }
 .reviewCommand { margin-top: 10px; padding: 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--canvas); }
 .reviewCommand small { color: var(--muted); font-size: 10px; }
@@ -126,21 +98,6 @@
 .agentTerminalLink { display: flex !important; justify-content: flex-start !important; width: 100%; padding: 9px !important; font-size: 11px; margin-bottom: 15px; color: var(--muted) !important; }
 .agentTerminalLink > svg:last-child { margin-left: auto; }
 .pendingInput { width: 100%; padding: 10px !important; border: 1px solid var(--accent) !important; color: var(--accent) !important; margin-bottom: 12px; font-size: 11px; }
-.textButton { color: var(--accent) !important; font-size: 11px; padding: 6px 0 !important; }
-.composerWrap { flex: none; padding: 8px 12px 10px; }
-.composer { position: relative; border: 1px solid var(--border); border-radius: 16px; padding: 11px; background: var(--raised); box-shadow: var(--shadow-1); }
-.composer:focus-within { border-color: var(--muted); }
-.composer textarea { display: block; width: 100%; min-height: 66px; max-height: 180px; resize: none; padding: 3px 2px 6px; border: 0 !important; background: transparent !important; color: var(--text); font-size: 13px; line-height: 1.7; }
-.composer textarea::placeholder { color: var(--muted); }
-.composerTools { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
-.attachControl { flex: none; }
-.attachControl > button { padding: 4px; color: var(--muted); }
-.configureModel { color: var(--muted) !important; font-size: 10px; padding: 5px; }
-.sendButton { margin-left: auto; width: 30px; height: 30px; flex: none; border-radius: 50% !important; background: var(--text) !important; color: var(--canvas) !important; padding: 0; }
-.sendButton:disabled { background: var(--border-strong) !important; opacity: .7; }
-.attachments { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
-.attachments > span { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; font-size: 10px; background: var(--panel); }
-.attachments button { padding: 1px; }
 .scrim { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; background: var(--scrim); padding: 24px; }
 .dialog { display: flex; flex-direction: column; gap: 13px; width: min(510px, 100%); max-height: 90vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-3); padding: 24px; }
 .dialog h2 { margin: 0; font-size: 18px; font-weight: 550; }
@@ -151,19 +108,6 @@
 .dialogHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .dialogHead button { padding: 4px; }
 .dialogActions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 3px; }
-.dialogActions button { border: 1px solid var(--border); padding: 8px 14px; font-size: 12px; }
-.hostDialog { overflow: hidden; }
-.hostDialog > .dialogHead, .hostDialog > .dialogActions { flex: none; }
-.hostBody { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 13px; }
-.hostBody > * { flex: none; }
-.hostFields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 13px; }
-.testHostButton { margin-right: auto; }
-.formRow { display: flex; gap: 10px; }
-.formRow label:first-child { width: 100px; }
-.formRow label:last-child { flex: 1; }
-.privateKeyField { display: flex; gap: 8px; min-width: 0; margin-top: 7px; }
-.privateKeyField input { flex: 1; min-width: 0; }
-.privateKeyField button { flex: none; padding: 8px 10px; border: 1px solid var(--border); font-size: 12px; }
 .notice { padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--canvas); font-size: 11px !important; color: var(--muted); line-height: 1.7; }
 .note { color: var(--muted); font-size: 11px; line-height: 1.7; }
 .fingerprint { display: block; padding: 12px; background: var(--canvas); border-radius: 6px; overflow-wrap: anywhere; font-size: 12px; }
@@ -172,7 +116,6 @@
 .pageHead h2 { font-size: 19px; font-weight: 550; margin: 7px 0 0; overflow-wrap: anywhere; }
 .pathRow { display: flex; gap: 7px; }
 .pathRow input { flex: 1; min-width: 0; font-size: 12px; }
-.pathRow button { padding: 8px; border: 1px solid var(--border); }
 .fileTable { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-top: 18px; }
 .fileHeader, .fileRow { display: flex !important; justify-content: space-between !important; width: 100%; padding: 12px !important; font-size: 11px; }
 .fileHeader { background: var(--raised); color: var(--muted); }

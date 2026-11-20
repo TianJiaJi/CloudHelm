@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { MessagePart, ReferenceBody } from '@cloudhelm/contracts';
 import { copyText } from './clipboard.js';
 import { Icon } from './ui-helpers.js';
+import { Button } from './ui/index.js';
 import styles from './message-editor.module.css';
 
 type ReferencePart = Extract<MessagePart, { type: 'reference' }>;
@@ -47,10 +48,10 @@ export function ReferencePreview({ part, editable = false, close, save, remove }
       {body?.summary && <div className={styles.previewTabs}><button type="button" aria-pressed={!original} onClick={() => setOriginal(false)}>实际发送的总结</button><button type="button" aria-pressed={original} onClick={() => setOriginal(true)}>原文</button></div>}
       {body && <div className={styles.previewBody}>{canEdit ? <textarea aria-label="编辑粘贴内容" value={text} onChange={(event) => setText(event.target.value)} /> : <pre tabIndex={0}>{shown}</pre>}</div>}
       <footer className={styles.previewActions}>
-        <div><button className={styles.secondaryButton} type="button" disabled={!body} onClick={() => void copyText(canEdit ? text : shown ?? '').then(setCopied)}><Icon name="copy" size={13} />{copied ? '已复制' : '复制内容'}</button>
+        <div><Button disabled={!body} onClick={() => void copyText(canEdit ? text : shown ?? '').then(setCopied)}><Icon name="copy" size={13} />{copied ? '已复制' : '复制内容'}</Button>
           {remove && <button className={styles.removeButton} type="button" onClick={remove}>移除引用</button>}</div>
-        <div><button className={styles.secondaryButton} type="button" onClick={close}>关闭</button>
-          {canEdit && <button className={styles.primaryButton} type="button" disabled={!body} onClick={() => { save?.(text); close(); }}>保存</button>}</div>
+        <div><Button onClick={close}>关闭</Button>
+          {canEdit && <Button variant="primary" disabled={!body} onClick={() => { save?.(text); close(); }}>保存</Button>}</div>
       </footer>
     </div>
   </div>, document.body);

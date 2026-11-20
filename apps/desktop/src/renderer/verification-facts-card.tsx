@@ -5,7 +5,7 @@ import { capture, Icon } from './ui-helpers.js';
 import { useUi } from './store.js';
 import { copyEntries } from './clipboard.js';
 import { openContextMenu } from './context-menu.js';
-import { Card } from './ui/index.js';
+import { Button, Card } from './ui/index.js';
 import styles from './ui.module.css';
 
 const operationStatus: Readonly<Record<string, string>> = { succeeded: '执行返回', failed: '执行失败', denied: '已拦截', unknown: '结果未知',
@@ -35,9 +35,9 @@ export function VerificationFactsCard({ conversation, value, report }: {
     <VerificationChecks value={value} />
     {conversation.status === 'answered' && facts.registration === 'automatic' && conversation.verificationRound?.closed
       && conversation.verificationRound.id === facts.roundId && <div className={styles.cardActions}>
-        <button title="只整理已有记录，不运行命令、不调用模型" disabled={rebuilding}
-          onClick={() => void rebuild()}>{rebuilding ? '正在整理已有记录…' : '仅按已有记录重新整理'}</button>
-        <button onClick={() => useUi.getState().openReport(conversation.id)}>查看完整记录</button>
+        <Button size="compact" title="只整理已有记录，不运行命令、不调用模型" disabled={rebuilding}
+          onClick={() => void rebuild()}>{rebuilding ? '正在整理已有记录…' : '仅按已有记录重新整理'}</Button>
+        <Button size="compact" onClick={() => useUi.getState().openReport(conversation.id)}>查看完整记录</Button>
       </div>}
   </Card>;
 }

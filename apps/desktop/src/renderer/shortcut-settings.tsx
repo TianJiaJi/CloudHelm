@@ -4,6 +4,7 @@ import {
   bindingConflict, bindingFromEvent, bindingLabel, isMacPlatform, type ShortcutActionId, type ShortcutGroup
 } from './shortcuts.js';
 import { useShortcuts } from './shortcut-store.js';
+import { Button } from './ui/index.js';
 import styles from './model-settings.module.css';
 
 const scopeLabel: Record<'global' | 'terminal' | 'fixed', string> = { global: '全局', terminal: '仅终端', fixed: '输入框' };
@@ -104,12 +105,12 @@ export function ShortcutSettings({ report }: { report(value: string): void }): R
             <small className={styles.shortcutScope}>{scopeLabel[action.scope]}</small>
             {bindingCell(action.id, fixed)}
             <span className={styles.shortcutActions}>
-              {recording === action.id ? <button type="button" className={styles.button}
-                onClick={() => { setRecording(null); setRecordError(''); }}>取消</button>
+              {recording === action.id ? <Button size="compact"
+                onClick={() => { setRecording(null); setRecordError(''); }}>取消</Button>
                 : !fixed && <>
-                  <button type="button" className={styles.button} onClick={() => { setRecording(action.id); setRecordError(''); }}>更改</button>
-                  <button type="button" className={styles.button} onClick={() => void persist(() => useShortcuts.getState().setBinding(action.id, undefined))}>清除</button>
-                  <button type="button" className={styles.button} onClick={() => void persist(() => useShortcuts.getState().resetBinding(action.id))}>重置</button>
+                  <Button size="compact" onClick={() => { setRecording(action.id); setRecordError(''); }}>更改</Button>
+                  <Button size="compact" onClick={() => void persist(() => useShortcuts.getState().setBinding(action.id, undefined))}>清除</Button>
+                  <Button size="compact" onClick={() => void persist(() => useShortcuts.getState().resetBinding(action.id))}>重置</Button>
                 </>}
             </span>
           </div>;
@@ -118,11 +119,11 @@ export function ShortcutSettings({ report }: { report(value: string): void }): R
       </div>
       {recordError && <p className={styles.shortcutError} role="alert">{recordError}</p>}
       <div className={styles.shortcutResetRow}>
-        <button type="button" className={styles.button} disabled={!!query || group === 'editing'}
+        <Button disabled={!!query || group === 'editing'}
           onClick={() => { for (const action of BINDABLE_ACTIONS.filter((item) => item.group === group)) {
             void persist(() => useShortcuts.getState().resetBinding(action.id));
-          } }}>恢复本组默认</button>
-        <button type="button" className={styles.button} onClick={() => void persist(() => useShortcuts.getState().resetAll())}>恢复全部默认</button>
+          } }}>恢复本组默认</Button>
+        <Button onClick={() => void persist(() => useShortcuts.getState().resetAll())}>恢复全部默认</Button>
       </div>
       <div className={styles.reviewExplanation}><h3>使用说明</h3>
         <p>输入框内的复制、粘贴、撤销等编辑键位由系统处理，不参与自定义；终端内只响应“仅终端”动作，避免抢占 shell 按键，Ctrl+C 继续用于中断命令或停止 AI。</p>

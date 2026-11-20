@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { HostConnectionTestResult, HostDraft, HostTestFailure, HostCredentialsPatch } from '@cloudhelm/contracts';
 import { errorMessage } from './error-presentation.js';
+import { Button } from './ui/index.js';
 import styles from './ui.module.css';
 
 const failures: Record<HostTestFailure, string> = {
@@ -55,7 +56,7 @@ export function HostConnectionTestStatus({ testing, result, confirm, dismiss }: 
     {result.expectedFingerprint && <><p>原指纹</p><code className={styles.fingerprint}>{result.expectedFingerprint}</code></>}
     <p>本次指纹</p><code className={styles.fingerprint}>{result.fingerprint}</code>
     <p>请通过可信渠道核对。一致后仅允许本次测试继续，不会保存主机或永久信任记录。</p>
-    <div className={styles.dialogActions}><button type="button" onClick={dismiss}>取消核对</button>
-      <button type="button" onClick={() => confirm(result.requestId)}>已核对，继续测试</button></div>
+    <div className={styles.dialogActions}><Button onClick={dismiss}>取消核对</Button>
+      <Button onClick={() => confirm(result.requestId)}>已核对，继续测试</Button></div>
   </div>;
 }

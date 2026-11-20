@@ -4,8 +4,6 @@
 .symbol { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; color: var(--warning); background: var(--warningBg); font-size: 21px; }
 .dialog h2 { margin: 16px 0 10px; font-size: 19px; font-weight: 600; }
 .dialog p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.8; }
-.dialog button { border: 1px solid var(--border); border-radius: 8px; color: inherit; background: var(--raised); padding: 8px 13px; font-size: 13px; }
-.dialog button:hover { background: var(--accentSoft); }
 .dialog button:disabled { opacity: .55; cursor: wait; }
 .dialog .actionError { margin-top: 16px; }
 .dialog .target { margin-top: 10px; font-size: 12px; overflow-wrap: anywhere; max-height: 80px; overflow: auto; }
@@ -14,8 +12,5 @@
 .details { margin-top: 19px; font-size: 12px; color: var(--muted); }
 .details summary { cursor: pointer; width: fit-content; }
 .details pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--accentSoft); border-radius: 8px; padding: 12px; max-height: 160px; overflow: auto; line-height: 1.7; user-select: text; }
-.details button { padding: 5px 9px; font-size: 12px; }
 .details span { margin-left: 8px; }
 .actions { margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px; }
-.dialog .primary { background: var(--accent); color: var(--accentText); border-color: var(--accent); }
-.dialog .primary:hover { background: var(--accent-press); }

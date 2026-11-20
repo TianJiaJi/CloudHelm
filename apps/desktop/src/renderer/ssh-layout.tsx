@@ -14,7 +14,7 @@ import { MenuEntryList, openContextMenu, type ContextMenuEntry } from './context
 import { LayoutSwitcher } from './layout-switcher.js';
 import { conversationHostKey, hostLineage } from './host-lineage.js';
 import type { LayoutProps } from './layout-props.js';
-import { Badge, PanelSurface, StatusDot } from './ui/index.js';
+import { Badge, Button, PanelSurface, StatusDot } from './ui/index.js';
 import styles from './ui.module.css';
 
 /**
@@ -94,7 +94,7 @@ export function SshLayout({ connecting, hiddenInputs, appVersion, navigate, conn
         </div> : activeTab?.kind === 'files' ? <FilesPage key={activeTab.id} hostId={activeTab.hostId} host={hostName(activeTab.hostId)} report={setError} />
           : activeTab?.kind === 'report' && snapshot?.conversations.find((item) => item.id === activeTab.conversationId) ? <ReportPage conversation={snapshot.conversations.find((item) => item.id === activeTab.conversationId)!} operations={snapshot.operations.filter((item) => item.taskId === activeTab.conversationId)} report={setError} />
             : <div className={styles.empty}><span className={styles.emptyGlyph}><Icon name="terminal" size={36} /></span><h1>{activeHost ? activeHost.label : '你的服务器，随时连接'}</h1><p>{activeHost ? '点击连接，打开真实 SSH 终端。右侧对话仍限定在这台主机。' : '从左侧选择主机，开始 SSH 会话。AI 助手会一直在旁边。'}</p>
-              <button className={styles.primary} onClick={() => activeHost ? void connectHost(activeHost.id) : openHostDialog()}>{activeHost ? '连接主机' : '添加主机'}</button></div>}
+              <Button variant="primary" onClick={() => activeHost ? void connectHost(activeHost.id) : openHostDialog()}>{activeHost ? '连接主机' : '添加主机'}</Button></div>}
     </PanelSurface>
     {agentPanelOpen && !settingsOpen && <><PanelResizer /><PanelSurface as="aside" className={styles.agentPanel} style={{ width: ui.agentPanelWidth }}>
       {snapshot ? <PanelChrome snapshot={snapshot} host={activeHost} conversation={conversation}>

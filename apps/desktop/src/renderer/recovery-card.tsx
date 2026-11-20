@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { operationNeedsVerification, operationOutcomeResolvable, sharesHostRiskDomain, type AppSnapshot, type OperationView, type TaskView } from '@cloudhelm/contracts';
-import { Card } from './ui/index.js';
+import { Button, Card } from './ui/index.js';
 import styles from './ui.module.css';
 
 const RISK_EXPLANATION = '用户在恢复卡明确知晓原远端操作结果未知且可能继续运行，自愿接管此项未决风险。';
@@ -45,13 +45,13 @@ function RecoveryItem({ operation, snapshot, conversation, current, remaining, h
       {operation.hostId !== hostId && <p>原配置：{snapshot.hosts?.find((item) => item.id === operation.hostId)?.label ?? operation.hostId}。风险关联不代表当前连接已核验原操作。</p>}
       <pre className={styles.command}>{operation.preview}</pre>
       {operation.outputTail && <pre className={styles.outputTail}>{operation.outputTail.slice(-1600)}</pre>}
-      {resolvable && <button disabled={busy} onClick={() => void readLog()}>{log ? '继续读取脱敏日志' : '读取脱敏日志'}</button>}
+      {resolvable && <Button size="compact" disabled={busy} onClick={() => void readLog()}>{log ? '继续读取脱敏日志' : '读取脱敏日志'}</Button>}
       {log && <pre className={styles.outputTail}>{log.slice(-16_384)}</pre>}
       {log && !more && <small>日志已读完；输出本身不能证明命令退出或没有副作用。</small>}
     </details>
     {resolvable ? <div className={styles.cardActions}>
-      <button disabled={busy} onClick={() => setDismissed(true)}>拒绝，保持阻断</button>
-      <button disabled={busy} onClick={() => void acceptRisk()}>知晓风险，仅解除这条写入阻断</button>
+      <Button size="compact" disabled={busy} onClick={() => setDismissed(true)}>拒绝，保持阻断</Button>
+      <Button size="compact" disabled={busy} onClick={() => void acceptRisk()}>知晓风险，仅解除这条写入阻断</Button>
     </div> : <p>原操作仍在运行或审核中，不能解除；请等待真实退出。</p>}
     <small>风险确认不等于继续聊天。全部阻断项解除后，请点击对话顶部的「继续 AI」或发送消息；AI 不会自动重放原命令，新的命令仍须审核。</small>
   </Card>;

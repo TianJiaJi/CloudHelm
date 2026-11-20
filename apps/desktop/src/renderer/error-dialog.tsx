@@ -4,6 +4,7 @@ import { inlineError } from './error-presentation.js';
 import { errorControlAction } from './error-control-action.js';
 import { useUi } from './store.js';
 import { Icon } from './ui-helpers.js';
+import { Button } from './ui/index.js';
 import styles from './error-dialog.module.css';
 
 export function ErrorDialog({ notice, close, configureModel }: {
@@ -44,10 +45,10 @@ export function ErrorDialog({ notice, close, configureModel }: {
     <h2 id="error-title">{notice.title}</h2><p id="error-description">{control?.description ?? notice.description}</p>
     {control && <p className={styles.target}>关联对话：{control.target}</p>}
     <details className={styles.details}><summary>查看技术详情</summary><pre>{notice.details}</pre>
-      <button type="button" onClick={() => void copyDetails()}>复制脱敏详情</button><span role="status">{copyStatus}</span></details>
+      <Button size="compact" onClick={() => void copyDetails()}>复制脱敏详情</Button><span role="status">{copyStatus}</span></details>
     {actionError && <p role="alert" className={styles.actionError}>{actionError}</p>}
-    <div className={styles.actions}><button type="button" autoFocus={!notice.action && !control} disabled={busy} onClick={close}>{notice.action || control ? '稍后' : '知道了'}</button>
-      {control && <button type="button" className={styles.primary} disabled={busy} autoFocus onClick={() => void stopExecution()}>{busy ? '正在停止…' : control.label}</button>}
-      {notice.action === 'model-settings' && <button type="button" className={styles.primary} autoFocus onClick={() => { close(); configureModel(); }}>去配置模型</button>}</div>
+    <div className={styles.actions}><Button autoFocus={!notice.action && !control} disabled={busy} onClick={close}>{notice.action || control ? '稍后' : '知道了'}</Button>
+      {control && <Button variant="primary" disabled={busy} autoFocus onClick={() => void stopExecution()}>{busy ? '正在停止…' : control.label}</Button>}
+      {notice.action === 'model-settings' && <Button variant="primary" autoFocus onClick={() => { close(); configureModel(); }}>去配置模型</Button>}</div>
   </dialog>;
 }

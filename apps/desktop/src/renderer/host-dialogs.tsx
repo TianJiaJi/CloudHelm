@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { HostView, ReviewMode } from '@cloudhelm/contracts';
 import { capture, Icon } from './ui-helpers.js';
+import { Button } from './ui/index.js';
 export { HostDialog } from './host-editor.js';
 import styles from './ui.module.css';
 
@@ -24,7 +25,7 @@ export function SafetyDialog({ host, close, report }: DialogProps & { host: Host
     <label>禁止 AI 读取的路径（每行一个绝对路径）<textarea rows={4} value={readPaths} onChange={(event) => setReadPaths(event.target.value)} placeholder={'/srv/private\n/home/user/.ssh'} /></label>
     <label>禁止 AI 写入的路径（每行一个绝对路径）<textarea rows={4} value={writePaths} onChange={(event) => setWritePaths(event.target.value)} placeholder={'/srv/backup\n/etc/ssh'} /></label>
     <p>修改安全设置后，尚未执行的批准将失效。你手动输入的命令不受 AI 命令审核约束。</p>
-    <div className={styles.dialogActions}><button type="button" onClick={close}>取消</button><button className={styles.primary}>保存</button></div>
+    <div className={styles.dialogActions}><Button onClick={close}>取消</Button><Button variant="primary" type="submit">保存</Button></div>
   </form></div>;
 }
 
@@ -34,8 +35,8 @@ export function ConfirmDialog({ title, children, confirmLabel, close, action, re
   const [busy, setBusy] = useState(false);
   return <div className={styles.scrim}><div className={styles.dialog} role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
     <h2 id="confirm-title">{title}</h2><p>{children}</p>
-    <div className={styles.dialogActions}><button onClick={close} disabled={busy}>取消</button><button className={styles.primary} disabled={busy} onClick={() => {
+    <div className={styles.dialogActions}><Button onClick={close} disabled={busy}>取消</Button><Button variant="primary" disabled={busy} onClick={() => {
       setBusy(true); void capture(async () => { await action(); close(); }, report).finally(() => setBusy(false));
-    }}>{confirmLabel}</button></div>
+    }}>{confirmLabel}</Button></div>
   </div></div>;
 }
