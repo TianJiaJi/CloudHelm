@@ -28,7 +28,7 @@ import { interruptionContext } from './task-input-context.js';
 import { taskContextSnapshot } from './task-context.js';
 import { TaskProgress } from './task-progress.js';
 import { observeProgressTools } from './task-progress-observer.js';
-import { RequestBudgetError, PrivilegeError, privilegeGuidance, operationIntentKey, safeDiagnostic, serialCall, type ConversationSession, type SessionStorage, type DiagnosticEvent, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
+import { RequestBudgetError, PrivilegeError, privilegeGuidance, operationIntentKey, safeDiagnostic, type ConversationSession, type SessionStorage, type DiagnosticEvent, redactOutput, type OperationAudit, type OperationResult, type OperationExecutor, type OperationScope, type ProposedOperation, type SafetyDecision, type ScriptInspector } from '@cloudhelm/core';
 import type { LocalScope, OperationView, InterruptionSource, UserInterruption, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
@@ -40,6 +40,7 @@ import { createRemoteTools } from './remote-tools.js';
 import { createTaskPrompt } from './task-prompt.js';
 import { createTaskApprovals } from './task-approval.js';
 import { runOperationPipeline } from './operation-retry.js';
+import { OperationScheduler } from './operation-scheduler.js';
 import { reviewCoordination } from './review-coordination.js';
 import { reviewDeniedOperation } from './task-denial-review.js';
 import { WorkJournal } from './work-journal.js';
@@ -79,9 +80,10 @@ export class TaskRunner {
   private status: TaskStatus = 'draft';
   private resumeReason?: ResumeReason;
   /** One remote operation at a time: a queued call re-checks activity after the previous finishes. */
-  private readonly runOperation = serialCall((gate: SafetyGate, operation: ProposedOperation,
-    signal: AbortSignal | undefined, hostLabel: string, manualReview: boolean = false, onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']) =>
-    this.background.run(operation, signal, () => this.performOperation(gate, operation, signal, hostLabel, manualReview, onFileInspection)));
+  private readonly scheduler = new OperationScheduler();
+  private readonly runOperation = (gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string, manualReview = false,
+    onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']) => this.scheduler.run({ taskId: this.task.id, terminalId: 'conversation' },
+    operation, this.analyzer, () => this.background.run(operation, signal, () => this.performOperation(gate, operation, signal, hostLabel, manualReview, onFileInspection)));
 
   constructor(
     readonly task: TaskView,
