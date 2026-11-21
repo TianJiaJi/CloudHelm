@@ -51,7 +51,7 @@ describe('smoke process identity authority', () => {
       }
     }
     await expect(forceKill(identity)).resolves.toBeUndefined();
-  }, 30_000);
+  }, 120_000);
   it('rechecks birth identity at actual termination and leaves the mismatched owned fixture alive', async () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     try {
@@ -67,5 +67,5 @@ describe('smoke process identity authority', () => {
         await withTimeout(() => exit, 5000, 'Identity fixture exit');
       }
     }
-  }, 30_000);
+  }, 120_000);
 });

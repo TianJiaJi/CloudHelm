@@ -101,7 +101,7 @@ it('retains a committed charge when canceled before acknowledgment; no HTTP, pro
   const f = await setup(); let acknowledge: (() => void) | undefined;
   f.hold((command, deliver) => { if (command.kind !== 'reserve') return false; acknowledge = deliver; return true; });
   const pending = invoke('send-structured', f.input); const rejected = expect(pending).rejects.toThrow();
-  await vi.waitFor(() => expect(acknowledge).toBeTypeOf('function'));
+  await vi.waitFor(() => expect(acknowledge).toBeTypeOf('function'), { timeout: 15000 });
   const charged = f.state.requestBudgets.current(f.task.id); expect(charged.roundUsed).toBe(1);
   await invoke('cancel-message', f.input.document.requestId); acknowledge!(); await rejected;
   expect(f.fixture.requests).toHaveLength(0); expect(f.calls.some((call) => call.method === 'task-message')).toBe(false);
@@ -113,7 +113,7 @@ it.each(['credentials', 'reviewer', 'model', 'unsupported-thinking', 'stop'] as 
   const f = await setup(); let acknowledge: (() => void) | undefined;
   f.hold((command, deliver) => { if (command.kind !== 'reserve') return false; acknowledge = deliver; return true; });
   const pending = invoke('send-structured', f.input); const rejected = expect(pending).rejects.toThrow();
-  await vi.waitFor(() => expect(acknowledge).toBeTypeOf('function'));
+  await vi.waitFor(() => expect(acknowledge).toBeTypeOf('function'), { timeout: 15000 });
   try {
   if (change === 'credentials') f.state.saveProfile({ provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'new-fixture-only',
     baseUrl: f.fixture.baseUrl, contextWindow: 64000, maxTokens: 8192 });

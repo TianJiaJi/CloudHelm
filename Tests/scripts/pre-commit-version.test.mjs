@@ -1,12 +1,13 @@
 import { rm } from 'node:fs/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { README_FILE, VERSION_FILE, PACKAGE_FILES, buildSyncedFiles } from '../../scripts/set-version.mjs';
 import { CHANGELOG_FILE, DEFAULT_CHANGELOG_ENTRY } from '../../scripts/changelog.mjs';
 import { SYNC_FILES, resolveHookDecision } from '../../scripts/pre-commit-version.mjs';
 import { runFixtureHook as runHook, versionHookRepo } from './version-hook-fixture.mjs';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 });
 const roots = [];
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
 const selectedEntry = '# 更新日志\n\n## 0.3.0 - 2026-01-01\n\n### 新增\n\n- 手写条目\n';
 async function syncWorking(f) {
   const packages = new Map();

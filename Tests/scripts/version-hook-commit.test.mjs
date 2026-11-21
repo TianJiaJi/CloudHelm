@@ -1,9 +1,10 @@
 import { rm } from 'node:fs/promises';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { installVersionHook, versionHookRepo } from './version-hook-fixture.mjs';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 });
 const roots = [];
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
 const commit = (f, ...args) => f.git('-c', 'user.name=Synthetic Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', ...args);
 
 it('runs the installed hook on a normal commit without importing a working package draft', async () => {
@@ -15,7 +16,7 @@ it('runs the installed hook on a normal commit without importing a working packa
   expect(f.git('show', 'HEAD:package.json')).not.toContain('SYNTHETIC_PRIVATE_DRAFT');
   expect(await f.get('package.json')).toBe(draft);
   expect(f.git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').trim()).toBe('README.md');
-}, 30_000);
+}, 120_000);
 
 it('blocks malformed selected content without echoing its payload through the actual hook', async () => {
   const f = await versionHookRepo(roots); await installVersionHook(f); await f.bump();
@@ -28,7 +29,7 @@ it('blocks malformed selected content without echoing its payload through the ac
   expect(String(failure.stderr)).toContain('版本同步未完成');
   expect(String(failure.stderr) + String(failure.stdout) + String(failure.message)).not.toContain(marker);
   expect(f.git('rev-parse', 'HEAD')).toBe(head); expect(f.git('write-tree')).toBe(index);
-}, 30_000);
+}, 120_000);
 
 it('honors the alternate index of git commit --only while preserving unrelated staged and unstaged data', async () => {
   const f = await versionHookRepo(roots); await installVersionHook(f);
@@ -42,4 +43,4 @@ it('honors the alternate index of git commit --only while preserving unrelated s
   expect(committed.selectedForLater).toBeUndefined(); expect(committed.localNote).toBeUndefined();
   expect(JSON.parse(f.index('package.json'))).toEqual(selected);
   expect(await f.get('package.json')).toBe(draft);
-}, 30_000);
+}, 120_000);

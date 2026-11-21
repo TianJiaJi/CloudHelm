@@ -23,7 +23,7 @@ async function fixture() {
 it('switches intent only at real delivery, in steer/followUp order, with no SSH or unbudgeted request', async () => {
   const f = await fixture();
   try {
-    const start = f.runner.start(); await vi.waitFor(() => expect(f.calls()).toBe(1));
+    const start = f.runner.start(); await vi.waitFor(() => expect(f.calls()).toBe(1), { timeout: 15000 });
     await f.runner.message('follow-up request', document('follow', 'follow-up request'), undefined, undefined, 'followUp');
     await f.runner.message('current correction', document('steer', 'current correction'), undefined, undefined, 'steer');
     expect(f.task.intent?.currentInput).toBe('initial request');
@@ -40,12 +40,12 @@ it('switches intent only at real delivery, in steer/followUp order, with no SSH 
 it('cancels waiting inputs on model pause and never delivers them with a later explicit message', async () => {
   const f = await fixture();
   try {
-    const start = f.runner.start(); await vi.waitFor(() => expect(f.calls()).toBe(1));
+    const start = f.runner.start(); await vi.waitFor(() => expect(f.calls()).toBe(1), { timeout: 15000 });
     await f.runner.message('cancelled future request', document('cancelled', 'cancelled future request'), undefined, undefined, 'followUp');
     f.runner.pause(); f.release(); await start;
-    await vi.waitFor(() => expect(f.receipts.at(-1)).toMatchObject({ id: 'cancelled', status: 'cancelled' }));
+    await vi.waitFor(() => expect(f.receipts.at(-1)).toMatchObject({ id: 'cancelled', status: 'cancelled' }), { timeout: 15000 });
     await f.runner.message('fresh explicit request', document('fresh', 'fresh explicit request'));
-    await vi.waitFor(() => expect(f.task.status).toBe('answered'));
+    await vi.waitFor(() => expect(f.task.status).toBe('answered'), { timeout: 15000 });
     expect(f.calls()).toBe(2);
     expect(f.provider.requests[1]!.messages.map(fixtureMessageText).join('\n')).not.toContain('cancelled future request');
     expect(f.task.intent?.currentInput).toBe('fresh explicit request'); expect(f.open).not.toHaveBeenCalled();

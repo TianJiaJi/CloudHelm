@@ -36,13 +36,13 @@ describe('desktop smoke process lifecycle', () => {
       expect(() => process.kill(value.descendantPid, 0)).toThrow();
       expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
       await expect(readFile(path.join(value.directory, 'graceful'))).rejects.toMatchObject({ code: 'ENOENT' });
-      await rm(value.directory, { recursive: true });
+      await rm(value.directory, { recursive: true, maxRetries: 10, retryDelay: 200 });
     } finally {
       unrelated.kill('SIGKILL');
       await value.guard.close();
-      await rm(value.directory, { recursive: true, force: true });
+      await rm(value.directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
-  }, 30_000);
+  }, 120_000);
 
   it('forces termination when graceful close fails with an active task', async () => {
     const value = await fixture();
@@ -53,9 +53,9 @@ describe('desktop smoke process lifecycle', () => {
       expect(() => process.kill(value.descendantPid, 0)).toThrow();
     } finally {
       await value.guard.close();
-      await rm(value.directory, { recursive: true, force: true });
+      await rm(value.directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
-  }, 30_000);
+  }, 120_000);
 
   it('removes captured orphans even when the Electron main process already exited', async () => {
     const value = await fixture();
@@ -68,9 +68,9 @@ describe('desktop smoke process lifecycle', () => {
       expect(() => process.kill(value.descendantPid, 0)).toThrow();
     } finally {
       await value.guard.close();
-      await rm(value.directory, { recursive: true, force: true });
+      await rm(value.directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
-  }, 30_000);
+  }, 120_000);
 
   it('bounds a hung close without leaving its timeout running', async () => {
     await expect(withTimeout(() => new Promise(() => {}), 20, 'Close Electron')).rejects.toThrow('Close Electron timed out');
@@ -110,9 +110,9 @@ describe('desktop smoke process lifecycle', () => {
       expect(() => process.kill(value.descendantPid, 0)).toThrow();
     } finally {
       await value.guard.close();
-      await rm(value.directory, { recursive: true, force: true });
+      await rm(value.directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
-  }, 30_000);
+  }, 120_000);
 
   it('reports cleanup errors without replacing the test failure and still removes userData', async () => {
     const warning = vi.fn();

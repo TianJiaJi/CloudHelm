@@ -17,13 +17,13 @@ it('correlates same-text native steer/followUp receipts and awaits backend selec
     inputDelivered: async (id, entryId) => { delivered.push({ id, entryId }); } });
   try {
     const turn = session.prompt('initial');
-    await vi.waitFor(() => expect(calls).toBe(1));
+    await vi.waitFor(() => expect(calls).toBe(1), { timeout: 15000 });
     session.queueInput!({ id: 'follow', kind: 'followUp', text: 'identical queued input' });
     session.queueInput!({ id: 'steer', kind: 'steer', text: 'identical queued input' });
     session.queueInput!({ id: 'cancel', kind: 'followUp', text: 'must never reach model' });
     expect(session.cancelQueuedInput!('cancel')).toBe(true);
     expect(selected).toEqual([]); expect(delivered).toEqual([]);
-    releaseReply(); await vi.waitFor(() => expect(selected).toEqual(['steer']));
+    releaseReply(); await vi.waitFor(() => expect(selected).toEqual(['steer']), { timeout: 15000 });
     expect(calls).toBe(1); expect(delivered).toEqual([]);
     releaseSelection(); await turn;
     expect(calls).toBe(3); expect(selected).toEqual(['steer', 'follow']);

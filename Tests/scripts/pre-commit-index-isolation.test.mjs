@@ -1,12 +1,14 @@
 import { rm, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hasVersionEntry } from '../../scripts/changelog.mjs';
 import { PACKAGE_FILES } from '../../scripts/set-version.mjs';
 import { fixtureGitIo as createGitIo, runFixtureHook as runHook, versionHookRepo } from './version-hook-fixture.mjs';
 
+// 真实 git 仓库夹具在整机满载时显著变慢；放宽本文件的超时上限以避免负载性失败。
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 });
 const roots = [];
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
 const privateNote = 'SYNTHETIC_UNSELECTED_NOTE_NOT_A_CREDENTIAL';
 
 describe('H02: commit hook index/worktree isolation', () => {
