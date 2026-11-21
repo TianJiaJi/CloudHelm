@@ -74,7 +74,7 @@
 | P0-5 | 审批续期 | 软到期提醒（10min）+ 续期（累计 ≤5 次 × 10min，硬截止首发 +60min）+ 硬上限取消；计时权收敛 worker server 单点；`decide-approval` 过期校验改用 hardExpiresAt（软过期后仍可批准） | 完成（gate 删双计时器与软过期后置改判；reminder/续期 RPC/decide 状态机测试进 CI：续期重武装提醒、五次上限+硬截止取消、软提醒不取消且事后仍可批准、软过期后批准放行） |
 | P0-6 | 输入提醒 | TTL 过期/投递失败推送式主动提醒（静默窗口无用户交互事件必达 renderer）+ 未聚焦系统通知 | 完成（publish 链核查通过；推送断言测试进 CI：worker fake-timer 到期即提交 expired 回执、Main commitInput 同步发布快照；未聚焦 expired/failed 系统通知，recovered 路径不经通知） |
 | P0-7 | 提示词重写 | 26 工具 description + executionGuidelines 能力说明书化；否定式 <10% 门禁；PROMPT_VERSION → 2026-12.1 | 完成（43 bullet 严格否定清零、门禁测试进 CI；9 文件 21 description + ask_user/codemode/read_selected 同步；锁定短语保留，指南较旧版 +75 字符，<12000/<9400 界保持） |
-| SPIKE-C | Layer C 门控调查 | `edit_file` 收敛 Layer C（推翻覆盖禁令）可行性，时间盒 2-3 天，NO-GO 判据先行 | 待做 |
+| SPIKE-C | Layer C 门控调查 | `edit_file` 收敛 Layer C（推翻覆盖禁令）可行性，时间盒 2-3 天，NO-GO 判据先行 | 完成（**NO-GO**：判据①②③全部成立，备忘录 [SPIKE_C_EDIT_FILE_LAYER_C.md](SPIKE_C_EDIT_FILE_LAYER_C.md)；C 降级不做，痛点由 A+B 承接，S2 大 diff 整文件重写缺口作为 Route A 扩展候选进 Phase 2，估算 1-2 人日） |
 
 **edit_file 收敛三层风险**：A 门面重塑（中风险，Phase 2）——单一 `edit_file` 内部编排 read(hash)→prepare→apply，内部仍是独立 ProposedOperation 逐个过 SafetyGate；B 自愈语义（中低风险，Phase 2 与 A 同批）——hash 冲突自动读当前内容返回模型重生成 diff；C 推翻覆盖禁令（高风险、前置未知）——SPIKE-C 门控。
 
