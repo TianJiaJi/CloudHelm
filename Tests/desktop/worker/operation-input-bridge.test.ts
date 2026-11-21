@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
-import { operationFingerprint, type InputRequest, type ProposedOperation, type RawTerminal } from '@cloudhelm/core';
-import type { SshTransport } from '@cloudhelm/adapters';
+import { BashAnalyzer, type SshTransport } from '@cloudhelm/adapters';
+import { operationFingerprint, suPtyCommand, type InputRequest, type ProposedOperation, type RawTerminal } from '@cloudhelm/core';
 import { OperationInputBridge } from '../../../apps/desktop/src/worker/operation-input-bridge.js';
 
 class FakeTerminal implements RawTerminal {
@@ -29,7 +29,7 @@ class FakeTerminal implements RawTerminal {
   emit(data: string): void { this.listener?.(data); }
 }
 
-function fixture(command = 'sudo apt install docker.io') {
+function fixture(command = 'sudo apt install docker.io', overrides: { privilege?: 'root'; executionChannel?: 'native-pty' } = {}) {
   const channel = new FakeTerminal();
   const terminal = new TerminalManager({ data() {}, state() {} });
   const terminalId = terminal.open('host', channel, 'task');
@@ -39,7 +39,7 @@ function fixture(command = 'sudo apt install docker.io') {
   const ssh = { connectionGeneration: () => generation } as unknown as SshTransport;
   const auto = vi.fn();
   const bridge = new OperationInputBridge(terminal, ssh, coordinator, auto);
-  const operation: ProposedOperation = { id: 'op', kind: 'command', command, scope: {
+  const operation: ProposedOperation = { id: 'op', kind: 'command', command, ...overrides, scope: {
     taskId: 'task', hostId: 'host', cwd: '/', runAs: 'deploy', terminalId,
     terminalGeneration: 1, policyRevision: 1, allowedWorkingRoots: ['/srv'], protectedPaths: [], goal: 'Install service'
   } };
@@ -204,4 +204,56 @@ it('distinguishes sudo -n requiring a password without laundering possible effec
   expect(await f.result).toMatchObject({ authentication: 'required', effects: 'possible', requiresUserAction: false,
     privilege: { code: 'authentication-required', source: 'output-inference', businessCommand: 'unknown' } });
   expect(f.terminal.isAgentOwner(f.terminalId)).toBe(true);
+});
+
+describe('backend-built su wrap with isolated root authentication', () => {
+  const wrap = async (business: string) => {
+    const command = suPtyCommand(await new BashAnalyzer().analyze(business), '/srv');
+    if (command === undefined) throw new Error(`su wrap unavailable for: ${business}`);
+    return command;
+  };
+
+  it('dispatches the wrap verbatim and routes the root password through the su window', async () => {
+    const f = fixture(await wrap('cat /root/test'), { privilege: 'root', executionChannel: 'native-pty' });
+    await f.ready();
+    expect(f.requests).toEqual([]);
+    f.auth();
+    expect(f.requests[0]!).toMatchObject({ kind: 'secret', recipient: 'su', prompt: 'su 身份验证' });
+    expect(await f.coordinator.answer(f.requests[0]!.id, 'root-password')).toBe(true);
+    expect(f.channel.answers).toEqual([{ id: 'challenge-0', answer: 'root-password' }]);
+    expect(f.channel.writes).toEqual([]);
+    f.channel.complete(0);
+    expect((await f.result).status).toBe('succeeded');
+  });
+
+  it('closes the waiting window without a password on cancel and reports the unknown result', async () => {
+    const f = fixture(await wrap('cat /root/test'), { privilege: 'root', executionChannel: 'native-pty' });
+    await f.ready(); f.auth();
+    f.abort.abort();
+    expect(await f.coordinator.answer(f.requests[0]!.id, 'late-root')).toBe(false);
+    expect(f.channel.answers).toEqual([{ id: 'challenge-0', answer: null }]);
+    expect(f.channel.writes).toEqual([]);
+    expect((await f.result).status).toBe('unknown');
+    expect(f.terminal.isAgentOwner(f.terminalId)).toBe(false);
+  });
+
+  it('answers a bounded apt confirmation inside the su session', async () => {
+    const f = fixture(await wrap('apt install docker.io'), { privilege: 'root', executionChannel: 'native-pty' });
+    await f.ready(); f.auth();
+    await f.coordinator.answer(f.requests[0]!.id, 'root-password');
+    const output = '0 upgraded, 3 newly installed, 0 to remove and 0 not upgraded.\r\nDo you want to continue? [Y/n] ';
+    f.channel.emit(output); f.channel.emit(output);
+    expect(f.channel.writes).toEqual(['y\n']);
+    expect(f.channel.answers).toEqual([{ id: 'challenge-0', answer: 'root-password' }]);
+    expect(f.auto).toHaveBeenCalledOnce();
+    f.channel.complete(0);
+    expect((await f.result).status).toBe('succeeded');
+  });
+
+  it('still refuses a model-shaped su even with privilege root', async () => {
+    const f = fixture("su root -c 'cat /root/test'", { privilege: 'root' });
+    expect(await f.result).toMatchObject({ status: 'failed', requiresUserAction: true });
+    expect(f.channel.commands).toEqual([]);
+    expect(f.requests).toEqual([]);
+  });
 });

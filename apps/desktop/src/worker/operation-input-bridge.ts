@@ -1,7 +1,9 @@
 import { InteractionCoordinator, SudoCredentialCache, type InteractionSink, type TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, SshTransport } from '@cloudhelm/adapters';
-import { canOfferSuFallback, describeSudoOutcome, isSudoStatusProbe, isSudo, operationFingerprint, type ExecutionOptions, type InputRequest, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
+import { canOfferSuFallback, describeSudoOutcome, isSudoStatusProbe, isSudo, nativePtySuEligible, operationFingerprint, type CommandAnalysis, type ExecutionOptions, type InputRequest, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 import { aptHasNoRemovals, inputPlan } from './operation-input-plan.js';
+
+type Command = Extract<ProposedOperation, { kind: 'command' }>;
 
 /** The reviewed command remains unchanged. Only the process transport owns sudo's credential channel. */
 export class OperationInputBridge implements OperationExecutor {
@@ -32,6 +34,9 @@ export class OperationInputBridge implements OperationExecutor {
       stdoutTail: 'No command sent. sudo status/list/validate probes are not supported by isolated per-operation authentication and do not establish whether the next sudo command can work. Execute the actual bounded sudo operation through normal review; the private authentication channel will request input when needed. This is a recoverable tool limitation, not an authentication rejection.' };
     const plan = inputPlan(analysis);
     if (!plan) {
+      if (operation.privilege === 'root' && nativePtySuEligible(operation, analysis)) {
+        return this.dispatchSuWrap(operation, analysis, fingerprint, signal, options, current);
+      }
       if (analysis.calls.some((call) => /(?:^|\/)(?:sudo|su)$/u.test(call.name))) {
         this.terminal.suspend(terminalId);
         return { operationId: operation.id, status: 'failed', requiresUserAction: true, failureKind: 'unsupported', effects: 'none',
@@ -131,6 +136,97 @@ export class OperationInputBridge implements OperationExecutor {
       throw error;
     } finally {
       active = false; dropAnswer();
+      if (waiting && this.terminal.hostOf(terminalId) === hostId) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
+      clearInterval(leaseCheck);
+      signal?.removeEventListener('abort', onAbort);
+      unsubscribeAuth(); unsubscribeOutput();
+      this.interactions.cancelForTerminal(terminalId);
+    }
+  }
+
+  /** Backend-built privilege=root su wrap on the credential-bound native PTY.
+   * su authenticates root directly: the root password is never cached, reused
+   * or rewritten into a sudo outcome — the transport's own privilege metadata
+   * stands, and a failed authentication keeps its transport-classified result. */
+  private async dispatchSuWrap(operation: Command, analysis: CommandAnalysis, fingerprint: string,
+    signal: AbortSignal | undefined, options: ExecutionOptions | undefined, current: () => boolean): Promise<OperationResult> {
+    const { hostId, terminalId, taskId, terminalGeneration } = operation.scope;
+    const connectionGeneration = this.ssh.connectionGeneration(hostId);
+    const body = analysis.calls[0]?.args[5];
+    const newline = typeof body === 'string' ? body.indexOf('\n') : -1;
+    // The suPtyCommand working-directory guard ends at the first newline (cwd
+    // never carries control characters); the reviewed action follows it.
+    const business = typeof body === 'string' && newline >= 0 ? body.slice(newline + 1) : undefined;
+    if (!business) {
+      this.terminal.suspend(terminalId);
+      return { operationId: operation.id, status: 'failed', requiresUserAction: true, failureKind: 'unsupported', effects: 'none',
+        stdoutTail: 'This authentication form requires manual takeover; no command was sent. Do not wrap it or switch tools to bypass this result.' };
+    }
+    const businessAnalysis = await this.analyzer.analyze(business);
+    if (!current()) throw new Error('Operation authorization expired during analysis');
+    const aptGate = inputPlan(businessAnalysis)?.aptInstall === true;
+    let active = true;
+    let waiting: string | undefined;
+    let attempts = 0;
+    const maxAttempts = 3;
+    const cancel = () => {
+      if (!active) return;
+      if (waiting && this.terminal.hostOf(terminalId) === hostId) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
+      waiting = undefined;
+      this.interactions.cancelForTerminal(terminalId);
+      if (this.terminal.isAgentOwner(terminalId)) this.terminal.suspend(terminalId);
+    };
+    const unsubscribeAuth = this.terminal.subscribeAuthentication(terminalId, (challenge) => {
+      if (!active) return;
+      if (!challenge.prompt) {
+        if (waiting === challenge.id) { waiting = undefined; this.interactions.cancelForTerminal(terminalId); }
+        return;
+      }
+      if (!current() || waiting || ++attempts > maxAttempts) {
+        this.terminal.answerAuthentication(terminalId, operation.id, challenge.id, null);
+        cancel(); return;
+      }
+      waiting = challenge.id;
+      const sink: InteractionSink = {
+        isWaiting: (request) => active && current() && waiting === challenge.id
+          && request.operationId === operation.id && request.connectionGeneration === connectionGeneration,
+        deliver: async (request, answer) => {
+          if (!sink.isWaiting(request)) return false;
+          const sent = this.terminal.answerAuthentication(terminalId, operation.id, challenge.id, answer);
+          waiting = undefined;
+          if (!sent) cancel();
+          return sent;
+        }
+      };
+      const goal = operation.scope.goal.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 160);
+      const details: Omit<InputRequest, 'id' | 'expiresAt'> = {
+        taskId, operationId: operation.id, hostId, terminalId, terminalGeneration, connectionGeneration,
+        kind: 'secret', recipient: 'su', prompt: attempts > 1 ? `su 再次请求认证（${attempts}/${maxAttempts}）` : 'su 身份验证',
+        reason: `为了完成“${goal}”，本次已审核的 su 命令需要 root 密码。root 密码仅交给 su 的独立认证进程，不进入命令输入、AI 上下文或日志；本客户端不缓存 root 密码，也不自动重试认证。`
+      };
+      void this.interactions.request(details, sink).then((status) => {
+        if (status !== 'submitted' && active) cancel();
+      }).catch(() => cancel());
+    });
+    let output = '';
+    let confirmed = false;
+    const unsubscribeOutput = this.terminal.subscribeData(terminalId, (data) => {
+      output = (output + data).slice(-8192);
+      if (!active || !aptGate || confirmed || !current()
+        || !/Do you want to continue\?\s*\[Y\/n\]\s*$/u.test(output)) return;
+      if (!aptHasNoRemovals(output)) {
+        this.terminal.confirmInput(terminalId, operation.id, 'n\n'); cancel(); return;
+      }
+      confirmed = this.terminal.confirmInput(terminalId, operation.id, 'y\n');
+      if (confirmed) this.onAutoConfirmation?.(taskId, hostId);
+    });
+    const leaseCheck = setInterval(() => { if (!current()) cancel(); }, 100);
+    const onAbort = () => cancel();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      return await this.terminal.execute(operation, fingerprint, signal, options);
+    } finally {
+      active = false;
       if (waiting && this.terminal.hostOf(terminalId) === hostId) this.terminal.answerAuthentication(terminalId, operation.id, waiting, null);
       clearInterval(leaseCheck);
       signal?.removeEventListener('abort', onAbort);
