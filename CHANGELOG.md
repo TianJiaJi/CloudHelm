@@ -25,6 +25,12 @@
 
 这些条目仍属于未发布开发改造，实际验证范围以 `docs/STATUS.md` 为准，不宣称生产 SSH、真实模型或安装包已验收。
 
+### 编排层（Phase 1）
+
+- task-runner.ts 拆分为 IntentManager / ExecutionScheduler / RetryPolicy / RecoveryManager 四个编排组件，task-runner 收缩为 495 行组合根；行为保真迁移，28 个 task-runner 行为矩阵测试全程全绿，模型可见工具面与红线七条不变。
+- unknown 自动探测恢复：前台操作结果未知时后端自动执行白名单只读 systemd 查询探针（经独立调度 lane 走完整安全管线），证据脱敏后附挂进工具反馈，模型同轮内即可核验并对账；探针失败、断线或无模板时逐字保留现行"远端操作结果未知，已暂停"暂停路径，绝不自动重放。
+- 新增 delegationId / toolCallId 溯源通道（SQLite migration 16）：每次工具调用生成编排委派 UUID 并记录模型工具调用 ID，run_remote/服务三步事务/文件写入/删除/上传/后台停止全部打点；服务重启三步共享同一委派，sudo/su 派发与身份、恢复探针按继承规则归组，探针不携带模型调用 ID（后端决策，溯源诚实）。
+
 ### 改进
 
 - 执行通道排队重构（零行为变化）：task-runner 的 serialCall 全串行队列替换为 `operation-scheduler`，调度键定型为 `{taskId, terminalId}` 二元组（多终端/子代理维度预留），并内置读/写预分类数据结构；预分类仅影响排序、绝不影响授权（gate 执行时自行重新分析），本阶段读与写仍经同一队列严格串行，等价性由既有测试全绿证明，并发参数切换留待后续独立提交。

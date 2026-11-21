@@ -25,6 +25,7 @@ export function createServiceTool(deps: RemoteToolDependencies, gate: SafetyGate
       const host = deps.hosts.find((item) => item.id === params.hostId);
       if (!host) throw new Error('Host is outside the conversation authorization scope');
       const query = serviceQuery(params.unit);
+      const delegationId = randomUUID();
       const operations: Observation[] = [];
       const fragments: string[] = [];
       let outputTruncated: boolean | 'unknown' = false;
@@ -53,7 +54,8 @@ export function createServiceTool(deps: RemoteToolDependencies, gate: SafetyGate
           operations.push(observation);
           // TaskRunner derives sudo's effective runAs before fingerprinting. A
           // per-step copy prevents that derivation from contaminating later reads.
-          const operation = { id, kind: 'command' as const, command, serviceUnit: params.unit, scope: structuredClone(scope) };
+          const operation = { id, kind: 'command' as const, command, serviceUnit: params.unit,
+            delegationId, toolCallId: _id, scope: structuredClone(scope) };
           const value = root ? await privilege.run(gate, host, operation, signal)
             : await deps.runOperation(gate, operation, signal, host.label);
           if (value.result && value.result.operationId !== id) throw new Error('Mismatched service operation observation');

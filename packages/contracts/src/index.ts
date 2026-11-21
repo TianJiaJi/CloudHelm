@@ -198,7 +198,13 @@ export interface OperationView {
   reconciliation?: OperationReconciliation;
   intentKey?: string;
   /** Backend preflight whose result is not a user-visible business step. */
-  internal?: 'identity-probe';
+  internal?: 'identity-probe' | 'recovery-probe';
+  /** For `internal: 'recovery-probe'`: the id of the unknown operation this probe serves. */
+  recoveryProbeTarget?: string;
+  /** Orchestration-level delegation identity: one id per delegated work unit, set by the backend. */
+  delegationId?: string;
+  /** Model-facing tool-call trace when the model initiated the delegation. */
+  toolCallId?: string;
   verificationSource?: import('./verification-v3.js').VerificationSource;
   outputExpectation?: import('./verification-v3.js').OutputExpectation;
   /** Backend observed a terminal completion/code, never reconciliation prose; launch failure may still mean the payload did not start. */

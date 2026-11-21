@@ -45,3 +45,9 @@ it('describes a non-interactive password requirement as recoverable', () => {
   expect(operationFeedback({ operationId: 'probe', status: 'failed', authentication: 'required', stdoutTail: '', effects: 'none' }, 'host'))
     .toContain('not a rejected password');
 });
+it('carries the do-not-blindly-resend warning only on an in-flight unknown result (category ②)', () => {
+  expect(operationFeedback({ operationId: 'op', status: 'unknown', failureKind: 'unknown', stdoutTail: '' }, 'host'))
+    .toContain('远端可能仍在执行此命令，禁止盲目重发；先用只读方式确认状态');
+  expect(operationFeedback({ operationId: 'op', status: 'failed', failureKind: 'unknown', effects: 'none', exitCode: 1, stdoutTail: '' }, 'host'))
+    .not.toContain('禁止盲目重发');
+});

@@ -47,7 +47,7 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, unixepoc
 `;
 
 /** Latest schema version written by this module. */
-const STORE_SCHEMA_VERSION = 15;
+const STORE_SCHEMA_VERSION = 16;
 /** A database written by a newer build must fail closed; downgrades never reinterpret evolved record shapes. */
 export const LATEST_SCHEMA_VERSION = Math.max(STORE_SCHEMA_VERSION, REFERENCE_PREPARATIONS_SCHEMA_VERSION,
   REFERENCE_DRAFTS_SCHEMA_VERSION);
@@ -249,6 +249,19 @@ export class SqliteStore {
       `);
       this.raw.prepare('SELECT host_id, value, updated_at FROM host_capabilities LIMIT 0').all();
     }).immediate();
+    this.raw.transaction(() => {
+      if (this.raw.prepare('SELECT 1 FROM schema_migrations WHERE version = 16').get()) return;
+      // Delegation identity only: no operation content, preview or output lives here.
+      this.raw.exec(`
+        CREATE TABLE IF NOT EXISTS operation_delegations (
+          operation_id TEXT PRIMARY KEY, delegation_id TEXT NOT NULL, task_id TEXT NOT NULL,
+          tool_call_id TEXT, created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_operation_delegations_delegation ON operation_delegations(delegation_id);
+        INSERT INTO schema_migrations(version, applied_at) VALUES (16, unixepoch());
+      `);
+      this.raw.prepare('SELECT operation_id, delegation_id, task_id, tool_call_id, created_at FROM operation_delegations LIMIT 0').all();
+    }).immediate();
   }
 
   /** Exclusive-profile startup only; never call while accepting IPC or running preparations. */
@@ -334,6 +347,25 @@ export class SqliteStore {
         else this.put('secrets', id, ciphertext);
       }
     }).immediate();
+  }
+
+  /** Operation record and its delegation identity commit together; the mapping table
+   * stores identity columns only, never operation content. */
+  commitOperationRecord(operationId: string, value: unknown,
+    delegation: { delegationId: string; taskId: string; toolCallId?: string } | undefined): void {
+    this.raw.transaction(() => {
+      this.put('operations', operationId, value);
+      if (delegation) this.raw.prepare(`INSERT INTO operation_delegations(operation_id, delegation_id, task_id, tool_call_id, created_at)
+          VALUES(?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET delegation_id = excluded.delegation_id,
+          task_id = excluded.task_id, tool_call_id = excluded.tool_call_id`)
+        .run(operationId, delegation.delegationId, delegation.taskId, delegation.toolCallId ?? null, Date.now());
+    }).immediate();
+  }
+
+  /** Audit lookup by delegation unit; ordering follows durable commit time, then id. */
+  listOperationIdsByDelegation(delegationId: string): string[] {
+    return (this.raw.prepare('SELECT operation_id FROM operation_delegations WHERE delegation_id = ? ORDER BY created_at, operation_id')
+      .all(delegationId) as Array<{ operation_id: string }>).map((row) => row.operation_id);
   }
 
   /** Compare the whole read set and atomically commit records plus version receipts.

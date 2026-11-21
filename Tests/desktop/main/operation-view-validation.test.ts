@@ -12,6 +12,24 @@ it('rejects a forged internal preflight marker on a non-command or unknown kind'
   expect(() => validateOperationView({ ...probe, internal: 'other' as never })).toThrow('Invalid internal preflight marker');
   expect(() => validateOperationView({ ...operation(), internal: 'identity-probe' })).toThrow('Invalid internal preflight marker');
 });
+it('binds the recovery probe to a command and its unknown target, never a forged marker', () => {
+  const probe = { id: 'probe', taskId: 'task', hostId: 'host', kind: 'command' as const, preview: '结果核验探测 · systemctl show',
+    status: 'succeeded' as const, createdAt: 1, internal: 'recovery-probe' as const,
+    recoveryProbeTarget: '22222222-2222-4222-8222-222222222222' };
+  expect(() => validateOperationView(probe)).not.toThrow();
+  for (const change of [{ recoveryProbeTarget: 'not-a-uuid' }, { recoveryProbeTarget: undefined }, { kind: 'write-file' as const },
+    { internal: 'identity-probe' as const }]) expect(() => validateOperationView({ ...probe, ...change })).toThrow('Invalid internal preflight marker');
+  expect(() => validateOperationView({ ...operation(), internal: 'recovery-probe', recoveryProbeTarget: '22222222-2222-4222-8222-222222222222' }))
+    .toThrow('Invalid internal preflight marker');
+});
+it('accepts only a well-formed delegation identity and a bounded tool call trace', () => {
+  const command: OperationView = { id: 'native', taskId: 'task', hostId: 'host', kind: 'command',
+    preview: 'id -u', status: 'proposed', createdAt: 1 };
+  expect(() => validateOperationView({ ...command, delegationId: '33333333-3333-4333-8333-333333333333', toolCallId: 'call_1' })).not.toThrow();
+  expect(() => validateOperationView({ ...command, delegationId: 'delegation-1' })).toThrow('Invalid delegation identity');
+  expect(() => validateOperationView({ ...command, toolCallId: '' })).toThrow('Invalid tool call trace');
+  expect(() => validateOperationView({ ...command, toolCallId: 'x'.repeat(201) })).toThrow('Invalid tool call trace');
+});
 it('persists only a command-bound native route, never a forged file or unknown transport', () => {
   const command: OperationView = { id: 'native', taskId: 'task', hostId: 'host', kind: 'command',
     preview: 'id -u', status: 'proposed', createdAt: 1, executionChannel: 'native-exec' };

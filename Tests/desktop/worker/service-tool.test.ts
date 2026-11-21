@@ -185,6 +185,17 @@ describe('P0-2 three-mode restart approval matrix', () => {
   });
 });
 
+it('groups the three restart steps under one delegation bound to the model tool call', async () => {
+  const f = setup(undefined, true);
+  const result = await f.tool.execute('delegation-call', { hostId: 'host', unit: 'nginx.service', action: 'restart' });
+  expect(result.isError).toBe(false);
+  const proposed = f.audit.proposed.mock.calls.map(([operation]) => operation);
+  expect(proposed).toHaveLength(3);
+  expect(new Set(proposed.map((operation) => operation.id)).size).toBe(3);
+  expect(proposed.every((operation) => operation.delegationId === proposed[0]!.delegationId)).toBe(true);
+  expect(proposed.every((operation) => operation.toolCallId === 'delegation-call')).toBe(true);
+});
+
 it('reuses one sudo password across the three reviewed root-path steps without re-prompting (P0-2)', async () => {
   const commands: string[] = [];
   const challenges: Array<{ id: string; answer: string | null }> = [];

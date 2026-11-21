@@ -607,7 +607,8 @@ export class AppState {
           const key = `operation:${operation.id}`;
           this.logBuffer.set(key, (this.logBuffer.get(key) ?? '') + tail);
         }
-        this.store.put('operations', operation.id, operation);
+        this.store.commitOperationRecord(operation.id, operation, operation.delegationId ? {
+          delegationId: operation.delegationId, taskId: operation.taskId, toolCallId: operation.toolCallId } : undefined);
         this.operations.set(operation.id, operation);
         break;
       }

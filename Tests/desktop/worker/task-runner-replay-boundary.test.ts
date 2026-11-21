@@ -26,8 +26,8 @@ async function opened(priorStatus?: OperationView['status']) {
     { execute: vi.fn(async (operation: { id: string }) => ({ operationId: operation.id, status: 'succeeded' as const, exitCode: 0, stdoutTail: '/srv\n' })) },
     async () => terminal.open(host.id, { write() {}, resize() {}, close() {}, onData() {}, onClose() {} }, view.id, '/srv'),
     { event() {}, requestApproval: async () => true, cancelApproval() {} });
-  // The runner stays the authority for its own protection set; the test only reads it.
-  const protectedIds = () => [...(runner as unknown as { replayProtected: Set<string> }).replayProtected];
+  // The runner's scheduler stays the authority for the protection set; the test only reads it.
+  const protectedIds = () => [...(runner as unknown as { execution: { replayProtected: Set<string> } }).execution.replayProtected];
   const closed = () => (runner as unknown as { verification: { closed: boolean } }).verification.closed;
   return { fixture, view, runner, protectedIds, closed };
 }

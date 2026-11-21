@@ -37,9 +37,11 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
           'conflicting-identity', 'Use privilege=root or sessionId, never both. No terminal was allocated.');
         if (params.outputExpectation && hasJournalCredentials(JSON.stringify(params.outputExpectation))) return {
           content: [{ type: 'text' as const, text: 'Expected output contains recognizable credentials; nothing executed. Remove credentials, never repeat them.' }], isError: true, details: undefined };
+        const delegationId = randomUUID();
         const execute = async (lifetime?: AbortSignal) => {
           const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
           const operation: ProposedOperation = { id: randomUUID(), kind: 'command', command: params.command,
+            delegationId, toolCallId: _id,
             ...(params.background ? { executionMode: 'background' as const } : {}),
             outputExpectation: params.outputExpectation ? structuredClone(params.outputExpectation) : undefined,
             scope: deps.scope(host, terminalId, params.cwd) };
@@ -99,6 +101,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
           'remote-edit-unsupported', 'Existing-file replacement is unavailable until ACL/xattr preservation can be verified. A hash is not an exception. Use prepare_remote_edit only to preview; do not bypass with another tool or identity. No terminal or review was started.');
         const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
         return deps.runOperation(gate, { id: randomUUID(), kind: 'write-file', path: params.path, content: params.content,
+          delegationId: randomUUID(), toolCallId: _id,
           ...(params.createOnly ? { createOnly: true } : {}),
           scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
       }
@@ -113,6 +116,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
         if (!host) return outOfScope();
         const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
         return deps.runOperation(gate, { id: randomUUID(), kind: 'delete-path', path: params.path,
+          delegationId: randomUUID(), toolCallId: _id,
           scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
       }
     };
@@ -145,6 +149,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
           const { data, scope } = await deps.localFiles.read(params.localPath, signal);
           return deps.runOperation(gate, { id: randomUUID(), kind: 'upload', localPath: params.localPath,
             localRoot: scope.path, remotePath: params.remotePath, size: data.length,
+            delegationId: randomUUID(), toolCallId: _id,
             contentSha256: createHash('sha256').update(data).digest('hex'),
             scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
         } catch (error) { return { content: [{ type: 'text' as const, text: String(error) }], details: undefined, isError: true }; }

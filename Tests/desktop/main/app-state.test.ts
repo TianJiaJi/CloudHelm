@@ -22,6 +22,17 @@ class MemoryStore {
     const values = this.buckets.get(bucket) ?? new Map<string, unknown>();
     values.set(id, structuredClone(value)); this.buckets.set(bucket, values);
   }
+  private readonly delegations = new Map<string, { operationId: string; delegationId: string; taskId: string; toolCallId?: string }>();
+  commitOperationRecord(operationId: string, value: unknown,
+    delegation: { delegationId: string; taskId: string; toolCallId?: string } | undefined): void {
+    this.put('operations', operationId, value);
+    for (const [key, entry] of [...this.delegations]) if (entry.operationId === operationId) this.delegations.delete(key);
+    if (delegation) this.delegations.set(operationId, { operationId, ...delegation });
+  }
+  listOperationIdsByDelegation(delegationId: string): string[] {
+    return [...this.delegations.values()].filter((entry) => entry.delegationId === delegationId)
+      .sort((a, b) => a.operationId.localeCompare(b.operationId)).map((entry) => entry.operationId);
+  }
   commitModelSettings(settings: Array<{ id: string; value: unknown }>, credentials: Array<{ id: string; ciphertext: string | null }> = []): void {
     const before = structuredClone(this.buckets);
     try {

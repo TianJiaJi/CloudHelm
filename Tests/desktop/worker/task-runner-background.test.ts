@@ -96,8 +96,12 @@ it('reviews a bound stop request without executing kill as shell or claiming tar
     expect(f.sessions.flatMap((entry) => entry.channel.writes)).toEqual([]);
     const service = [...f.operations.values()].find((operation) => operation.executionJob)!;
     const control = [...f.operations.values()].find((operation) => operation.processControl)!;
+    expect(service).toMatchObject({ toolCallId: 'service' });
     expect(service.executionJob).toMatchObject({ status: 'stop-requested', exitObserved: false });
-    expect(control).toMatchObject({ status: 'succeeded', exitObserved: false, processControl: { delivery: 'sent', targetOperationId: service.id } });
+    expect(control).toMatchObject({ status: 'succeeded', exitObserved: false, toolCallId: 'stop',
+      processControl: { delivery: 'sent', targetOperationId: service.id } });
+    expect(typeof control.delegationId).toBe('string');
+    expect(control.delegationId).not.toBe(service.delegationId);
     expect(f.sessions[0]!.channel.authorized?.()).toBe(false);
     expect(f.terminal.hasPending(f.sessions[0]!.id)).toBe(true);
     f.sessions[0]!.channel.complete(130);

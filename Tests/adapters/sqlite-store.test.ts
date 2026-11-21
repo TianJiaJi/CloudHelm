@@ -114,7 +114,7 @@ it('adds migration 9 without declaring unexamined historical records repaired', 
   expect(store.get('operations', 'unknown')).toEqual(original);
   const inspection = new Database(file);
   try {
-    expect(inspection.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()).toEqual({ version: 15 });
+    expect(inspection.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()).toEqual({ version: 16 });
     expect(inspection.prepare('SELECT * FROM data_repairs').all()).toEqual([]);
   } finally { inspection.close(); }
 });
@@ -147,6 +147,61 @@ it('commits repair receipts atomically and rejects changed or expanded read sets
     changes: [{ bucket: 'operations', id: 'op', value: { readOnly: false } }]
   })).toThrow(/UNIQUE/u);
   expect(store.get('operations', 'op')).toEqual({ readOnly: true });
+});
+
+it('upgrades a version-15 database in place with the delegation identity table', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cloudhelm-delegation-upgrade-'));
+  tempDirs.push(directory);
+  const file = join(directory, 'records.sqlite');
+  const legacy = new Database(file);
+  legacy.exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+    CREATE TABLE records(bucket TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY(bucket, id));
+    INSERT INTO schema_migrations VALUES ${Array.from({ length: 15 }, (_, index) => `(${String(index + 1)},1)`).join(', ')};`);
+  legacy.prepare('INSERT INTO records VALUES(?,?,?,1)').run('tasks', 'task', JSON.stringify({ id: 'task' }));
+  legacy.close();
+  const delegationId = '55555555-5555-4555-8555-555555555555';
+  const store = new SqliteStore(file);
+  stores.push(store);
+  store.commitOperationRecord('op', { id: 'op', taskId: 'task' }, { delegationId, taskId: 'task' });
+  expect(store.listOperationIdsByDelegation(delegationId)).toEqual(['op']);
+  store.close(); stores.pop();
+  const reopened = new SqliteStore(file);
+  stores.push(reopened);
+  expect(reopened.listOperationIdsByDelegation(delegationId)).toEqual(['op']);
+});
+
+it('commits an operation record and its delegation identity in one transaction', () => {
+  const store = open();
+  const view = { id: 'op-1', taskId: 'task', preview: 'systemctl restart nginx' };
+  store.commitOperationRecord('op-1', view, { delegationId: '11111111-1111-4111-8111-111111111111', taskId: 'task', toolCallId: 'call_1' });
+  expect(store.get('operations', 'op-1')).toEqual(view);
+  expect(store.listOperationIdsByDelegation('11111111-1111-4111-8111-111111111111')).toEqual(['op-1']);
+  // A second operation joins the same delegation unit; ordering follows commit time then id.
+  store.commitOperationRecord('op-2', { id: 'op-2', taskId: 'task' }, { delegationId: '11111111-1111-4111-8111-111111111111', taskId: 'task' });
+  expect(store.listOperationIdsByDelegation('11111111-1111-4111-8111-111111111111')).toEqual(['op-1', 'op-2']);
+  // Re-committing an operation rebinds its delegation row instead of duplicating it.
+  store.commitOperationRecord('op-1', { ...view, status: 'succeeded' }, { delegationId: '22222222-2222-4222-8222-222222222222', taskId: 'task' });
+  expect(store.listOperationIdsByDelegation('11111111-1111-4111-8111-111111111111')).toEqual(['op-2']);
+  expect(store.listOperationIdsByDelegation('22222222-2222-4222-8222-222222222222')).toEqual(['op-1']);
+  // Records without a delegation identity commit alone and stay unlisted.
+  store.commitOperationRecord('op-3', { id: 'op-3' }, undefined);
+  expect(store.get('operations', 'op-3')).toEqual({ id: 'op-3' });
+  expect(store.listOperationIdsByDelegation('33333333-3333-4333-8333-333333333333')).toEqual([]);
+});
+
+it('rolls back the delegation mapping together with the operation record on failure', () => {
+  const store = open();
+  const put = store.put.bind(store);
+  const fail = vi.spyOn(store, 'put').mockImplementation((bucket, id, value) => {
+    put(bucket, id, value);
+    throw new Error('disk failure');
+  });
+  const delegationId = '44444444-4444-4444-8444-444444444444';
+  expect(() => store.commitOperationRecord('op-x', { id: 'op-x' }, { delegationId, taskId: 'task' })).toThrow('disk failure');
+  fail.mockRestore();
+  expect(store.get('operations', 'op-x')).toBeUndefined();
+  expect(store.listOperationIdsByDelegation(delegationId)).toEqual([]);
 });
 
 describe('record cleanup for deleted conversations', () => {

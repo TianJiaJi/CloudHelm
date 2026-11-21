@@ -78,9 +78,41 @@
 
 **edit_file 收敛三层风险**：A 门面重塑（中风险，Phase 2）——单一 `edit_file` 内部编排 read(hash)→prepare→apply，内部仍是独立 ProposedOperation 逐个过 SafetyGate；B 自愈语义（中低风险，Phase 2 与 A 同批）——hash 冲突自动读当前内容返回模型重生成 diff；C 推翻覆盖禁令（高风险、前置未知）——SPIKE-C 门控。
 
+## Phase 1（编排层，2026-11-22 完成）
+
+| # | 单元 | 核心动作 | 状态 |
+|---|---|---|---|
+| 1 | 类型层 | core `ProposedOperation` 增 `delegationId`/`toolCallId`/`probe` 联合（`'identity'｜'recovery'`）/`recoveryTarget`；contracts `OperationView` 增 `delegationId`/`toolCallId`/`internal` 联合/`recoveryProbeTarget`；`validateOperationView` 接受新可选字段 | 完成 |
+| 2 | 存储层 | sqlite-store migration 16（操作委派表，tool_call_id NULL 列）；`commitOperationRecord` 同事务落库；`listOperationIdsByDelegation` 分组查询 | 完成 |
+| 3 | RetryPolicy 提取 | `retry-policy.ts`（operation-retry 改引用） | 完成 |
+| 4 | IntentManager 提取 | `intent-manager.ts` | 完成 |
+| 5 | ExecutionScheduler 提取 | `execution-scheduler.ts`（操作执行/门/视图生命周期/unknown 分支） | 完成 |
+| 6 | RecoveryManager 提取 | `recovery-manager.ts` + `recovery-probe.ts`（模板/构造/附挂四纯函数） | 完成 |
+| 7 | unknown 自动探测 | `runRecoveryProbe` 独立 lane 精简管线 + `probeUnknown` + 反馈附挂；真实管线用例 + 直连调度器矩阵测试进 CI | 完成 |
+| 8 | delegation 打点 | service-tool 三操作共享 delegationId + toolCallId；remote-tools 四构造点；background-job-tool；探针/identity 探针继承规则接线 | 完成 |
+| 9 | 收尾 | task-runner.ts 收缩至 495 行（目标 ≤500），各新文件 ≤800；全量 `pnpm check`；CHANGELOG；本节回写 | 完成 |
+
+### delegationId / toolCallId 语义裁决（后续 Phase 一列一义，互不借用）
+
+- **delegationId**：编排层自产 UUID（36 字符），一次委派工作单元；同一工具调用展开的全部操作共享（`manage_service` 三步事务共享同一委派）。
+- **toolCallId**：provider 工具调用 ID（可空，≤200 字符），模型决策溯源。
+- **系统附加操作不新造 delegationId**：sudo 路径对象展开自动继承；su 派发显式继承两者；identity 探针归入所服务业务操作的委派；recovery 探针继承原操作 delegationId。
+- **两类探针 toolCallId 一律缺省（NULL）**：探针是后端决策而非模型决策，溯源诚实。
+- subagentId / authorizationId 为 Phase 2/3 后续键，另行落列。
+
+### 探针独立 lane 设计与重入研究结论（防 Phase 3 考古）
+
+- 探针 lane 键 `{ taskId, terminalId: 'recovery-probe' }`：独立 FIFO 共享会话限额，结构性消除与业务 lane 的两条互等死锁路径（持写槽时排队写阻塞 FIFO 头；4 并发读占满槽位）。
+- 探针走独立执行入口（不进业务后处理），规避 `sameFailureCount`/`progress.observe`/unknown 分支递归/`requiresUserAction` 状态踩踏；仅保留 preflight → gate → executor 链与视图生命周期（创建/提交/观察）。
+- 探针不可用/失败/分析拒绝/自身 unknown → 逐字保留 `blockRemote('远端操作结果未知，已暂停。请先核验，避免重复执行。', false, 'verify')`，不自动重放（红线⑥）；探针成功时证据附挂进工具反馈，模型同轮内可将其作为 `record_reconciled_result` 证据。
+
+### 已知边界（Phase 2 候选）
+
+- `file-edit-service.ts` 六个构造点（inspect/write/list-recovery/cleanup/command）尚未打 delegationId/toolCallId：工具调用 ID 传递链需先穿透服务层签名，随 Phase 2 受控文件工具收敛（edit_file 门面）一并处理。
+
 ## Phase 1-4 路线图摘要
 
-- **Phase 1 编排层**：task-runner.ts（797/800 行）拆分 IntentManager / ExecutionScheduler / RetryPolicy / RecoveryManager；unknown 自动探测恢复；`delegationId` SQLite 列（Phase 0 无迁移窗口，明确留此阶段）。
+- **Phase 1 编排层**：完成（2026-11-22，见 Phase 1 节）。task-runner.ts 拆分 IntentManager / ExecutionScheduler / RetryPolicy / RecoveryManager（收缩至 495 行）；unknown 自动探测恢复上线；delegationId/toolCallId 双列通道落库（migration 16）。
 - **Phase 2 工具收敛**：26→14（edit_file 门面、run_diagnostics、create_file overwrite）；意图级审批（收益聚焦：文件编辑事务 / 计划外变更拦截 / 跨步骤授权聚合，见修正 2）。
 - **Phase 3 多终端**：调度键 `{taskId, terminalId}` 二元组在 P0-3a 已预留。
 - **Phase 4 计划即契约**：意图级审批全面化。

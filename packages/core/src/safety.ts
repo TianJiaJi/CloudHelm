@@ -1,6 +1,7 @@
 import { analyzeQueryImpact, isQuery, isBlockDevice, BAD_DISK_TOOLS, PROJECT_CODE_COMMANDS } from './command-query-impact.js';
 export { isReadOnlyQuery, isEffectFreeQuery } from './command-query-impact.js';
 import { validFileEditCommit, validRecoveryEntryName, FILE_TRANSACTION_UUID } from './file-transaction.js';
+import { SERVICE_PROPERTIES, validServiceUnit } from './service-observation.js';
 import { analyzeOperationImpact } from './operation-impact.js';
 import { commandTransfer } from './command-transfer.js';
 import path from 'node:path';
@@ -330,6 +331,18 @@ function highImpactDecision(ruleId: string, reason: string, settings: SafetySett
   return { ...decision(settings.mode === 'ai-review' ? 'evaluate' : 'ask', ruleId, reason), impact: 'high' };
 }
 
+const RECOVERY_PROBE_QUERY_PREFIX = `systemctl show --no-pager --property=${SERVICE_PROPERTIES} -- `;
+
+/** The recovery probe is backend-generated evidence collection after an unknown result:
+ * exactly the read-only service query grammar, bound to the unknown operation it serves. */
+function validRecoveryProbe(operation: Extract<ProposedOperation, { kind: 'command' }>): boolean {
+  return typeof operation.recoveryTarget === 'string' && FILE_TRANSACTION_UUID.test(operation.recoveryTarget)
+    && !operation.privilege && !operation.executionMode && !operation.processControl && !operation.outputExpectation
+    && !operation.serviceUnit && operation.scope.sessionId === undefined
+    && operation.command.startsWith(RECOVERY_PROBE_QUERY_PREFIX)
+    && validServiceUnit(operation.command.slice(RECOVERY_PROBE_QUERY_PREFIX.length));
+}
+
 export function decideSafety(operation: ProposedOperation, settings: SafetySettings, analysis?: CommandAnalysis): SafetyDecision {
   const impact = analyzeOperationImpact(operation, analysis);
   if (settings.revision !== operation.scope.policyRevision) return decision('error', 'policy-stale', 'Policy changed after this operation was proposed');
@@ -341,10 +354,12 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
     && settings.reviewerRevision !== operation.scope.reviewerRevision) {
     return decision('error', 'reviewer-stale', 'Reviewer configuration changed after this operation was proposed');
   }
-  if (operation.kind === 'command' && operation.probe !== undefined && (operation.probe !== 'identity' || operation.command !== 'id -u'
+  if (operation.kind === 'command' && operation.probe === 'identity' && (operation.command !== 'id -u'
     || operation.privilege || operation.executionMode || operation.processControl || operation.outputExpectation || operation.serviceUnit
-    || operation.scope.sessionId !== undefined))
+    || operation.recoveryTarget || operation.scope.sessionId !== undefined))
     return decision('error', 'invalid-internal-probe', 'Backend identity probe has an invalid shape; nothing dispatched');
+  if (operation.kind === 'command' && operation.probe === 'recovery' && !validRecoveryProbe(operation))
+    return decision('error', 'invalid-internal-probe', 'Backend recovery probe has an invalid shape; nothing dispatched');
   if (operation.kind === 'write-file' && operation.fileEdit && (!validFileEditCommit(operation.fileEdit) || !operation.expectedSha256 || operation.createOnly))
     return decision('error', 'invalid-file-transaction', 'Invalid backend file transaction; nothing dispatched');
   if (operation.kind === 'inspect-file' && operation.recoveryDirectoryId && !FILE_TRANSACTION_UUID.test(operation.recoveryDirectoryId))

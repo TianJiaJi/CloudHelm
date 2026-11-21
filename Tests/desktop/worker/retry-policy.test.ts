@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OperationResult, ProposedOperation } from '../../../packages/core/src/model.js';
-import { dispatchNeverReached, retrySafeReadonly, withReadOnlyRetry } from '../../../apps/desktop/src/worker/operation-retry.js';
-import { operationFeedback } from '../../../apps/desktop/src/worker/operation-feedback.js';
+import { dispatchNeverReached, retrySafeReadonly, withReadOnlyRetry } from '../../../apps/desktop/src/worker/retry-policy.js';
 import { BashAnalyzer } from '../../../packages/adapters/src/bash-analyzer.js';
 
 const analyzer = new BashAnalyzer();
@@ -105,16 +104,5 @@ describe('withReadOnlyRetry', () => {
     const f = await retryFixture(['success']);
     expect(f.value).toEqual({ outcome: 'success' });
     expect(f.seen).toEqual(['operation-1']);
-  });
-});
-
-describe('category-② warning reaches the model through operation feedback', () => {
-  it('an in-flight unknown result carries the do-not-blindly-resend warning', () => {
-    expect(operationFeedback(result({ status: 'unknown', failureKind: 'unknown' }), 'host'))
-      .toContain('远端可能仍在执行此命令，禁止盲目重发；先用只读方式确认状态');
-  });
-  it('the warning stays out of ordinary command failures', () => {
-    expect(operationFeedback(result({ failureKind: 'unknown', effects: 'none', exitCode: 1 }), 'host'))
-      .not.toContain('禁止盲目重发');
   });
 });

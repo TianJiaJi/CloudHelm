@@ -37,6 +37,7 @@ export class OperationPrivilege {
     let uid = this.identities.get(key);
     if (uid === undefined) {
       const identity = await this.deps.runOperation(gate, { id: randomUUID(), kind: 'command', command: 'id -u', probe: 'identity',
+        delegationId: operation.delegationId,
         scope: this.deps.scope(host, operation.scope.terminalId, '/') }, signal, host.label);
       const observed = identity.result;
       if (identity.isError || observed?.status !== 'succeeded' || observed.exitCode !== 0) return identity;
@@ -85,6 +86,7 @@ export class OperationPrivilege {
     if (!wrapped) return denied('unsupported-root-command', 'Root routing accepts one literal action without expansion, pipes or redirection. Split independent actions; no business command executed.');
     this.assertLease(host, operation.scope.terminalId, key, signal);
     const feedback = await this.deps.runOperation(gate, { id: randomUUID(), kind: 'command', command: wrapped, privilege: 'root',
+      delegationId: operation.delegationId, toolCallId: operation.toolCallId,
       scope: { ...this.deps.scope(host, operation.scope.terminalId, operation.scope.cwd), runAs: 'root' } }, signal, host.label);
     // A transport-classified su outcome (authentication rejected or route unsupported)
     // kills the confirmed alternative; an unclassified result keeps it: su is

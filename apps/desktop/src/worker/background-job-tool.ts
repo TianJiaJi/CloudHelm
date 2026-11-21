@@ -35,7 +35,8 @@ export function createBackgroundJobTool(deps: {
         || (scope.loginAs ?? scope.runAs) !== job.loginAs) throw new Error('Background identity or terminal generation changed');
       const control = { kind: 'interrupt' as const, jobId, targetOperationId: job.operationId,
         pid: job.pid, processSequence: job.processSequence, connectionId: job.connectionId };
-      const operation: ProposedOperation = { id: randomUUID(), kind: 'command', command: processControlReviewCommand(control), processControl: control, scope };
+      const operation: ProposedOperation = { id: randomUUID(), kind: 'command', command: processControlReviewCommand(control),
+        processControl: control, delegationId: randomUUID(), toolCallId: _id, scope };
       const executor: OperationExecutor = { execute: async (reviewed, fingerprint, executionSignal, options) => {
         executionSignal?.throwIfAborted();
         if (reviewed.id !== operation.id || reviewed.kind !== 'command' || !reviewed.processControl

@@ -147,6 +147,26 @@ describe('operation-level privilege routing', () => {
     const result = await f.run();
     expect(result.isError).toBe(true); expect(f.commands()).toHaveLength(2);
   });
+  it('binds the identity probe into the business delegation without a toolCallId', async () => {
+    const f = fixture();
+    f.operation.delegationId = 'deleg-alpha';
+    f.operation.toolCallId = 'call-alpha';
+    await f.run();
+    const probe = f.runOperation.mock.calls[0]![1];
+    expect(probe).toMatchObject({ command: 'id -u', probe: 'identity', delegationId: 'deleg-alpha' });
+    expect(probe.toolCallId).toBeUndefined();
+    const business = f.runOperation.mock.calls[1]![1];
+    expect(business).toMatchObject({ command: 'sudo -- stat /root/example', delegationId: 'deleg-alpha', toolCallId: 'call-alpha' });
+  });
+  it('keeps the reviewed su dispatch inside the same delegation and tool call', async () => {
+    const f = fixture();
+    f.state.failure = missing;
+    f.operation.delegationId = 'deleg-beta';
+    f.operation.toolCallId = 'call-beta';
+    await f.run();
+    const suDispatch = f.runOperation.mock.calls[2]![1];
+    expect(suDispatch).toMatchObject({ privilege: 'root', delegationId: 'deleg-beta', toolCallId: 'call-beta' });
+  });
   it('refuses malformed identity observations, nested authentication and conflicting sessions', async () => {
     const f = fixture('0\nnot-proof'); await f.run(); expect(f.commands()).toEqual(['id -u']);
     for (const command of ['sudo stat /root/example', 'su root', 'id; whoami', 'cat /x | sh']) {

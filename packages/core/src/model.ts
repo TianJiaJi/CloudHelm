@@ -30,9 +30,18 @@ export interface OperationScope {
   intent?: OperationIntent;
 }
 
-export type ProposedOperation =
-  | { id: string; kind: 'inspect-file'; path: string; privilege?: 'root'; recoveryDirectoryId?: string; scope: OperationScope }
-  | { id: string; kind: 'command'; command: string; serviceUnit?: string;
+/** Orchestration-level delegation identity, shared by every operation variant.
+ * `delegationId` is backend-generated per delegated work unit; `toolCallId` is the
+ * model-facing tool-call trace (when the model initiated one). Neither is a safety grant. */
+export interface OperationDelegation {
+  delegationId?: string;
+  toolCallId?: string;
+}
+
+export type ProposedOperation = OperationDelegation &
+  (
+    | { id: string; kind: 'inspect-file'; path: string; privilege?: 'root'; recoveryDirectoryId?: string; scope: OperationScope }
+    | { id: string; kind: 'command'; command: string; serviceUnit?: string;
       /** Background lifetime is explicitly bound into review, never inferred from shell syntax. */
       executionMode?: 'background';
       /** Backend-selected, reviewed transport; absent on legacy records. Not a safety grant. */
@@ -42,8 +51,11 @@ export type ProposedOperation =
         processSequence: number; connectionId: string };
       /** Operation-level root request, normalized before review; never an approval. */
       privilege?: 'root';
-      /** Backend-created preflight (identity discovery). Model tools cannot set it. */
-      probe?: 'identity';
+      /** Backend-created preflights. Model tools cannot set them. `identity` is the
+       * identity-discovery probe; `recovery` collects read-only service evidence after
+       * an unknown result, bound to that operation by `recoveryTarget`. */
+      probe?: 'identity' | 'recovery';
+      recoveryTarget?: string;
       outputExpectation?: { expectedOutput: string; expectedExitCode?: number }; scope: OperationScope }
   | { id: string; kind: 'write-file'; path: string; content: string; scope: OperationScope;
       privilege?: 'root'; fileEdit?: import('./file-transaction.js').FileEditCommit;
@@ -57,7 +69,8 @@ export type ProposedOperation =
   /** Container directory of private recovery material; read-only bounded listing. */
   | { id: string; kind: 'list-recovery'; path: string; scope: OperationScope; privilege?: 'root' }
   /** Explicit reviewed removal of named private recovery material; never automatic. */
-  | { id: string; kind: 'cleanup-recovery'; path: string; names: string[]; scope: OperationScope; privilege?: 'root' };
+    | { id: string; kind: 'cleanup-recovery'; path: string; names: string[]; scope: OperationScope; privilege?: 'root' }
+  );
 
 /** Lexical cwd relative to the operation entry directory, not remote realpath evidence. */
 export type CommandDirectory = { state: 'known'; changes: string[] } | { state: 'unknown' };
