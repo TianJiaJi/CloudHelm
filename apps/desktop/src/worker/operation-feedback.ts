@@ -49,6 +49,9 @@ export function operationToolResult(result: OperationResult, host: string, readO
   const details = operationFeedbackDetails(result, readOnly);
   const structuredContent = { ...details, taskId: scope?.taskId ?? null, hostId: scope?.hostId ?? null,
     terminalId: scope?.terminalId ?? null, terminalGeneration: scope?.terminalGeneration ?? null,
+    // Requested identity comes from the reviewed scope; the identity actually in
+    // effect is not observed on this path, so it is never inferred from output.
+    identity: { requested: scope?.runAs ?? null, observed: 'unknown', evidenceSource: 'not-observed' },
     jobId: result.processControl?.jobId ?? null };
   return { result, readOnly, details, structuredContent,
     content: [{ type: 'text' as const, text: operationFeedback(result, host, readOnly) }], isError: result.status !== 'succeeded' };

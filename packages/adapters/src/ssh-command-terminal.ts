@@ -2,7 +2,7 @@ import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.j
 import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { CommandNotStartedError, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, sudoMarkerPrompt, sudoPtyCommand,
-  type CommandAnalysis, type CommandExecutionOptions, type OperationResult, type ProcessStartedEvent, type RawTerminal } from '@cloudhelm/core';
+  type CommandAnalysis, type CommandExecutionOptions, type ExecutionFailureFact, type ProcessStartedEvent, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
@@ -27,7 +27,7 @@ export class SshCommandTerminal implements RawTerminal {
   onCommand(listener: (event: ShellCommandEvent) => void): void { this.command = listener; }
   private data = (_text: string) => {};
   private display = (_text: string) => {};
-  private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>) => {};
+  private failure = (_failure: ExecutionFailureFact) => {};
   private exited = (_code: number | undefined) => {};
   private closedListener = () => {};
   private authentication = (_challenge: { id: string; prompt?: string }) => {};
@@ -115,7 +115,7 @@ export class SshCommandTerminal implements RawTerminal {
 
   private async executeNative(command: string, cwd: string, current: () => void, claimStart?: CommandExecutionOptions['claimStart']): Promise<void> {
     if (!this.ssh.execFixed || !this.ssh.runNativeExec) {
-      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.exited(undefined); this.busy = false; return;
     }
     current();
@@ -123,7 +123,7 @@ export class SshCommandTerminal implements RawTerminal {
     const tools = await this.ssh.execFixed(this.hostId,
       'test -x /usr/bin/env && test -x /bin/sh && /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c "exit 0"');
     if (tools.exitCode !== 0) {
-      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.data('原生 SSH 命令未发送：主机缺少 /usr/bin/env 或 /bin/sh。');
       this.exited(undefined); this.busy = false; return;
     }
@@ -140,7 +140,9 @@ export class SshCommandTerminal implements RawTerminal {
         () => { current(); return true; },
         { stdout: (data) => emit(stdout, data), stderr: (data) => emit(stderr, data), claimStart }, controller.signal);
       for (const decoder of [stdout, stderr]) { const tail = decoder.end(); if (tail) this.data(tail); }
-      if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
+      else if (outcome.state === 'exited' && outcome.exitCode === 0) this.failure({ handoff: 'handed-off', businessStart: 'started' });
+      else if (outcome.state === 'exited' || outcome.state === 'signaled') this.failure({ handoff: 'handed-off' });
       if (outcome.state === 'signaled') this.data(`远端命令收到 ${outcome.signal}；未观察到可确认的退出码。`);
       if (outcome.state === 'unknown') this.data('原生 SSH 命令结果未知；请核验原操作，不要直接重放。');
       this.exited(outcome.state === 'exited' ? outcome.exitCode : undefined);
@@ -154,7 +156,7 @@ export class SshCommandTerminal implements RawTerminal {
    * client-owned marker window, never command text, output, or logs. */
   private async executeNativePty(subform: 'sudo' | 'su', command: string, cwd: string, current: () => void, analysis: CommandAnalysis): Promise<void> {
     if (!this.ssh.runNativePty) {
-      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.exited(undefined); this.busy = false; return;
     }
     current();
@@ -181,8 +183,8 @@ export class SshCommandTerminal implements RawTerminal {
     this.ptySession = session;
     try {
       const outcome: NativePtyOutcome = await session.result;
-      if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
-      if (outcome.state === 'exited' && outcome.exitCode !== 0) {
+      if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
+      else if (outcome.state === 'exited' && outcome.exitCode !== 0) {
         // All diagnostic flags below come from a mixed authentication/business
         // stream. Neither a prompt marker nor exit 1/125/127 establishes that
         // the payload never ran (including NOPASSWD commands without a marker).
@@ -191,13 +193,16 @@ export class SshCommandTerminal implements RawTerminal {
         const denied = subform === 'sudo' ? outcome.sudoDenied : outcome.suAuthenticationFailed;
         if (unavailable || denied) this.failure({
           failureKind: unavailable ? 'unsupported' : 'authentication-failed', effects: 'possible',
+          handoff: 'handed-off',
           privilege: { method: subform,
             stage: unavailable ? 'preparation' : subform === 'sudo' ? 'authorization' : 'authentication',
             code: unavailable ? subform === 'sudo' ? 'sudo-unavailable' : 'unsupported'
               : subform === 'sudo' ? 'authorization-denied' : 'authentication-rejected',
             source: 'output-inference', businessCommand: 'unknown', recovery: 'verify' }
         });
-      }
+        else this.failure({ handoff: 'handed-off' });
+      } else if (outcome.state === 'exited') this.failure({ handoff: 'handed-off', businessStart: 'started' });
+      else if (outcome.state === 'signaled') this.failure({ handoff: 'handed-off' });
       if (outcome.state === 'signaled') this.data(`远端命令收到 ${outcome.signal}；未观察到可确认的退出码。`);
       if (outcome.state === 'unknown') this.data('原生 SSH 命令结果未知；请核验原操作，不要直接重放。');
       this.exited(outcome.state === 'exited' ? outcome.exitCode : undefined);
@@ -217,14 +222,14 @@ export class SshCommandTerminal implements RawTerminal {
    * bound cannot expire while the business runs. */
   private async executeNativeBackground(command: string, cwd: string, current: () => void): Promise<void> {
     if (!this.ssh.execFixed || !this.ssh.runNativeExec) {
-      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.exited(undefined); this.busy = false; return;
     }
     current();
     const tools = await this.ssh.execFixed(this.hostId,
       'test -x /usr/bin/env && test -x /bin/sh && /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c "exit 0"');
     if (tools.exitCode !== 0) {
-      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.data('原生后台命令未发送：主机缺少 /usr/bin/env 或 /bin/sh。');
       this.exited(undefined); this.busy = false; return;
     }
@@ -236,7 +241,7 @@ export class SshCommandTerminal implements RawTerminal {
     current();
     const dispatched = await this.runBackgroundCommand(launch, cwd, current);
     if (dispatched.outcome.state === 'not-dispatched') {
-      this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+      this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.exited(undefined); this.busy = false; return;
     }
     if (dispatched.outcome.state !== 'exited') {
@@ -244,11 +249,16 @@ export class SshCommandTerminal implements RawTerminal {
       this.exited(undefined); this.busy = false; return;
     }
     if (dispatched.outcome.exitCode !== 0) {
+      // The launch wrapper itself ran and failed; whether the embedded business
+      // started cannot be proven from the wrapper's exit code, so only the
+      // transport fact is attested and the business start stays unknown.
+      this.failure({ handoff: 'handed-off' });
       this.data(`原生后台命令未启动（exit ${dispatched.outcome.exitCode}）；业务命令未发送。`);
       this.exited(dispatched.outcome.exitCode); this.busy = false; return;
     }
     const pid = parseNativeBackgroundPid(dispatched.output);
     if (pid === undefined) {
+      this.failure({ handoff: 'handed-off' });
       this.data('原生后台进程标识无法解析；结果未知，请核验原操作，不要直接重放。');
       this.exited(undefined); this.busy = false; return;
     }
@@ -256,11 +266,13 @@ export class SshCommandTerminal implements RawTerminal {
     // be its own process group and session, bound by the kernel starttime.
     const verify = await this.runBackgroundCommand(renderNativeBackgroundStatCheck(pid), '/', current);
     if (verify.outcome.state !== 'exited' || verify.outcome.exitCode !== 0) {
+      this.failure({ handoff: 'handed-off' });
       this.data('原生后台进程核验结果未知；请核验原操作，不要直接重放。');
       this.exited(undefined); this.busy = false; return;
     }
     if (verify.output.includes(NATIVE_BACKGROUND_PROC_GONE)) {
       // The business exited before verification; only the private log can report how.
+      this.failure({ handoff: 'handed-off' });
       const tail = await this.runBackgroundCommand(renderNativeBackgroundWatcher(pid, logPath), '/', current);
       const exit = tail.outcome.state === 'exited' ? parseNativeBackgroundExit(tail.output) : undefined;
       if (exit === undefined) this.data('后台进程在核验前退出，但未观察到可确认的退出码；请核验原操作。');
@@ -268,10 +280,14 @@ export class SshCommandTerminal implements RawTerminal {
     }
     const stat = parseNativeBackgroundStat(verify.output, pid);
     if (!stat) {
+      this.failure({ handoff: 'handed-off' });
       this.data('原生后台进程组核验失败；结果未知，请核验原操作，不要直接重放。');
       this.exited(undefined); this.busy = false; return;
     }
     current(); this.clearStartup();
+    // /proc just re-verified the running business: own process group and session,
+    // kernel-bound starttime. Attest both transport facts before the start event.
+    this.failure({ handoff: 'handed-off', businessStart: 'started' });
     const abort = new AbortController();
     this.bgWatch = { pid, logPath, processStartTime: stat.processStartTime, current, abort };
     this.started({ pid, logPath, processStartTime: stat.processStartTime });

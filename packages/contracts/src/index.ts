@@ -219,7 +219,7 @@ export interface OperationView {
   authenticationAttempts?: number;
   privilege?: import('./privilege.js').PrivilegeFeedbackView;
   failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'not-dispatched' | 'unknown';
-  effects?: 'none' | 'possible';
+  effects?: 'none' | 'possible' | 'observed-change';
   loginAs?: string;
   runAs?: string;
   interruption?: UserInterruption;

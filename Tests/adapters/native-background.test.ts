@@ -107,6 +107,7 @@ it('launches detached, verifies the group invariant, reports start facts and set
   expect(f.calls[0]!.command).toContain("setsid /bin/sh -c 'sleep 300\n");
   expect(f.calls[1]).toMatchObject({ command: expect.stringContaining(`/proc/${pid}/stat`), cwd: '/' });
   expect(f.started).toHaveBeenCalledExactlyOnceWith({ pid, logPath: expect.any(String), processStartTime });
+  expect(f.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off', businessStart: 'started' });
   const logPath = f.started.mock.calls[0]![0].logPath!;
   expect(validBackgroundLogPath(logPath)).toBe(true);
   expect(f.calls[2]!.command).toContain(`tail -c 256 '${logPath}'`);
@@ -163,13 +164,14 @@ it('settles a business that exited before verification from the private log mark
   });
   await f.terminal.execute('sleep 300', '/srv', () => true, { executionChannel: 'native-background' });
   expect(f.started).not.toHaveBeenCalled();
+  expect(f.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off' });
   expect(f.exited).toHaveBeenCalledExactlyOnceWith(3);
 });
 
 it('fails closed when the launch cannot be dispatched or its result is unknown', async () => {
   const notDispatched = backgroundFixture(() => ({ state: 'not-dispatched' as const, reason: 'authorization-expired' as const }));
   await notDispatched.terminal.execute('sleep 300', '/srv', () => true, { executionChannel: 'native-background' });
-  expect(notDispatched.failure).toHaveBeenCalledWith({ failureKind: 'not-dispatched', effects: 'none' });
+  expect(notDispatched.failure).toHaveBeenCalledWith({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
   expect(notDispatched.exited).toHaveBeenCalledExactlyOnceWith(undefined);
   expect(notDispatched.started).not.toHaveBeenCalled();
 

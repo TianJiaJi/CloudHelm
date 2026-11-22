@@ -3,7 +3,7 @@ import { PrivilegedSessions, type SafetyGate, type TerminalManager } from '@clou
 import { BashAnalyzer, SshAuthenticationError, SshTransport } from '@cloudhelm/adapters';
 import { NativeSessionTerminal } from '@cloudhelm/adapters';
 import { PrivilegeError, sudoContextCommand, type PrivilegeMethod } from '@cloudhelm/core';
-import type { ExecutionOptions, OperationExecutor, OperationResult, OperationIntent, ProposedOperation, RawTerminal } from '@cloudhelm/core';
+import type { ExecutionFailureFact, ExecutionOptions, OperationExecutor, OperationResult, OperationIntent, ProposedOperation, RawTerminal } from '@cloudhelm/core';
 import type { InputRequestView } from '@cloudhelm/contracts';
 import { runtimeSshCredentials } from '@cloudhelm/contracts/runtime';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
@@ -15,7 +15,7 @@ class DeferredTerminal implements RawTerminal {
   target?: RawTerminal;
   private data = (_value: string) => {};
   private display = (_value: string) => {};
-  private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>) => {};
+  private failure = (_failure: ExecutionFailureFact) => {};
   private exit = (_value: number | undefined) => {};
   private started = (_event: { pid: number }) => {};
   private authentication = (_value: { id: string; prompt?: string }) => {};

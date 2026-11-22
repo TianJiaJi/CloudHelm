@@ -132,6 +132,7 @@ export class HostSerialExecutor implements OperationExecutor {
       } catch { /* A broken admission callback cannot dispatch or strand the queue. */ }
       if (!admitted) {
         return { operationId: operation.id, status: 'failed', effects: 'none', failureKind: 'not-dispatched',
+          handoff: 'not-sent', businessStart: 'not-started',
           stdoutTail: 'Authorization expired while waiting for the host write lock; no operation was sent' };
       }
       const unresolvedPeers = [...this.domains.peers(hostId)].filter((id) => this.unsettled.has(id));
@@ -148,6 +149,7 @@ export class HostSerialExecutor implements OperationExecutor {
           : running ? `still running in the background (${running}); its outcome is unknown until it exits`
             : `has an unresolved remote outcome (${unresolved})`;
         return { operationId: operation.id, status: 'failed', effects: 'none', failureKind: 'unresolved-prior-operation',
+          handoff: 'not-sent', businessStart: 'not-started',
           stdoutTail: `Another command on this host is ${detail}. Read-only inspection may continue; verify the original outcome before further Agent writes` };
       }
       let result: OperationResult;

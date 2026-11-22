@@ -1,6 +1,6 @@
 import { StringDecoder } from 'node:string_decoder';
 import { CommandNotStartedError, SUDO_SESSION_PROMPT, sudoSessionCommand,
-  type OperationResult, type RawTerminal } from '@cloudhelm/core';
+  type ExecutionFailureFact, type RawTerminal } from '@cloudhelm/core';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
 
@@ -33,7 +33,7 @@ export class NativeSessionTerminal implements RawTerminal {
   private busy = false;
   private abort?: AbortController;
   private data = (_text: string) => {};
-  private failure = (_failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>) => {};
+  private failure = (_failure: ExecutionFailureFact) => {};
   private exited = (_code: number | undefined) => {};
   private closedListener = () => {};
 
@@ -67,7 +67,7 @@ export class NativeSessionTerminal implements RawTerminal {
         'test -x /usr/bin/env && test -x /bin/sh && /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c "exit 0"');
       current();
       if (tools.exitCode !== 0) {
-        this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+        this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
         this.data('会话命令未发送：主机缺少 /usr/bin/env 或 /bin/sh。');
         this.exited(undefined);
         return;
@@ -79,6 +79,7 @@ export class NativeSessionTerminal implements RawTerminal {
         if (password === undefined || password === '' || /[\r\n\u0000]/u.test(password)) {
           this.sudo.rejected();
           this.failure({ failureKind: 'not-dispatched', effects: 'none', requiresUserAction: true,
+            handoff: 'not-sent', businessStart: 'not-started',
             privilege: { method: 'sudo', stage: 'authentication', code: 'authentication-unconfirmed',
               source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } });
           this.data('sudo 会话密码未确认；业务命令未发送。需要用户明确继续。');
@@ -126,13 +127,19 @@ export class NativeSessionTerminal implements RawTerminal {
         // Invalidate cached credentials defensively, but stderr may belong to
         // the payload: repetition of a prompt or diagnostic never proves no effects.
         if (suspectedAuthenticationFailure) this.sudo?.rejected();
-        if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
+        if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
         else if (suspectedAuthenticationFailure && !(outcome.state === 'exited' && outcome.exitCode === 0)) {
           this.failure({ failureKind: 'authentication-failed', effects: 'possible',
+            handoff: 'handed-off',
             privilege: { method: 'sudo', stage: 'authentication', code: 'authentication-rejected',
               source: 'output-inference', businessCommand: 'unknown', recovery: 'verify' } });
           this.data('输出包含疑似 sudo 认证失败信息；不能据此证明业务未启动。已清除本地缓存，请先核验原操作，不自动重放。');
         }
+        else if (outcome.state === 'exited' && outcome.exitCode === 0)
+          // Exit 0 on the session channel means sudo (or the verbatim root form)
+          // completed the reviewed business successfully.
+          this.failure({ handoff: 'handed-off', businessStart: 'started' });
+        else if (outcome.state === 'exited' || outcome.state === 'signaled') this.failure({ handoff: 'handed-off' });
         if (outcome.state === 'signaled') this.data(`远端会话命令收到 ${outcome.signal}；未观察到可确认的退出码。`);
         if (outcome.state === 'unknown') this.data('原生会话命令结果未知；请核验原操作，不要直接重放。');
         this.exited(outcome.state === 'exited' ? outcome.exitCode : undefined);

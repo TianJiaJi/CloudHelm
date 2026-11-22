@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ExecutionJobs } from '@cloudhelm/application';
-import { operationOutcome, type ExecutionJobBinding, type ExecutionJobSnapshot, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
+import { operationOutcome, type ExecutionJobBinding, type ExecutionJobSnapshot, type OperationOutcome, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 import type { OperationView } from '@cloudhelm/contracts';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
 
@@ -150,7 +150,7 @@ export class BackgroundOperations {
       if (feedback.result) {
         if (completion && ['unknown', 'handed-over'].includes(feedback.result.status)
           && this.jobs.get(entry.binding.jobId)?.status === 'stop-requested') { /* Still observing the original process. */ }
-        else if (operationOutcome(feedback.result).execution === 'not-started' && !entry.detached) this.jobs.notStarted(entry.binding, 'unsupported');
+        else if (operationOutcome(feedback.result).receipt === 'rejected' && !entry.detached) this.jobs.notStarted(entry.binding, 'unsupported');
         else this.jobs.observedResult(entry.binding, feedback.result);
       } else if (!entry.detached) this.jobs.notStarted(entry.binding, 'denied');
       else this.jobs.unknown(entry.binding, 'transport-lost');
@@ -160,10 +160,14 @@ export class BackgroundOperations {
         executionJob: this.jobs.get(entry.binding.jobId) } };
     } catch {
       if (entry.binding) this.jobs.unknown(entry.binding, 'transport-lost');
+      // The race winner is the start receipt whenever the process was observed;
+      // this branch settles a call whose observation was lost before that point.
+      const outcome: OperationOutcome = { version: 2, receipt: 'done', handoff: 'unknown', businessStart: 'unknown',
+        liveness: 'unknown', exit: null, effects: 'unclassified', nextActions: ['verify-outcome'], replay: 'never' };
       return { content: [{ type: 'text', text: '后台执行未获得可靠完成结果；请核验原操作，不得自动重试。' }],
-        details: { executionJob: entry.binding ? this.jobs.get(entry.binding.jobId) : undefined },
+        details: { executionJob: entry.binding ? this.jobs.get(entry.binding.jobId) : undefined, operation: outcome },
         structuredContent: { version: 1, executionJob: entry.binding ? this.jobs.get(entry.binding.jobId) ?? null : null,
-          status: 'unknown', health: 'not-established', replay: 'never' }, isError: true };
+          operation: outcome, status: 'unknown', health: 'not-established', replay: 'never' }, isError: true };
     } finally {
       if (completion) void completion.then(() => this.release(id, entry), () => this.release(id, entry));
       else this.release(id, entry);
@@ -179,10 +183,17 @@ export class BackgroundOperations {
     context.unlink(); this.contexts.delete(context.controller.signal);
   }
   private runningFeedback(job: ExecutionJobSnapshot): Feedback {
+    // Transport-confirmed start: the launch was handed off and /proc verified the
+    // business running at the observation point. Nothing here claims permanent
+    // liveness, service readiness, or any classified business effects.
+    const outcome: OperationOutcome = { version: 2, receipt: 'running', handoff: 'handed-off',
+      businessStart: 'started', liveness: 'running', exit: null, effects: 'unclassified',
+      nextActions: ['inspect-result'], replay: 'never' };
     return { content: [{ type: 'text', text: JSON.stringify({ executionJob: job,
+      operation: outcome,
       observation: 'Supervised process started; not proof of authentication, service health, or completion. Read its log/status; never replay to recover output.',
-      replay: 'never' }) }], details: { executionJob: job },
-      structuredContent: { version: 1, executionJob: job, health: 'not-established', replay: 'never' }, isError: false };
+      replay: 'never' }) }], details: { executionJob: job, operation: outcome },
+      structuredContent: { version: 1, executionJob: job, operation: outcome, health: 'not-established', replay: 'never' }, isError: false };
   }
 }
 

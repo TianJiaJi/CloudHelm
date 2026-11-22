@@ -24,7 +24,7 @@ it('removed the legacy edit commit tool from the registry entirely', () => {
 it('refuses a known unsupported replacement hash before terminal allocation or review', async () => {
   const f = fixture(), tool = f.tools.find((tool) => tool.name === 'write_remote_file')!;
   expect(await tool.execute('write', { hostId: 'host', path: '/srv/config', content: 'port=90\n', expectedSha256: 'a'.repeat(64) } as never))
-    .toMatchObject({ isError: true, details: { code: 'remote-edit-unsupported', execution: 'not-started' } });
+    .toMatchObject({ isError: true, details: { code: 'remote-edit-unsupported', receipt: 'rejected', handoff: 'not-sent', businessStart: 'not-started' } });
   expect(f.ensureTerminal).not.toHaveBeenCalled(); expect(f.runOperation).not.toHaveBeenCalled();
 });
 

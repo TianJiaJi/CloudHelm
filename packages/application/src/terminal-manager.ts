@@ -1,6 +1,6 @@
 import { CommandNotStartedError } from '@cloudhelm/core';
 import { randomUUID } from 'node:crypto';
-import type { ExecutionOptions, OperationExecutor, OperationResult, ProcessStartedEvent, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
+import type { ExecutionFailureFact, ExecutionOptions, OperationExecutor, OperationResult, ProcessStartedEvent, ProposedOperation, RawTerminal, TerminalLease } from '@cloudhelm/core';
 import { operationFingerprint, validProcessControl } from '@cloudhelm/core';
 import { OperationOutputCapture } from './operation-output-capture.js';
 
@@ -13,7 +13,7 @@ interface PendingCommand {
   isAuthorized(): boolean;
   onProcessStarted?: (event: ProcessStartedEvent) => void;
   capture: OperationOutputCapture;
-  failure?: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>;
+  failure?: ExecutionFailureFact;
   settle(result: OperationResult): void;
   remoteCompletion: Promise<'exited' | 'unknown'>;
   completeRemote(state: 'exited' | 'unknown'): void;
@@ -219,6 +219,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     let admitted = false;
     try { admitted = options?.canEnterExecutor?.() !== false; } catch { /* Fail closed before any command handoff. */ }
     if (!admitted) return { operationId: operation.id, status: 'failed', failureKind: 'not-dispatched', effects: 'none',
+      handoff: 'not-sent', businessStart: 'not-started',
       stdoutTail: 'Execution admission expired before terminal handoff; no command was sent' };
     return new Promise<OperationResult>((resolve) => {
       let completeRemote!: (state: 'exited' | 'unknown') => void;
@@ -247,7 +248,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
           ...(options?.claimStart ? { claimStart: options.claimStart } : {}) }).catch((error: unknown) => {
         this.receive(terminal, error instanceof Error ? error.message : 'Command transport failed');
         if (error instanceof CommandNotStartedError && terminal.pending === pending) {
-          pending.failure = { failureKind: 'unsupported', effects: 'none' };
+          pending.failure = { failureKind: 'unsupported', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' };
           this.complete(terminal, 127);
         } else this.complete(terminal, undefined);
       });
@@ -273,7 +274,8 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     const result: OperationResult = { operationId: pending.operationId,
       status: notDispatched ? 'failed' : exitCode === undefined ? 'unknown' : exitCode === 0 ? 'succeeded' : 'failed',
       failureKind: exitCode === undefined ? 'unknown' : exitCode && /permission denied|operation not permitted/iu.test(pending.capture.text) ? 'permission-denied' : undefined,
-      effects: exitCode === 0 || pending.readOnly ? undefined : 'possible', ...pending.failure,
+      effects: exitCode === 0 || pending.readOnly ? undefined : 'possible',
+      liveness: exitCode === undefined ? 'unknown' : 'exited', ...pending.failure,
       exitCode, ...pending.capture.snapshot(), logRef: terminal.id };
     this.events.completed?.(result);
     if (!pending.reported) pending.settle(result);

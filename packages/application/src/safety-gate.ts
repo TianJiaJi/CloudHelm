@@ -264,11 +264,14 @@ export class SafetyGate {
         return { decision: safety };
       }
       let startClaimed = false;
+      let startConsumed = false;
       const claimStart: NonNullable<ExecutionOptions['claimStart']> = (target) => {
         if (startClaimed) return false;
         startClaimed = true;
-        return operation.kind === 'command' && target?.hostId === operation.scope.hostId
+        const bound = operation.kind === 'command' && target?.hostId === operation.scope.hostId
           && target.command === operation.command && target.cwd === operation.scope.cwd && stillCurrent();
+        if (bound) startConsumed = true;
+        return bound;
       };
       let result: OperationResult;
       try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), canEnterExecutor: stillCurrent,
@@ -277,6 +280,17 @@ export class SafetyGate {
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       } finally { startClaimed = true; } // A completed attempt cannot resurrect an unused claim.
+      // For native-exec the single-use claim IS the dispatch boundary: it is consumed
+      // immediately before the one business exec, so consumption attests the handoff
+      // and a clean exit additionally attests the business started. Only fill
+      // fields the executor chain did not already attest; missing input stays unknown.
+      if (operation.kind === 'command' && operation.executionChannel === 'native-exec') {
+        result = { ...result,
+          handoff: result.handoff ?? (startConsumed ? 'handed-off' : 'not-sent'),
+          businessStart: result.businessStart ?? (startConsumed
+            ? result.status === 'succeeded' && result.exitCode === 0 ? 'started' : 'unknown'
+            : 'not-started') };
+      }
       // Query semantics establish absence of business mutation, not process exit.
       // Keep unknown/handed-over outcomes and all authentication/control metadata.
       if (readOnly && ['succeeded', 'failed'].includes(result.status)

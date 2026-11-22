@@ -39,7 +39,7 @@ describe('structured operation authorization continuity', () => {
       size: data.length, contentSha256: createHash('sha256').update(data).digest('hex'), scope: f.scope };
     const result = await f.executor.execute(operation, operationFingerprint(operation));
     expect(result).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
-    expect(operationOutcome(result)).toMatchObject({ execution: 'not-started', effects: 'none', nextAction: 'revise-operation' });
+    expect(operationOutcome(result)).toMatchObject({ receipt: 'rejected', handoff: 'not-sent', businessStart: 'not-started', effects: 'none', nextActions: ['revise-operation'] });
     expect(f.writeFile).not.toHaveBeenCalled();
   });
 
@@ -135,7 +135,7 @@ describe('conditional write and read-back verification', () => {
     f.writeFile.mockRejectedValue(new RemoteFileMetadataError());
     const result = await f.executor.execute(operation, operationFingerprint(operation));
     expect(result).toMatchObject({ status: 'failed', effects: 'none', failureKind: 'not-dispatched' });
-    expect(operationOutcome(result)).toMatchObject({ execution: 'not-started', effects: 'none', nextAction: 'revise-operation' });
+    expect(operationOutcome(result)).toMatchObject({ receipt: 'rejected', handoff: 'not-sent', businessStart: 'not-started', effects: 'none', nextActions: ['revise-operation'] });
     expect(result.stdoutTail).toContain('ACL/xattr'); expect(result.stdoutTail).toContain('not delete-and-recreate');
     expect(f.ssh.readFileForEdit).toHaveBeenCalledOnce();
   });

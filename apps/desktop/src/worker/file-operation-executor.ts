@@ -104,7 +104,11 @@ export class FileOperationExecutor implements OperationExecutor {
       return {
         operationId: operation.id, status: handover ? 'handed-over' : verified ? 'succeeded' : 'unknown',
         ...(verified && !handover ? { exitCode: 0 } : {}),
-        ...(!verified ? { effects: 'possible' as const, failureKind: 'unknown' as const } : {}),
+        // The transport resolved the write (or the deletion) and the read-back
+        // hash confirmed the final content, so both facts are attested; an
+        // unconfirmed read-back keeps effects possible and the start proven.
+        handoff: 'handed-off' as const, businessStart: 'started' as const,
+        ...(verified ? { effects: 'observed-change' as const } : { effects: 'possible' as const, failureKind: 'unknown' as const }),
         stdoutTail: `${operation.kind === 'delete-path' ? 'Deleted' : 'Wrote'} ${remotePath}.`
           + (backup ? ` Content-only recovery copy: ${backup} (file bytes only; owner/group/mode, ACL/xattr and service state are not restored).` : ' New file; no previous version.')
           + (written && 'modeDropped' in written && written.modeDropped
@@ -115,7 +119,14 @@ export class FileOperationExecutor implements OperationExecutor {
     } catch (error) {
       const effects = error instanceof RemoteFileError ? error.effects : remoteStarted ? 'possible' : 'none';
       const permissionDenied = error instanceof RemoteFileError && error.permissionDenied;
+      // The transport attests whether the mutation step ever began: a pre-mutation
+      // refusal never dispatched the reviewed write, an attempted mutation did.
+      const handoff = effects === 'possible'
+        ? error instanceof RemoteFileError ? 'handed-off' as const : 'unknown' as const
+        : 'not-sent' as const;
       return { operationId: operation.id, status: effects === 'possible' ? 'unknown' : 'failed', effects,
+        handoff,
+        ...(effects === 'none' ? { businessStart: 'not-started' as const } : {}),
         // A transport that reports no effects proves nothing was changed remotely;
         // the result is a correctable failure, not an outcome that must be verified.
         failureKind: permissionDenied ? 'permission-denied' : effects === 'none' ? 'not-dispatched' : 'unknown',

@@ -42,7 +42,7 @@ describe('native session terminal', () => {
     expect(f.dispatches[0]!.input).toMatchObject({ command: 'systemctl restart nginx', cwd: '/srv' });
     expect(f.dispatches[0]!.written).toEqual([]);
     expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
-    expect(f.failure).not.toHaveBeenCalled();
+    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off', businessStart: 'started' });
   });
 
   it('rebuilds the sudo form for stdin injection and keeps the password out of command text', async () => {
@@ -54,6 +54,7 @@ describe('native session terminal', () => {
     expect(f.dispatches[0]!.written).toEqual([Buffer.from('session-secret\n', 'utf8')]);
     expect(c.credential).toHaveBeenCalledExactlyOnceWith({ command: 'sudo systemctl restart nginx' });
     expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
+    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off', businessStart: 'started' });
   });
 
   it('never dispatches when the user declines the session password', async () => {
@@ -63,6 +64,7 @@ describe('native session terminal', () => {
     expect(f.runNativeExec).not.toHaveBeenCalled();
     expect(c.rejected).toHaveBeenCalledOnce();
     expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'not-dispatched', effects: 'none', requiresUserAction: true,
+      handoff: 'not-sent', businessStart: 'not-started',
       privilege: { method: 'sudo', stage: 'authentication', code: 'authentication-unconfirmed',
         source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } });
     expect(f.exited).toHaveBeenCalledExactlyOnceWith(undefined);
@@ -80,6 +82,7 @@ describe('native session terminal', () => {
     expect(f.dispatches[0]!.written).toHaveLength(1);
     expect(c.rejected).toHaveBeenCalledOnce();
     expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
+      handoff: 'handed-off',
       privilege: { method: 'sudo', stage: 'authentication', code: 'authentication-rejected',
         source: 'output-inference', businessCommand: 'unknown', recovery: 'verify' } });
     expect(f.exited).toHaveBeenCalledExactlyOnceWith(1);
@@ -95,6 +98,7 @@ describe('native session terminal', () => {
     await f.terminal.execute('sudo id', '/', () => true);
     expect(c.rejected).toHaveBeenCalledOnce();
     expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
+      handoff: 'handed-off',
       privilege: { method: 'sudo', stage: 'authentication', code: 'authentication-rejected',
         source: 'output-inference', businessCommand: 'unknown', recovery: 'verify' } });
   });
@@ -107,7 +111,7 @@ describe('native session terminal', () => {
     });
     await f.terminal.execute('sudo id', '/', () => true);
     expect(c.rejected).toHaveBeenCalledOnce(); // Defensive cache cleanup, not business failure proof.
-    expect(f.failure).not.toHaveBeenCalled();
+    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off', businessStart: 'started' });
     expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
   });
 
@@ -117,7 +121,7 @@ describe('native session terminal', () => {
     f.execFixed.mockResolvedValueOnce({ exitCode: 127, output: '' });
     await f.terminal.execute('sudo id', '/', () => true);
     expect(f.runNativeExec).not.toHaveBeenCalled();
-    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'not-dispatched', effects: 'none' });
+    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
     expect(f.data.mock.calls.flat().join('')).toContain('/usr/bin/env');
     expect(f.exited).toHaveBeenCalledExactlyOnceWith(undefined);
   });

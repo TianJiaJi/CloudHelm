@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { operationFeedback } from '../../../apps/desktop/src/worker/operation-feedback.js';
+import { operationFeedback, operationFeedbackDetails, operationToolResult } from '../../../apps/desktop/src/worker/operation-feedback.js';
 it('keeps successful retry warnings out of model output while explaining the final outcome', () => {
   const result = { operationId: 'op', status: 'succeeded' as const, exitCode: 0, authentication: 'succeeded' as const,
     stdoutTail: 'Sorry, try again.\nNETWORK ID NAME\n' };
@@ -50,4 +50,20 @@ it('carries the do-not-blindly-resend warning only on an in-flight unknown resul
     .toContain('远端可能仍在执行此命令，禁止盲目重发；先用只读方式确认状态');
   expect(operationFeedback({ operationId: 'op', status: 'failed', failureKind: 'unknown', effects: 'none', exitCode: 1, stdoutTail: '' }, 'host'))
     .not.toContain('禁止盲目重发');
+});
+it('spreads the orthogonal v2 facts into structured details', () => {
+  const blocked = operationFeedbackDetails({ operationId: 'blocked', status: 'failed', effects: 'none',
+    failureKind: 'not-dispatched', stdoutTail: '' }, true);
+  expect(blocked).toMatchObject({ version: 2, receipt: 'rejected', handoff: 'not-sent', businessStart: 'not-started',
+    liveness: 'unknown', exit: null, effects: 'none', nextActions: ['revise-operation'], replay: 'never' });
+  const pending = operationFeedbackDetails({ operationId: 'pending', status: 'unknown', stdoutTail: '', logRef: 'terminal' });
+  expect(pending).toMatchObject({ receipt: 'done', handoff: 'unknown', businessStart: 'unknown',
+    liveness: 'unknown', exit: null, nextActions: ['verify-outcome', 'read-log'] });
+});
+it('reports the requested identity from the reviewed scope without inventing an observed one', () => {
+  const tool = operationToolResult({ operationId: 'op', status: 'succeeded', exitCode: 0, stdoutTail: 'ok' }, 'host', false,
+    { taskId: 'task', hostId: 'host', cwd: '/srv', runAs: 'deploy', terminalId: 'terminal', terminalGeneration: 1,
+      policyRevision: 1, allowedWorkingRoots: [], protectedPaths: [], goal: 'deploy' });
+  expect(tool.structuredContent).toMatchObject({ taskId: 'task', hostId: 'host', terminalId: 'terminal',
+    identity: { requested: 'deploy', observed: 'unknown', evidenceSource: 'not-observed' } });
 });

@@ -31,6 +31,7 @@ it('routes reviewed foreground commands through native SSH with no Python or SFT
   await f.terminal.execute('id -u', '/', () => true, { executionChannel: 'native-exec' });
   expect(f.runNativeExec).toHaveBeenCalledWith('host', { command: 'id -u', cwd: '/', envPath: '/usr/bin/env', shellPath: '/bin/sh' }, expect.any(Function), expect.any(Object), expect.any(AbortSignal));
   expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
+  expect(f.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off', businessStart: 'started' });
   expect(f.output).toHaveBeenCalledWith('uid=1000\n');
   expect(f.prepareCommandProgram).not.toHaveBeenCalled(); expect(f.openPipe).not.toHaveBeenCalled();
 });
@@ -39,7 +40,7 @@ it('fails before business dispatch if the remote native tools are absent', async
   const f = fixture(1);
   await f.terminal.execute('id -u', '/', () => true, { executionChannel: 'native-exec' });
   expect(f.runNativeExec).not.toHaveBeenCalled();
-  expect(f.failure).toHaveBeenCalledWith({ failureKind: 'not-dispatched', effects: 'none' });
+  expect(f.failure).toHaveBeenCalledWith({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
   expect(f.exited).toHaveBeenCalledExactlyOnceWith(undefined);
 });
 
@@ -75,7 +76,7 @@ it('rebuilds one literal sudo command with the client-owned marker prompt on the
     nonce: expect.stringMatching(/^[a-f0-9]{32}$/u), cols: 100, rows: 30 }),
   expect.any(Function), expect.any(Object), expect.any(AbortSignal));
   expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
-  expect(f.failure).not.toHaveBeenCalled();
+  expect(f.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off', businessStart: 'started' });
 });
 
 it('translates marker windows into sudo challenges and routes only answers to open windows', async () => {
@@ -110,25 +111,26 @@ it('keeps missing-sudo text as inference, not zero-effects proof', async () => {
   const missing = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: false, sudoMissing: true });
   await missing.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
   expect(missing.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'possible',
+    handoff: 'handed-off',
     privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable', source: 'output-inference',
       businessCommand: 'unknown', recovery: 'verify' } });
   expect(missing.exited).toHaveBeenCalledExactlyOnceWith(127);
 
   const child = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: false, sudoMissing: false });
   await child.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(child.failure).not.toHaveBeenCalled();
+  expect(child.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off' });
   expect(child.exited).toHaveBeenCalledExactlyOnceWith(127);
 });
 
 it('does not infer no effects from exit 125 or a missing prompt marker', async () => {
   const denied = ptyFixture({ state: 'exited', exitCode: 125, markerSeen: false, sudoMissing: false });
   await denied.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(denied.failure).not.toHaveBeenCalled();
+  expect(denied.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off' });
   expect(denied.exited).toHaveBeenCalledExactlyOnceWith(125);
 
   const marked = ptyFixture({ state: 'exited', exitCode: 125, markerSeen: true, sudoMissing: false });
   await marked.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(marked.failure).not.toHaveBeenCalled();
+  expect(marked.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off' });
   expect(marked.exited).toHaveBeenCalledExactlyOnceWith(125);
 });
 
@@ -136,6 +138,7 @@ it('retains sudoers diagnostics without claiming trusted startup evidence', asyn
   const denied = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, sudoDenied: true });
   await denied.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
   expect(denied.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
+    handoff: 'handed-off',
     privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied', source: 'output-inference',
       businessCommand: 'unknown', recovery: 'verify' } });
   expect(denied.exited).toHaveBeenCalledExactlyOnceWith(1);
@@ -144,12 +147,13 @@ it('retains sudoers diagnostics without claiming trusted startup evidence', asyn
   // Its absence is not evidence that no payload ran either.
   const unproven = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false });
   await unproven.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(unproven.failure).not.toHaveBeenCalled();
+  expect(unproven.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off' });
   expect(unproven.exited).toHaveBeenCalledExactlyOnceWith(1);
 
   const unmarked = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: false, sudoMissing: false, sudoDenied: true });
   await unmarked.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
   expect(unmarked.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
+    handoff: 'handed-off',
     privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied', source: 'output-inference',
       businessCommand: 'unknown', recovery: 'verify' } });
   expect(unmarked.exited).toHaveBeenCalledExactlyOnceWith(1);
@@ -167,7 +171,7 @@ it('settles unknown outcomes without replaying and fails closed without the nati
   const exited = vi.fn(), failure = vi.fn();
   terminal.onExit(exited); terminal.onExecutionFailure(failure);
   await terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'not-dispatched', effects: 'none' });
+  expect(failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
   expect(exited).toHaveBeenCalledExactlyOnceWith(undefined);
 });
 
@@ -210,13 +214,14 @@ it('dispatches the backend-built su wrap on the su-window PTY with a one-time ma
   expect(f.output).toHaveBeenCalledExactlyOnceWith('uid=0(root)\n');
   await executing;
   expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
-  expect(f.failure).not.toHaveBeenCalled();
+  expect(f.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off', businessStart: 'started' });
 });
 
 it('keeps su failure text unconfirmed and preserves successful exits', async () => {
   const rejected = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, suAuthenticationFailed: true });
   await rejected.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
   expect(rejected.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
+    handoff: 'handed-off',
     privilege: { method: 'su', stage: 'authentication', code: 'authentication-rejected', source: 'output-inference',
       businessCommand: 'unknown', recovery: 'verify' } });
   expect(rejected.exited).toHaveBeenCalledExactlyOnceWith(1);
@@ -224,7 +229,7 @@ it('keeps su failure text unconfirmed and preserves successful exits', async () 
   // A payload echoing the failure text but exiting 0 must never pause the task.
   const echoed = ptyFixture({ state: 'exited', exitCode: 0, markerSeen: true, sudoMissing: false, suAuthenticationFailed: true });
   await echoed.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
-  expect(echoed.failure).not.toHaveBeenCalled();
+  expect(echoed.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off', businessStart: 'started' });
   expect(echoed.exited).toHaveBeenCalledExactlyOnceWith(0);
 });
 
@@ -232,6 +237,7 @@ it('classifies a missing su or unknown target account as unsupported, passing bu
   const missing = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: true, sudoMissing: false, suMissing: true });
   await missing.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
   expect(missing.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'possible',
+    handoff: 'handed-off',
     privilege: { method: 'su', stage: 'preparation', code: 'unsupported', source: 'output-inference',
       businessCommand: 'unknown', recovery: 'verify' } });
   expect(missing.exited).toHaveBeenCalledExactlyOnceWith(127);
@@ -239,6 +245,7 @@ it('classifies a missing su or unknown target account as unsupported, passing bu
   const user = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, suUserMissing: true });
   await user.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
   expect(user.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'possible',
+    handoff: 'handed-off',
     privilege: { method: 'su', stage: 'preparation', code: 'unsupported', source: 'output-inference',
       businessCommand: 'unknown', recovery: 'verify' } });
   expect(user.exited).toHaveBeenCalledExactlyOnceWith(1);
@@ -246,7 +253,7 @@ it('classifies a missing su or unknown target account as unsupported, passing bu
   // A business-level 127 without su diagnostics is an ordinary failed command.
   const business = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: true, sudoMissing: false });
   await business.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
-  expect(business.failure).not.toHaveBeenCalled();
+  expect(business.failure).toHaveBeenCalledExactlyOnceWith({ handoff: 'handed-off' });
   expect(business.exited).toHaveBeenCalledExactlyOnceWith(127);
 });
 

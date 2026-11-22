@@ -164,12 +164,18 @@ export interface OperationResult {
   processControl?: { kind: 'interrupt'; jobId: string; targetOperationId: string; delivery: 'sent' | 'already-exited' | 'unknown' };
   operationId: string;
   status: 'succeeded' | 'failed' | 'unknown' | 'handed-over';
+  /** Dispatch-boundary handoff fact. Producers that cannot attest leave it unset; the reduction reports unknown. */
+  handoff?: 'not-sent' | 'handed-off' | 'unknown';
+  /** Whether the reviewed business action provably began (or provably never began); never inferred from output text. */
+  businessStart?: 'not-started' | 'started' | 'unknown';
+  /** Liveness of the dispatched process at the last trusted observation; never inferred from silence. */
+  liveness?: 'running' | 'exited' | 'unknown';
   exitCode?: number;
   authentication?: 'succeeded' | 'required' | 'failed';
   authenticationAttempts?: number;
   privilege?: import('./privilege.js').PrivilegeFeedback;
   failureKind?: 'authentication-required' | 'permission-denied' | 'authentication-failed' | 'unsupported' | 'user-action-required' | 'unresolved-prior-operation' | 'not-dispatched' | 'unknown';
-  effects?: 'none' | 'possible';
+  effects?: 'none' | 'possible' | 'observed-change';
   stdoutTail: string;
   /** Redacted observation counts; not evidence of process exit or durable log retention. */
   outputCapture?: { totalChars: number; tailChars: number; truncated: boolean };
@@ -180,6 +186,10 @@ export interface OperationResult {
   /** Runtime-only evidence that a handed-over PTY command actually left the foreground. */
   remoteCompletion?: Promise<'exited' | 'unknown'>;
 }
+
+/** Partial facts a terminal reports through the failure channel before settling;
+ * every field is optional and absent facts surface as unknown in the reduction. */
+export type ExecutionFailureFact = Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction' | 'handoff' | 'businessStart' | 'liveness'>;
 
 export interface ApprovalRequest {
   id: string;
