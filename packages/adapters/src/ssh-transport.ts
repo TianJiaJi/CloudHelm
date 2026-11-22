@@ -9,7 +9,7 @@ export { SshAuthenticationError } from './ssh-authentication.js';
 export type { SshLoginPrompt, SshLoginChallenge } from './ssh-authentication.js';
 import { openSshProxy } from './ssh-proxy.js';
 import type { Socket } from 'node:net';
-import type { SshConnectionSettings, SshCredentials } from '@cloudhelm/core';
+import type { SshConnectionSettings, SshCredentials, NativeStartTarget } from '@cloudhelm/core';
 import { startManualKeepalive } from './manual-session.js';
 import { openIntegratedShell, type ManualShellOptions } from './shell-integration.js';
 import { redactOutput } from '@cloudhelm/core';
@@ -224,7 +224,7 @@ export class SshTransport {
 
   /** Native exec primitive; never authorizes itself or retries an unknown dispatch. */
   async runNativeExec(hostId: string, input: { command: string; cwd: string; envPath: string; shellPath: string },
-    authorized: () => boolean, hooks: { stdout(data: Buffer): void; stderr(data: Buffer): void; stdin?(write: (data: Buffer) => void, end: () => void): void }, signal?: AbortSignal): Promise<NativeExecOutcome> {
+    authorized: () => boolean, hooks: { stdout(data: Buffer): void; stderr(data: Buffer): void; claimStart?(target: NativeStartTarget): boolean; stdin?(write: (data: Buffer) => void, end: () => void): void }, signal?: AbortSignal): Promise<NativeExecOutcome> {
     const client = this.connections.get(hostId);
     if (!client) return { state: 'not-dispatched', reason: 'authorization-expired' };
     const generation = this.connectionGeneration(hostId);
@@ -232,7 +232,7 @@ export class SshTransport {
       try { return authorized() && this.connections.get(hostId) === client
         && this.connectionGeneration(hostId) === generation; }
       catch { return false; }
-    }, hooks, signal);
+    }, { ...hooks, claimStart: hooks.claimStart ? () => hooks.claimStart!({ hostId, command: input.command, cwd: input.cwd }) : undefined }, signal);
   }
 
   /** Native PTY primitive for sudo/su credential delivery; never authorizes itself or retries an unknown dispatch. */

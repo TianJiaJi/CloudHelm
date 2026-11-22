@@ -263,11 +263,20 @@ export class SafetyGate {
         await this.deps.audit.decided(operation.id, safety, fingerprint);
         return { decision: safety };
       }
+      let startClaimed = false;
+      const claimStart: NonNullable<ExecutionOptions['claimStart']> = (target) => {
+        if (startClaimed) return false;
+        startClaimed = true;
+        return operation.kind === 'command' && target?.hostId === operation.scope.hostId
+          && target.command === operation.command && target.cwd === operation.scope.cwd && stillCurrent();
+      };
       let result: OperationResult;
-      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), canEnterExecutor: stillCurrent, isAuthorized: dispatchCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
+      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), canEnterExecutor: stillCurrent,
+        ...(operation.kind === 'command' && operation.executionChannel === 'native-exec' ? { claimStart } : {}),
+        isAuthorized: dispatchCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
-      }
+      } finally { startClaimed = true; } // A completed attempt cannot resurrect an unused claim.
       // Query semantics establish absence of business mutation, not process exit.
       // Keep unknown/handed-over outcomes and all authentication/control metadata.
       if (readOnly && ['succeeded', 'failed'].includes(result.status)

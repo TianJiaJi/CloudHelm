@@ -2,7 +2,7 @@ import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.j
 import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { CommandNotStartedError, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, sudoMarkerPrompt, sudoPtyCommand,
-  type CommandAnalysis, type OperationResult, type ProcessStartedEvent, type RawTerminal } from '@cloudhelm/core';
+  type CommandAnalysis, type CommandExecutionOptions, type OperationResult, type ProcessStartedEvent, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
@@ -54,7 +54,7 @@ export class SshCommandTerminal implements RawTerminal {
   onClose(listener: () => void): void { this.closedListener = listener; }
   onAuthentication(listener: (challenge: { id: string; prompt?: string }) => void): void { this.authentication = listener; }
 
-  async execute(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' | 'native-pty' | 'native-background' }): Promise<void> {
+  async execute(command: string, cwd: string, isAuthorized: () => boolean, options?: CommandExecutionOptions): Promise<void> {
     if (this.busy || this.human || this.humanOpening) throw new Error('The command terminal is busy');
     this.busy = true;
     const deadline = new Promise<never>((_resolve, reject) => this.armStartup(reject));
@@ -67,7 +67,7 @@ export class SshCommandTerminal implements RawTerminal {
   }
 
   private async executeCommand(command: string, cwd: string, isAuthorized: () => boolean,
-    options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' | 'native-pty' | 'native-background' }): Promise<void> {
+    options?: CommandExecutionOptions): Promise<void> {
     const current = () => {
       if (this.closed || this.generation !== this.ssh.connectionGeneration(this.hostId) || !isAuthorized()) {
         throw new Error('Command authorization expired');
@@ -81,7 +81,7 @@ export class SshCommandTerminal implements RawTerminal {
         cwd, runAs: '', terminalId: '', terminalGeneration: 0, policyRevision: 0,
         allowedWorkingRoots: [], protectedPaths: [], goal: '' } }, analysis) || options.sudoAuthorization)
         throw new CommandNotStartedError('Native exec review no longer matches command; nothing sent');
-      await this.executeNative(command, cwd, current);
+      await this.executeNative(command, cwd, current, options.claimStart);
       return;
     }
     if (options?.executionChannel === 'native-pty') {
@@ -113,7 +113,7 @@ export class SshCommandTerminal implements RawTerminal {
     throw new CommandNotStartedError('This command form has no native execution channel; nothing sent');
   }
 
-  private async executeNative(command: string, cwd: string, current: () => void): Promise<void> {
+  private async executeNative(command: string, cwd: string, current: () => void, claimStart?: CommandExecutionOptions['claimStart']): Promise<void> {
     if (!this.ssh.execFixed || !this.ssh.runNativeExec) {
       this.failure({ failureKind: 'not-dispatched', effects: 'none' });
       this.exited(undefined); this.busy = false; return;
@@ -138,7 +138,7 @@ export class SshCommandTerminal implements RawTerminal {
       const outcome = await this.ssh.runNativeExec(this.hostId,
         { command, cwd, envPath: '/usr/bin/env', shellPath: '/bin/sh' },
         () => { current(); return true; },
-        { stdout: (data) => emit(stdout, data), stderr: (data) => emit(stderr, data) }, controller.signal);
+        { stdout: (data) => emit(stdout, data), stderr: (data) => emit(stderr, data), claimStart }, controller.signal);
       for (const decoder of [stdout, stderr]) { const tail = decoder.end(); if (tail) this.data(tail); }
       if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
       if (outcome.state === 'signaled') this.data(`远端命令收到 ${outcome.signal}；未观察到可确认的退出码。`);

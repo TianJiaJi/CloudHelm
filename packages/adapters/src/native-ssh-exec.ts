@@ -16,6 +16,8 @@ export function runNativeSshExec(client: Pick<Client, 'exec'>, input: {
   command: string; cwd: string; envPath: string; shellPath: string;
 }, current: () => boolean, hooks: {
   stdout(data: Buffer): void; stderr(data: Buffer): void;
+  /** Claim immediately before the one business exec; never consult it after handoff. */
+  claimStart?(): boolean;
   /** Optional one-shot stdin handoff, invoked after the channel is open and
    * re-authorized and before any output is delivered. The writer stays valid
    * until the outcome settles; later writes are dropped. */
@@ -38,6 +40,9 @@ export function runNativeSshExec(client: Pick<Client, 'exec'>, input: {
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted || !current()) { finish({ state: 'not-dispatched', reason: 'authorization-expired' }); return; }
     try {
+      let claimed = true;
+      try { claimed = hooks.claimStart?.() !== false; } catch { claimed = false; }
+      if (!claimed) { finish({ state: 'not-dispatched', reason: 'authorization-expired' }); return; }
       requested = true;
       client.exec(rendered, { pty: false }, (error, stream) => {
         if (settled) {

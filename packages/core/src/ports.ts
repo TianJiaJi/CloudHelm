@@ -41,6 +41,12 @@ export interface ProcessStartedEvent {
   processStartTime?: number;
 }
 
+export interface NativeStartTarget {
+  hostId: string;
+  command: string;
+  cwd: string;
+}
+
 export interface ExecutionOptions {
   /** Private backend callback: never serialize file contents into ordinary logs. */
   onFileInspection?: (snapshot: import('./file-transaction.js').FileInspection) => void;
@@ -50,6 +56,8 @@ export interface ExecutionOptions {
   impactAnalysis?: OperationImpact;
   /** Queue/executor entry admission, including approval time limits. Never a liveness check. */
   canEnterExecutor?: () => boolean;
+  /** Private single-use claim matched against the actual native-exec destination and text. */
+  claimStart?: (target: NativeStartTarget) => boolean;
   /** Synchronous current-context check; remains valid for already-started work beyond approval expiry. */
   isAuthorized?: () => boolean;
   /** Trusted supervised-process observation. Not proof of target authentication or readiness. */
@@ -81,6 +89,12 @@ export interface TerminalLease {
   isAgentOwner(terminalId: string): boolean;
 }
 
+export interface CommandExecutionOptions {
+  sudoAuthorization?: boolean;
+  executionChannel?: 'native-exec' | 'native-pty' | 'native-background';
+  claimStart?: (target: NativeStartTarget) => boolean;
+}
+
 export interface RawTerminal {
   /** Trusted process-transport event, never inferred from command output or model settlement. */
   onProcessStarted?(listener: (event: ProcessStartedEvent) => void): void;
@@ -90,7 +104,7 @@ export interface RawTerminal {
   onCwd?(listener: (directory: string) => void): void;
   onCommand?(listener: (event: { phase: 'start' | 'end' | 'unavailable'; command?: string; exitCode?: number }) => void): void;
   /** Separate process/control channel; command text is never rewritten as terminal input. */
-  execute?(command: string, cwd: string, isAuthorized: () => boolean, options?: { sudoAuthorization?: boolean; executionChannel?: 'native-exec' | 'native-pty' | 'native-background' }): Promise<void>;
+  execute?(command: string, cwd: string, isAuthorized: () => boolean, options?: CommandExecutionOptions): Promise<void>;
   onExecutionFailure?(listener: (failure: Pick<OperationResult, 'failureKind' | 'effects' | 'privilege' | 'requiresUserAction'>) => void): void;
   onExit?(listener: (exitCode: number | undefined) => void): void;
   /** Prompt/command echo for the terminal only, separate from captured command output. */

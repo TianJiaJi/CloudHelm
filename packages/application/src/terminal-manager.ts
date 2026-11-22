@@ -243,7 +243,8 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       }, { once: true });
       if (!terminal.channel.onDisplay) this.events.data(terminal.id, `$ ${operation.command}\r\n`);
       void terminal.channel.execute!(operation.command, operation.scope.cwd, current,
-        { sudoAuthorization: operation.privilege === 'root', executionChannel: operation.executionChannel }).catch((error: unknown) => {
+        { sudoAuthorization: operation.privilege === 'root', executionChannel: operation.executionChannel,
+          ...(options?.claimStart ? { claimStart: options.claimStart } : {}) }).catch((error: unknown) => {
         this.receive(terminal, error instanceof Error ? error.message : 'Command transport failed');
         if (error instanceof CommandNotStartedError && terminal.pending === pending) {
           pending.failure = { failureKind: 'unsupported', effects: 'none' };
