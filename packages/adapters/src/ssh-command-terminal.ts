@@ -104,7 +104,7 @@ export class SshCommandTerminal implements RawTerminal {
       if (!nativeBackgroundEligible({ id: '', kind: 'command', command, executionMode: 'background', scope }, analysis)
         || options.sudoAuthorization)
         throw new CommandNotStartedError('Native background review no longer matches command; nothing sent');
-      await this.executeNativeBackground(command, cwd, current);
+      await this.executeNativeBackground(command, cwd, current, options.claimStart);
       return;
     }
     // The legacy remote Python driver is gone; a channel-less form never
@@ -229,7 +229,8 @@ export class SshCommandTerminal implements RawTerminal {
    * reviewed stop signals. Observation continues in a detached watcher channel;
    * this method returns right after the trusted start observation so the startup
    * bound cannot expire while the business runs. */
-  private async executeNativeBackground(command: string, cwd: string, current: () => void): Promise<void> {
+  private async executeNativeBackground(command: string, cwd: string, current: () => void,
+    claimStart?: CommandExecutionOptions['claimStart']): Promise<void> {
     if (!this.ssh.execFixed || !this.ssh.runNativeExec) {
       this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.exited(undefined); this.busy = false; return;
@@ -248,7 +249,13 @@ export class SshCommandTerminal implements RawTerminal {
       throw new CommandNotStartedError(`后台命令未渲染或超出长度限制；未发送。${error instanceof Error ? error.message : ''}`);
     }
     current();
-    const dispatched = await this.runBackgroundCommand(launch, cwd, current);
+    // The claim is consumed only at the setsid launch dispatch: the reviewed
+    // command is embedded once into the backend-rendered launch body, so verify
+    // the transport binding and rebind the reviewed command and directory.
+    const claim: ((dispatched: NativeStartTarget) => boolean) | undefined = claimStart ? (dispatched) =>
+      dispatched.hostId === this.hostId && dispatched.command === launch && dispatched.cwd === cwd
+        ? claimStart({ hostId: this.hostId, command, cwd }) : false : undefined;
+    const dispatched = await this.runBackgroundCommand(launch, cwd, current, undefined, claim);
     if (dispatched.outcome.state === 'not-dispatched') {
       this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.exited(undefined); this.busy = false; return;
@@ -306,13 +313,13 @@ export class SshCommandTerminal implements RawTerminal {
 
   /** One authorized native exec whose stdout/stderr are collected for backend parsing only. */
   private async runBackgroundCommand(command: string, cwd: string, current: () => void,
-    signal?: AbortSignal): Promise<{ outcome: NativeExecOutcome; output: string }> {
+    signal?: AbortSignal, claimStart?: (target: NativeStartTarget) => boolean): Promise<{ outcome: NativeExecOutcome; output: string }> {
     let output = '';
     const outcome = await this.ssh.runNativeExec!(this.hostId,
       { command, cwd, envPath: '/usr/bin/env', shellPath: '/bin/sh' },
       () => { current(); return true; },
       { stdout: (data: Buffer) => { if (output.length < 65_536) output += data.toString('utf8'); },
-        stderr: () => {} }, signal);
+        stderr: () => {}, ...(claimStart ? { claimStart } : {}) }, signal);
     return { outcome, output };
   }
 
