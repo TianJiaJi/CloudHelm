@@ -126,8 +126,13 @@ export class HostSerialExecutor implements OperationExecutor {
       } else options?.onProcessStarted?.(event);
     } } : options;
     try {
-      if (signal?.aborted || options?.isAuthorized?.() === false) {
-        return { operationId: operation.id, status: 'failed', effects: 'none', stdoutTail: 'Authorization expired while waiting for the host write lock; no operation was sent' };
+      let admitted = false;
+      try {
+        admitted = !signal?.aborted && options?.isAuthorized?.() !== false && options?.canEnterExecutor?.() !== false;
+      } catch { /* A broken admission callback cannot dispatch or strand the queue. */ }
+      if (!admitted) {
+        return { operationId: operation.id, status: 'failed', effects: 'none', failureKind: 'not-dispatched',
+          stdoutTail: 'Authorization expired while waiting for the host write lock; no operation was sent' };
       }
       const unresolvedPeers = [...this.domains.peers(hostId)].filter((id) => this.unsettled.has(id));
       if (unresolvedPeers.length && !options?.readOnly) {

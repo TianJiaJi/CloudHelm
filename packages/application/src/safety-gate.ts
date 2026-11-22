@@ -264,7 +264,7 @@ export class SafetyGate {
         return { decision: safety };
       }
       let result: OperationResult;
-      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), isAuthorized: dispatchCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
+      try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), canEnterExecutor: stillCurrent, isAuthorized: dispatchCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       }

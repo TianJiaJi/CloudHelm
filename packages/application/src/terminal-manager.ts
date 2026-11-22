@@ -216,6 +216,10 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       throw new Error('Agent terminal authorization expired');
     }
     if (!terminal.channel.execute) throw new Error('This terminal does not support direct process execution');
+    let admitted = false;
+    try { admitted = options?.canEnterExecutor?.() !== false; } catch { /* Fail closed before any command handoff. */ }
+    if (!admitted) return { operationId: operation.id, status: 'failed', failureKind: 'not-dispatched', effects: 'none',
+      stdoutTail: 'Execution admission expired before terminal handoff; no command was sent' };
     return new Promise<OperationResult>((resolve) => {
       let completeRemote!: (state: 'exited' | 'unknown') => void;
       const remoteCompletion = new Promise<'exited' | 'unknown'>((done) => { completeRemote = done; });

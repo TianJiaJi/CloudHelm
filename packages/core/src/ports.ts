@@ -48,7 +48,9 @@ export interface ExecutionOptions {
   readOnly?: boolean;
   /** Backend facts only, not a grant to bypass isAuthorized or host locks. */
   impactAnalysis?: OperationImpact;
-  /** Synchronous final authorization check; adapters call it before each new side effect. */
+  /** Queue/executor entry admission, including approval time limits. Never a liveness check. */
+  canEnterExecutor?: () => boolean;
+  /** Synchronous current-context check; remains valid for already-started work beyond approval expiry. */
   isAuthorized?: () => boolean;
   /** Trusted supervised-process observation. Not proof of target authentication or readiness. */
   onProcessStarted?: (event: ProcessStartedEvent) => void;
