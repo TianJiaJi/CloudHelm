@@ -3,7 +3,7 @@ import { PrivilegedSessions, type SafetyGate, type TerminalManager } from '@clou
 import { BashAnalyzer, SshAuthenticationError, SshTransport } from '@cloudhelm/adapters';
 import { NativeSessionTerminal } from '@cloudhelm/adapters';
 import { PrivilegeError, sudoContextCommand, type PrivilegeMethod } from '@cloudhelm/core';
-import type { ExecutionFailureFact, ExecutionOptions, OperationExecutor, OperationResult, OperationIntent, ProposedOperation, RawTerminal } from '@cloudhelm/core';
+import type { CommandExecutionOptions, ExecutionFailureFact, ExecutionOptions, OperationExecutor, OperationResult, OperationIntent, ProposedOperation, RawTerminal } from '@cloudhelm/core';
 import type { InputRequestView } from '@cloudhelm/contracts';
 import { runtimeSshCredentials } from '@cloudhelm/contracts/runtime';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
@@ -39,7 +39,7 @@ class DeferredTerminal implements RawTerminal {
   }
   answerAuthentication(id: string, answer: string | null): boolean { return this.target?.answerAuthentication?.(id, answer) ?? false; }
   onClose(listener: () => void): void { this.closed = listener; }
-  execute(command: string, cwd: string, current: () => boolean, options?: { sudoAuthorization?: boolean }): Promise<void> {
+  execute(command: string, cwd: string, current: () => boolean, options?: CommandExecutionOptions): Promise<void> {
     if (!this.target?.execute) throw new Error('Root session not authenticated');
     return this.target.execute(command, cwd, current, options);
   }

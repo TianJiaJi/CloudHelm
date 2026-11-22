@@ -237,7 +237,8 @@ export class SshTransport {
 
   /** Native PTY primitive for sudo/su credential delivery; never authorizes itself or retries an unknown dispatch. */
   runNativePty(hostId: string, input: { command: string; cwd: string; envPath: string; shellPath: string; nonce: string; cols: number; rows: number; window?: PtyWindow },
-    authorized: () => boolean, hooks: { data(text: string): void; authentication(event: { id: string; open: boolean }): void },
+    authorized: () => boolean, hooks: { data(text: string): void; authentication(event: { id: string; open: boolean }): void;
+      claimStart?(target: NativeStartTarget): boolean },
     signal?: AbortSignal): NativePtyHandle {
     const client = this.connections.get(hostId);
     const generation = this.connectionGeneration(hostId);
@@ -245,7 +246,8 @@ export class SshTransport {
       try { return authorized() && this.connections.get(hostId) === client
         && this.connectionGeneration(hostId) === generation; }
       catch { return false; }
-    }, hooks, signal);
+    }, { data: hooks.data, authentication: hooks.authentication,
+      claimStart: hooks.claimStart ? () => hooks.claimStart!({ hostId, command: input.command, cwd: input.cwd }) : undefined }, signal);
   }
 
   startManualKeepalive(hostId: string, options: ManualShellOptions, canRun: () => boolean, notice: (message: string) => void): () => void {

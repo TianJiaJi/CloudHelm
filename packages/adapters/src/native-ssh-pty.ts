@@ -55,6 +55,8 @@ export function openNativeSshPty(client: Pick<Client, 'exec'> | undefined, input
   window?: PtyWindow;
 }, current: () => boolean, hooks: {
   data(text: string): void; authentication(event: { id: string; open: boolean }): void;
+  /** Claim immediately before the one PTY dispatch; never consult it after handoff. */
+  claimStart?(): boolean;
 }, signal?: AbortSignal, startupTimeoutMs = 15_000): NativePtyHandle {
   const rendered = renderNativeExecCommand(input);
   if (!/^[a-f0-9]{32}$/u.test(input.nonce)) throw new Error('Native PTY requires a client-generated marker nonce');
@@ -107,13 +109,18 @@ class LiveNativePtySession {
     private readonly scanTarget: string, private readonly mode: PtyWindow,
     private readonly cols: number, private readonly rows: number,
     private readonly current: () => boolean, private readonly hooks: {
-      data(text: string): void; authentication(event: { id: string; open: boolean }): void;
+      data(text: string): void; authentication(event: { id: string; open: boolean }): void; claimStart?(): boolean;
     }, signal: AbortSignal | undefined, startupTimeoutMs: number) {
     this.timer = setTimeout(() => this.finish({ state: 'unknown', reason: 'timeout' }), startupTimeoutMs);
     this.timer.unref?.();
     signal?.addEventListener('abort', () => this.finish(this.requested
       ? { state: 'unknown', reason: 'aborted' } : { state: 'not-dispatched', reason: 'authorization-expired' }), { once: true });
     try {
+      // Claim immediately before the one PTY dispatch; never consult the claim
+      // after handoff. An unconfirmed claim dispatches nothing.
+      let claimed = true;
+      try { claimed = this.hooks.claimStart?.() !== false; } catch { claimed = false; }
+      if (!claimed) { this.finish({ state: 'not-dispatched', reason: 'authorization-expired' }); return; }
       this.requested = true;
       this.client.exec(this.rendered, { pty: { term: 'dumb', cols: this.cols, rows: this.rows, modes: { ECHO: 0 } } },
         (error, stream) => {

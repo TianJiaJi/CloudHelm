@@ -2,7 +2,7 @@ import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.j
 import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { CommandNotStartedError, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, sudoMarkerPrompt, sudoPtyCommand,
-  type CommandAnalysis, type CommandExecutionOptions, type ExecutionFailureFact, type ProcessStartedEvent, type RawTerminal } from '@cloudhelm/core';
+  type CommandAnalysis, type CommandExecutionOptions, type ExecutionFailureFact, type NativeStartTarget, type ProcessStartedEvent, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
@@ -94,7 +94,7 @@ export class SshCommandTerminal implements RawTerminal {
       const su = !sudo && options.sudoAuthorization === true
         && nativePtySuEligible({ id: '', kind: 'command', command, privilege: 'root', scope }, analysis);
       if (!sudo && !su) throw new CommandNotStartedError('Native PTY review no longer matches command; nothing sent');
-      await this.executeNativePty(sudo ? 'sudo' : 'su', command, cwd, current, analysis);
+      await this.executeNativePty(sudo ? 'sudo' : 'su', command, cwd, current, analysis, options.claimStart);
       return;
     }
     if (options?.executionChannel === 'native-background') {
@@ -154,7 +154,8 @@ export class SshCommandTerminal implements RawTerminal {
 
   /** sudo/su on the credential-bound native PTY: the password reaches only the
    * client-owned marker window, never command text, output, or logs. */
-  private async executeNativePty(subform: 'sudo' | 'su', command: string, cwd: string, current: () => void, analysis: CommandAnalysis): Promise<void> {
+  private async executeNativePty(subform: 'sudo' | 'su', command: string, cwd: string, current: () => void, analysis: CommandAnalysis,
+    claimStart?: CommandExecutionOptions['claimStart']): Promise<void> {
     if (!this.ssh.runNativePty) {
       this.failure({ failureKind: 'not-dispatched', effects: 'none', handoff: 'not-sent', businessStart: 'not-started' });
       this.exited(undefined); this.busy = false; return;
@@ -169,6 +170,13 @@ export class SshCommandTerminal implements RawTerminal {
     if (!dispatch) throw new CommandNotStartedError('Native PTY command cannot be rebuilt for this sudo form; nothing sent');
     current(); this.clearStartup();
     const controller = new AbortController(); this.ptyAbort = controller;
+    // The transport binds the rebuilt dispatch text; the claim consumes the
+    // reviewed command and directory, so verify the dispatch binding and rebind
+    // before consulting the gate.
+    const claim: ((dispatched: NativeStartTarget) => boolean) | undefined = claimStart ? (dispatched) =>
+      dispatched.hostId === this.hostId && dispatched.command === dispatch
+        && dispatched.cwd === (subform === 'sudo' ? cwd : '/')
+        ? claimStart({ hostId: this.hostId, command, cwd }) : false : undefined;
     const session = this.ssh.runNativePty(this.hostId,
       { command: dispatch, cwd: subform === 'sudo' ? cwd : '/', envPath: '/usr/bin/env', shellPath: '/bin/sh', nonce, cols: this.cols, rows: this.rows,
         window: subform === 'sudo' ? 'sudo-marker' : 'su-window' },
@@ -178,7 +186,8 @@ export class SshCommandTerminal implements RawTerminal {
           if (!/^[a-f0-9]{32}$/u.test(event.id)) return;
           if (event.open) { this.ptyChallenges.add(event.id); this.authentication({ id: event.id, prompt: subform === 'sudo' ? 'sudo 身份验证' : 'su 身份验证' }); }
           else { this.ptyChallenges.delete(event.id); this.authentication({ id: event.id }); }
-        } },
+        },
+        claimStart: claim },
       controller.signal);
     this.ptySession = session;
     try {

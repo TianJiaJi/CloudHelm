@@ -1,6 +1,6 @@
 import { StringDecoder } from 'node:string_decoder';
 import { CommandNotStartedError, SUDO_SESSION_PROMPT, sudoSessionCommand,
-  type ExecutionFailureFact, type RawTerminal } from '@cloudhelm/core';
+  type CommandExecutionOptions, type ExecutionFailureFact, type NativeStartTarget, type RawTerminal } from '@cloudhelm/core';
 import { BashAnalyzer } from './bash-analyzer.js';
 import type { SshTransport } from './ssh-transport.js';
 
@@ -47,7 +47,7 @@ export class NativeSessionTerminal implements RawTerminal {
   onExit(listener: (code: number | undefined) => void): void { this.exited = listener; }
   onClose(listener: () => void): void { this.closedListener = listener; }
 
-  async execute(command: string, cwd: string, isAuthorized: () => boolean): Promise<void> {
+  async execute(command: string, cwd: string, isAuthorized: () => boolean, options?: CommandExecutionOptions): Promise<void> {
     if (this.busy || this.closed) throw new Error('The session terminal is busy or closed');
     this.busy = true;
     try {
@@ -89,6 +89,14 @@ export class NativeSessionTerminal implements RawTerminal {
       }
       current();
       const stdout = new StringDecoder('utf8'), stderr = new StringDecoder('utf8');
+      // The transport binds the rebuilt sudo -k -S dispatch text; the claim
+      // consumes the reviewed command and directory, so verify the dispatch
+      // binding and rebind before consulting the gate.
+      const claimStart = options?.claimStart;
+      const claimHook: ((dispatched: NativeStartTarget) => boolean) | undefined = claimStart
+        ? (dispatched) => dispatched.hostId === this.hostId && dispatched.command === dispatch && dispatched.cwd === cwd
+          ? claimStart({ hostId: this.hostId, command, cwd }) : false
+        : undefined;
       const emit = (decoder: StringDecoder, chunk: Buffer) => {
         const text = decoder.write(chunk);
         if (text) this.data(text);
@@ -119,7 +127,8 @@ export class NativeSessionTerminal implements RawTerminal {
             stdin: (write, end) => {
               stdinEnd = end;
               if (this.sudo && password !== undefined) write(Buffer.from(`${password}\n`, 'utf8'));
-            } },
+            },
+            claimStart: claimHook },
           controller.signal);
         for (const decoder of [stdout, stderr]) { const tail = decoder.end(); if (tail) this.data(tail); }
         const suspectedAuthenticationFailure = !!this.sudo && (authRejected

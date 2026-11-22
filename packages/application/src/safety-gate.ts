@@ -275,16 +275,21 @@ export class SafetyGate {
       };
       let result: OperationResult;
       try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), canEnterExecutor: stillCurrent,
-        ...(operation.kind === 'command' && operation.executionChannel === 'native-exec' ? { claimStart } : {}),
+        ...(operation.kind === 'command' && !operation.processControl
+          && (operation.executionChannel === 'native-exec' || operation.executionChannel === 'native-pty'
+            || operation.scope.sessionId !== undefined) ? { claimStart } : {}),
         isAuthorized: dispatchCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
       } finally { startClaimed = true; } // A completed attempt cannot resurrect an unused claim.
-      // For native-exec the single-use claim IS the dispatch boundary: it is consumed
-      // immediately before the one business exec, so consumption attests the handoff
-      // and a clean exit additionally attests the business started. Only fill
-      // fields the executor chain did not already attest; missing input stays unknown.
-      if (operation.kind === 'command' && operation.executionChannel === 'native-exec') {
+      // For native-exec, native-pty and session commands the single-use claim IS
+      // the dispatch boundary: it is consumed immediately before the one business
+      // dispatch, so consumption attests the handoff and a clean exit additionally
+      // attests the business started. Only fill fields the executor chain did not
+      // already attest; missing input stays unknown.
+      if (operation.kind === 'command' && !operation.processControl
+        && (operation.executionChannel === 'native-exec' || operation.executionChannel === 'native-pty'
+          || operation.scope.sessionId !== undefined)) {
         result = { ...result,
           handoff: result.handoff ?? (startConsumed ? 'handed-off' : 'not-sent'),
           businessStart: result.businessStart ?? (startConsumed
