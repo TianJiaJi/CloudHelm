@@ -79,9 +79,9 @@ describe('native session terminal', () => {
     expect(f.dispatches[0]!.stdinEnded()).toBe(true);
     expect(f.dispatches[0]!.written).toHaveLength(1);
     expect(c.rejected).toHaveBeenCalledOnce();
-    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'none', requiresUserAction: true,
+    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
       privilege: { method: 'sudo', stage: 'authentication', code: 'authentication-rejected',
-        source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } });
+        source: 'output-inference', businessCommand: 'unknown', recovery: 'verify' } });
     expect(f.exited).toHaveBeenCalledExactlyOnceWith(1);
   });
 
@@ -94,9 +94,21 @@ describe('native session terminal', () => {
     });
     await f.terminal.execute('sudo id', '/', () => true);
     expect(c.rejected).toHaveBeenCalledOnce();
-    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'none', requiresUserAction: true,
+    expect(f.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
       privilege: { method: 'sudo', stage: 'authentication', code: 'authentication-rejected',
-        source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } });
+        source: 'output-inference', businessCommand: 'unknown', recovery: 'verify' } });
+  });
+
+  it('does not turn a successful payload echoing authentication text into a failure', async () => {
+    const c = channel('session-secret');
+    const f = fixture(c.channel, ({ hooks }) => {
+      hooks.stderr(Buffer.from(`${SUDO_SESSION_PROMPT}${SUDO_SESSION_PROMPT}authentication failure\n`));
+      return { state: 'exited', exitCode: 0 };
+    });
+    await f.terminal.execute('sudo id', '/', () => true);
+    expect(c.rejected).toHaveBeenCalledOnce(); // Defensive cache cleanup, not business failure proof.
+    expect(f.failure).not.toHaveBeenCalled();
+    expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
   });
 
   it('refuses to dispatch when the host lacks the fixed native tooling', async () => {

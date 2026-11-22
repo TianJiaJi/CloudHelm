@@ -121,17 +121,17 @@ export class NativeSessionTerminal implements RawTerminal {
             } },
           controller.signal);
         for (const decoder of [stdout, stderr]) { const tail = decoder.end(); if (tail) this.data(tail); }
-        if (this.sudo && (authRejected || outcome.state === 'exited' && outcome.exitCode === 1
-          && /incorrect password attempt|no correct password|authentication failure/iu.test(stderrText))) {
-          this.sudo.rejected();
-        }
+        const suspectedAuthenticationFailure = !!this.sudo && (authRejected
+          || /incorrect password attempt|no correct password|authentication failure/iu.test(stderrText));
+        // Invalidate cached credentials defensively, but stderr may belong to
+        // the payload: repetition of a prompt or diagnostic never proves no effects.
+        if (suspectedAuthenticationFailure) this.sudo?.rejected();
         if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
-        if (this.sudo && (authRejected || outcome.state === 'exited' && outcome.exitCode === 1
-          && /incorrect password attempt|no correct password|authentication failure/iu.test(stderrText))) {
-          this.failure({ failureKind: 'authentication-failed', effects: 'none', requiresUserAction: true,
+        else if (suspectedAuthenticationFailure && !(outcome.state === 'exited' && outcome.exitCode === 0)) {
+          this.failure({ failureKind: 'authentication-failed', effects: 'possible',
             privilege: { method: 'sudo', stage: 'authentication', code: 'authentication-rejected',
-              source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } });
-          this.data('sudo 未接受本次会话密码；业务命令未启动。已清除本地缓存，下次派发将重新确认。');
+              source: 'output-inference', businessCommand: 'unknown', recovery: 'verify' } });
+          this.data('输出包含疑似 sudo 认证失败信息；不能据此证明业务未启动。已清除本地缓存，请先核验原操作，不自动重放。');
         }
         if (outcome.state === 'signaled') this.data(`远端会话命令收到 ${outcome.signal}；未观察到可确认的退出码。`);
         if (outcome.state === 'unknown') this.data('原生会话命令结果未知；请核验原操作，不要直接重放。');

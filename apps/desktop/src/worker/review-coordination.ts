@@ -8,7 +8,7 @@
  * - pause-round: a policy refusal, a failed safety component or an unresolved user
  *   decision needs the user, so the whole round stops instead of inviting workarounds.
  */
-export type ReviewCoordination = 'none' | 'pause-round';
+export type ReviewCoordination = 'none' | 'diagnosis-only' | 'pause-round';
 
 /** Errors that describe the proposed request, never the state of the host. */
 const CORRECTABLE_ERRORS = new Set([
@@ -29,7 +29,8 @@ const PER_OPERATION_REFUSALS = new Set([
 
 export function reviewCoordination(decision: { verdict: string; ruleId: string }): ReviewCoordination {
   if (decision.verdict === 'allow' || decision.verdict === 'ask' || decision.verdict === 'evaluate') return 'none';
-  if (PER_OPERATION_REFUSALS.has(decision.ruleId)) return 'none';
+  if (decision.ruleId === 'human-denied') return 'diagnosis-only';
+  if (decision.ruleId === 'continuation-read-only' || PER_OPERATION_REFUSALS.has(decision.ruleId)) return 'none';
   if (decision.verdict === 'error' && CORRECTABLE_ERRORS.has(decision.ruleId)) return 'none';
   return 'pause-round';
 }

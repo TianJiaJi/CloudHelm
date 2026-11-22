@@ -14,6 +14,13 @@ export interface GateOutcome {
   result?: OperationResult;
 }
 
+export type ApprovalWaitOutcome = 'approved' | 'denied' | 'expired' | 'canceled' | 'stale' | 'unavailable';
+
+export interface GateExecutionObserver extends Pick<ExecutionOptions, 'onProcessStarted' | 'onFileInspection'> {
+  /** Release scheduling capacity only while waiting; this callback grants no approval. */
+  withApprovalWait?(wait: () => Promise<ApprovalWaitOutcome>, signal?: AbortSignal): Promise<ApprovalWaitOutcome>;
+}
+
 export interface SafetyGateDependencies {
   analyzer: CommandAnalyzer;
   scripts?: ScriptInspector;
@@ -24,6 +31,8 @@ export interface SafetyGateDependencies {
   lease: TerminalLease;
   /** Task activity may continue only for an exact already-started background operation. */
   isOperationActive?(operation: ProposedOperation): boolean;
+  /** Additional admission, evaluated with the gate's classification, never caller flags. */
+  admitsOperation?(operation: ProposedOperation, readOnly: boolean): boolean;
   /** Worker-owned review generation, revoked on stop/model/policy changes. */
   reviewSignal?(): AbortSignal;
   settings(hostId: string): SafetySettings;
@@ -43,7 +52,7 @@ export class SafetyGate {
   constructor(private readonly deps: SafetyGateDependencies) {}
 
   async execute(proposed: ProposedOperation, signal?: AbortSignal, manualReview = false,
-    observer?: Pick<ExecutionOptions, 'onProcessStarted' | 'onFileInspection'>): Promise<GateOutcome> {
+    observer?: GateExecutionObserver): Promise<GateOutcome> {
     if (this.inFlight.has(proposed.id)) throw new Error('Operation is already in progress');
     this.inFlight.add(proposed.id);
     try {
@@ -93,6 +102,13 @@ export class SafetyGate {
       const impact = analyzeOperationImpact(operation, analysis);
       const readOnly = impact.mutation === 'none';
       await this.deps.audit.classified?.(operation.id, readOnly, structuredClone(impact));
+      const admitted = () => this.deps.admitsOperation?.(operation, readOnly) !== false;
+      if (!admitted()) {
+        const decision = { verdict: 'error', ruleId: 'continuation-read-only',
+          reason: 'This turn is restricted to authorized read-only diagnosis; nothing was sent.' } as const;
+        await this.deps.audit.decided(operation.id, decision, fingerprint);
+        return { decision, readOnly };
+      }
 
       let settings: SafetySettings;
       try { settings = this.deps.settings(operation.scope.hostId); }
@@ -139,11 +155,13 @@ export class SafetyGate {
        * revoking it ends not-yet-started review work, but a routine revoke on
        * task completion must not deauthorize an already-started background
        * process, which keeps its write lock until its exit is observed. */
+      let approvalHardDeadline: number | undefined;
       const dispatchCurrent = () => {
         try {
           const current = this.deps.settings(operation.scope.hostId);
           return this.deps.lease.isAgentOwner(operation.scope.terminalId)
             && this.deps.isOperationActive?.(operation) !== false
+            && admitted()
             && this.deps.lease.currentGeneration(operation.scope.terminalId) === operation.scope.terminalGeneration
             && current.revision === operation.scope.policyRevision
             && (operation.scope.conversationRevision === undefined || current.conversationRevision === operation.scope.conversationRevision)
@@ -151,7 +169,8 @@ export class SafetyGate {
             && operationFingerprint(operation) === fingerprint && !signal?.aborted;
         } catch { return false; }
       };
-      const stillCurrent = () => dispatchCurrent() && !reviewSignal?.aborted;
+      const stillCurrent = () => dispatchCurrent() && !reviewSignal?.aborted
+        && (approvalHardDeadline === undefined || Date.now() < approvalHardDeadline);
       if (manualReview && safety.verdict !== 'deny' && safety.verdict !== 'error') safety = {
         verdict: 'ask', ruleId: 'ai-denial-manual-review', reason: `User requested a one-time review of this exact denied operation；静态依据：${safeReviewBasis(safety.reason)}`
       };
@@ -197,8 +216,13 @@ export class SafetyGate {
             ...(analysis?.calls.flatMap((call) => call.args.filter((arg) => /^(?:\/|\.\.?\/)/u.test(arg))) ?? [])
           ])].slice(0, 8) : [operation.kind === 'upload' ? operation.remotePath : operation.path],
           scriptSha256: inspectedScript?.sha256, expiresAt: requestedAt + APPROVAL_SOFT_MS, hardExpiresAt: requestedAt + APPROVAL_HARD_MS };
+        approvalHardDeadline = request.hardExpiresAt;
         const approvalSignal = reviewSignal ? AbortSignal.any([reviewSignal, ...(signal ? [signal] : [])]) : signal;
-        const approval = stillCurrent() ? await this.awaitApproval(request, approvalSignal) : 'stale';
+        const wait = () => this.awaitApproval(request, approvalSignal);
+        const waitedApproval = stillCurrent()
+          ? await (observer?.withApprovalWait ? observer.withApprovalWait(wait, approvalSignal) : wait()) : 'stale';
+        // Preserve cleanup/port failure even if cancellation happened concurrently.
+        const approval = waitedApproval === 'unavailable' ? waitedApproval : approvalSignal?.aborted ? 'canceled' : waitedApproval;
         const staleReview = !signal?.aborted && reviewSignal?.aborted
           && !(reviewSignal.reason instanceof ReviewInterruptedError && reviewSignal.reason.outcome === 'canceled');
         safety = staleReview
@@ -255,7 +279,7 @@ export class SafetyGate {
     }
   }
 
-  private async awaitApproval(request: Parameters<ApprovalRequester['requestApproval']>[0], signal?: AbortSignal): Promise<'approved' | 'denied' | 'expired' | 'canceled' | 'stale' | 'unavailable'> {
+  private async awaitApproval(request: Parameters<ApprovalRequester['requestApproval']>[0], signal?: AbortSignal): Promise<ApprovalWaitOutcome> {
     let interrupt!: (outcome: 'expired' | 'canceled') => void;
     let closed = false, cleanupFailed = false;
     const close = () => {

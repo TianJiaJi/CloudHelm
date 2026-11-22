@@ -13,7 +13,7 @@ import { blockedOperationFeedback, operationToolResult } from './operation-feedb
 import { operationPreview } from './operation-preview.js';
 import { applyOperationDecision, applyOperationObservation } from './operation-observation.js';
 import { runOperationPipeline } from './operation-retry.js';
-import { CONVERSATION_LIMITS, OperationScheduler } from './operation-scheduler.js';
+import { CONVERSATION_LIMITS, OperationScheduler, type OperationSlot } from './operation-scheduler.js';
 import type { PrivilegedTaskAccess } from './privileged-access.js';
 import { appendProbeFindings, type ProbeEvidence } from './recovery-probe.js';
 import { reviewCoordination } from './review-coordination.js';
@@ -68,6 +68,9 @@ export class ExecutionScheduler {
   private readonly proposedOperations = new Map<string, ProposedOperation>();
   private readonly replayProtected = new Set<string>();
   private consecutiveAiDenials = 0;
+  private diagnosisOnly = false;
+
+  resetDiagnosisOnly(): void { this.diagnosisOnly = false; }
   private readonly aiDeniedOperations = new Map<string, ProposedOperation>();
   private readonly manualReviewsInFlight = new Set<string>();
   private lastFailureKey = '';
@@ -99,18 +102,23 @@ export class ExecutionScheduler {
   runOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string, manualReview = false,
     onFileInspection?: ExecutionOptions['onFileInspection']) {
     return this.scheduler.run({ taskId: this.deps.task.id, terminalId: 'conversation' },
-      operation, this.deps.analyzer, () => this.deps.background().run(operation, signal,
-        () => this.performOperation(gate, operation, signal, hostLabel, manualReview, onFileInspection)));
+      operation, this.deps.analyzer, (slot) => this.deps.background().run(operation, signal,
+        () => this.performOperation(gate, operation, signal, hostLabel, manualReview, onFileInspection, slot)));
   }
 
   private async performOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined,
-    hostLabel: string, manualReview = false, onFileInspection?: ExecutionOptions['onFileInspection']) {
+    hostLabel: string, manualReview = false, onFileInspection?: ExecutionOptions['onFileInspection'], slot?: OperationSlot) {
     this.deps.assertRemoteActive();
     const final = await runOperationPipeline({ gate, signal, manualReview,
       preflight: { privileged: this.deps.privileged, analyzer: this.deps.analyzer, environment: this.deps.environment,
         operations: () => this.operationViews(), replayProtected: this.replayProtected, hostBlocked: (hostId) => this.pendingOutcomeBlocker(hostId) },
-      gateObserver: (candidate) => candidate.kind === 'command' && candidate.executionMode === 'background'
-        ? { onProcessStarted: (event) => this.deps.background().started(candidate.id, event) } : { onFileInspection },
+      gateObserver: (candidate) => ({
+        ...(candidate.kind === 'command' && candidate.executionMode === 'background'
+          ? { onProcessStarted: (event: Parameters<NonNullable<ExecutionOptions['onProcessStarted']>>[0]) => this.deps.background().started(candidate.id, event) }
+          : { onFileInspection }),
+        ...(slot ? { withApprovalWait: (wait: () => Promise<import('@cloudhelm/application').ApprovalWaitOutcome>, approvalSignal?: AbortSignal) =>
+          slot.whileWaiting(wait, (outcome) => outcome === 'approved', approvalSignal) } : {})
+      }),
       coordinateDecision: (decision) => this.coordinateDecision(decision),
       onRetry: (previousOperationId, nextAttempt) => this.diagnostic({ event: 'operation.retry', operationId: previousOperationId,
         attempt: nextAttempt, failureKind: 'not-dispatched', hostId: operation.scope.hostId })
@@ -127,11 +135,13 @@ export class ExecutionScheduler {
     } else if (result.status === 'unknown') {
       const findings = await this.deps.probeUnknown?.(operation, signal);
       if (findings) return appendProbeFindings(operationToolResult(result, hostLabel, outcome.readOnly, operation.scope), findings);
-      this.deps.blockRemote('远端操作结果未知，已暂停。请先核验，避免重复执行。', false, 'verify');
+      if (outcome.readOnly === true || !this.deps.terminal.isAgentOwner(operation.scope.terminalId)) {
+        this.deps.blockRemote('远端操作结果未知，已暂停。请先核验，避免重复执行。', false, 'verify');
+      } else this.diagnosisOnly = true;
     } else if (!this.deps.terminal.isAgentOwner(operation.scope.terminalId)) {
       this.deps.blockRemote('远端终端已暂停或被接管，请核验后手动继续。');
     } else if (result.status === 'failed' && result.effects === 'possible' && outcome.readOnly !== true) {
-      this.deps.blockRemote('操作失败且可能已产生部分变更。已暂停，请先核验原结果，再决定后续操作。', false, 'verify');
+      this.diagnosisOnly = true;
     } else if (result.status === 'failed') {
       const key = `${operation.scope.hostId}:${this.preview(operation)}:${result.exitCode ?? 'unknown'}`;
       this.sameFailureCount = key === this.lastFailureKey ? this.sameFailureCount + 1 : 1;
@@ -188,11 +198,16 @@ export class ExecutionScheduler {
 
   /** Round-level coordination for one review outcome; never a side effect of the audit record. */
   private coordinateDecision(decision: SafetyDecision): void {
+    const coordination = reviewCoordination(decision);
+    if (coordination === 'diagnosis-only') {
+      this.diagnosisOnly = true;
+      return;
+    }
     if (decision.ruleId === 'ai-review-deny' && this.consecutiveAiDenials >= 3) {
       this.deps.blockRemote('独立审核连续拒绝三次，已暂停以避免反复试探。请检查目标或人工处理。');
       return;
     }
-    if (reviewCoordination(decision) === 'pause-round') {
+    if (coordination === 'pause-round') {
       this.deps.blockRemote(`操作未执行，审核未放行（${decision.ruleId}）：${decision.reason}。已暂停，请处理后手动继续。`);
     }
   }
@@ -263,6 +278,9 @@ export class ExecutionScheduler {
         currentGeneration: (id) => this.deps.terminal.currentGeneration(id),
         isAgentOwner: (id) => this.deps.terminal.isAgentOwner(id)
       },
+      admitsOperation: (operation, readOnly) => !this.diagnosisOnly || this.deps.background().hasOperationLease(operation)
+        || (readOnly && operation.kind === 'command' && operation.executionChannel === 'native-exec'
+          && !operation.scope.sessionId && !operation.privilege && !operation.processControl && !operation.executionMode),
       isOperationActive: (operation) => (!this.deps.remoteBlocked() && ['running', 'waiting-review'].includes(this.deps.status()))
         || this.deps.background().hasOperationLease(operation),
       settings: (hostId) => ({ mode: this.deps.task.reviewModesByHost?.[hostId]

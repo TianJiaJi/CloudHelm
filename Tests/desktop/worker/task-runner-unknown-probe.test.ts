@@ -22,7 +22,6 @@ const PROPS_READY = ['Id=nginx.service', 'LoadState=loaded', 'ActiveState=active
   'ExecMainCode=0', 'ExecMainStatus=0', 'InvocationID=run-4f0c9d2e', 'Job=', 'CanStart=yes', 'NeedDaemonReload=no'].join('\n');
 const PROPS_PROBE = ['Id=nginx.service', 'LoadState=loaded', 'ActiveState=active', 'SubState=running', 'Result=success',
   'ExecMainCode=0', 'ExecMainStatus=0', `InvocationID=${SECRET}`, 'Job=', 'CanStart=yes', 'NeedDaemonReload=no'].join('\n');
-const UNKNOWN_PAUSE = '远端操作结果未知，已暂停。请先核验，避免重复执行。';
 
 type SignalEvent = Parameters<TaskSignals['event']>[0];
 type OperationSignalEvent = Extract<SignalEvent, { type: 'operation' }>;
@@ -300,19 +299,28 @@ describe('unknown 自动探测（直连调度器矩阵）', () => {
     f.scripts.set(serviceQuery(UNIT), (operation) => ({ operationId: operation.id, status: 'succeeded', exitCode: 0, stdoutTail: PROPS_PROBE }));
     f.scripts.set('mkdir -p /srv/deploy', (operation) => ({ operationId: operation.id, status: 'succeeded', exitCode: 0, stdoutTail: '' }));
     const w1Run = f.execution.runOperation(f.execution.createGate(), w1, undefined, '主机一');
-    const w2Run = f.execution.runOperation(f.execution.createGate(), w2, undefined, '主机二');
-    await vi.waitFor(() => expect(f.executorCalls).toHaveLength(1));
-    await new Promise((resolve) => { setTimeout(resolve, 25); });
-    w1Gate.resolve();
-    const [w1Feedback, w2Feedback] = await Promise.all([w1Run, w2Run]);
-    expect(f.executorCalls.map(commandOf))
-      .toEqual([RESTART, serviceQuery(UNIT), 'mkdir -p /srv/deploy']);
-    expect(f.blockCalls).toEqual([]);
-    expect(w1Feedback.structuredContent).toMatchObject({ recoveryProbe: { status: 'succeeded' } });
-    expect(w2Feedback.result?.status).toBe('succeeded');
+    let w2Run: ReturnType<typeof f.execution.runOperation> | undefined;
+    try {
+      // Wait until the first business action actually starts. An approval wait
+      // deliberately releases capacity and is not evidence of an active write.
+      await vi.waitFor(() => expect(f.executorCalls.map(commandOf)).toEqual([RESTART]));
+      w2Run = f.execution.runOperation(f.execution.createGate(), w2, undefined, '主机二');
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      expect(f.executorCalls.map(commandOf)).toEqual([RESTART]);
+      w1Gate.resolve();
+      const [w1Feedback, w2Feedback] = await Promise.all([w1Run, w2Run]);
+      expect(f.executorCalls.map(commandOf))
+        .toEqual([RESTART, serviceQuery(UNIT), 'mkdir -p /srv/deploy']);
+      expect(f.blockCalls).toEqual([]);
+      expect(w1Feedback.structuredContent).toMatchObject({ recoveryProbe: { status: 'succeeded' } });
+      expect(w2Feedback.result?.status).toBe('succeeded');
+    } finally {
+      w1Gate.resolve();
+      await Promise.allSettled([w1Run, ...(w2Run ? [w2Run] : [])]);
+    }
   });
 
-  it('keeps the verbatim unknown pause without a probe template: no terminal is touched', async () => {
+  it('retains unknown without opening a probe terminal when no template exists', async () => {
     const f = directHarness();
     const w1 = f.op('w2a', 'mkdir -p /srv/no-unit', f.host1);
     f.scripts.set('mkdir -p /srv/no-unit', (operation) => ({ operationId: operation.id, status: 'unknown', stdoutTail: '', effects: 'possible' }));
@@ -320,10 +328,10 @@ describe('unknown 自动探测（直连调度器矩阵）', () => {
     expect(f.ensureTerminal).not.toHaveBeenCalled();
     expect(f.executorCalls.map(commandOf)).toEqual(['mkdir -p /srv/no-unit']);
     expect(feedback.result?.status).toBe('unknown');
-    expect(f.blockCalls).toEqual([{ reason: UNKNOWN_PAUSE, human: false, resumeReason: 'verify' }]);
+    expect(f.blockCalls).toEqual([]);
   });
 
-  it('falls back to the verbatim unknown pause when acquiring a probe terminal fails', async () => {
+  it('returns unknown without an immediate pause when acquiring a probe terminal fails', async () => {
     const f = directHarness({ ensureTerminal: async () => { throw new Error('终端不可用'); } });
     const w1 = f.op('w3a', RESTART, f.host1, UNIT);
     f.scripts.set(RESTART, (operation) => ({ operationId: operation.id, status: 'unknown', stdoutTail: '', effects: 'possible' }));
@@ -331,10 +339,10 @@ describe('unknown 自动探测（直连调度器矩阵）', () => {
     expect(f.ensureTerminal).toHaveBeenCalledOnce();
     expect(f.executorCalls.map(commandOf)).toEqual([RESTART]);
     expect(feedback.result?.status).toBe('unknown');
-    expect(f.blockCalls).toEqual([{ reason: UNKNOWN_PAUSE, human: false, resumeReason: 'verify' }]);
+    expect(f.blockCalls).toEqual([]);
   });
 
-  it('does not dispatch a probe the preflight refuses (analyzer failure) and keeps the verbatim pause', async () => {
+  it('does not dispatch a probe the preflight refuses and retains unknown', async () => {
     const f = directHarness({ analyzer: new ProbeRefusingAnalyzer() });
     const w1 = f.op('w4a', RESTART, f.host1, UNIT);
     f.scripts.set(RESTART, (operation) => ({ operationId: operation.id, status: 'unknown', stdoutTail: '', effects: 'possible' }));
@@ -343,7 +351,7 @@ describe('unknown 自动探测（直连调度器矩阵）', () => {
     expect(f.ensureTerminal).toHaveBeenCalledOnce();
     expect(f.executorCalls.map(commandOf)).toEqual([RESTART]);
     expect(feedback.result?.status).toBe('unknown');
-    expect(f.blockCalls).toEqual([{ reason: UNKNOWN_PAUSE, human: false, resumeReason: 'verify' }]);
+    expect(f.blockCalls).toEqual([]);
   });
 
   it('does not retry or replay when the probe itself observes an unknown result', async () => {
@@ -354,7 +362,7 @@ describe('unknown 自动探测（直连调度器矩阵）', () => {
     const feedback = await f.execution.runOperation(f.execution.createGate(), w1, undefined, '主机一');
     expect(f.executorCalls.map(commandOf)).toEqual([RESTART, serviceQuery(UNIT)]);
     expect(feedback.result?.status).toBe('unknown');
-    expect(f.blockCalls).toEqual([{ reason: UNKNOWN_PAUSE, human: false, resumeReason: 'verify' }]);
+    expect(f.blockCalls).toEqual([]);
   });
 
   it('keeps the unknown host write lock: later writes on the same host are refused before dispatch, the read-only probe is not', async () => {

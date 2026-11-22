@@ -5,6 +5,7 @@ import { renderNativeExecCommand } from './native-exec-command.js';
 
 export type NativePtyOutcome =
   | { state: 'not-dispatched'; reason: 'authorization-expired' }
+  // Diagnostic flags are inferred from mixed PTY text, not trusted startup evidence.
   | { state: 'exited'; exitCode: number; markerSeen: boolean; sudoMissing: boolean;
       suAuthenticationFailed?: boolean; suMissing?: boolean; suUserMissing?: boolean; sudoDenied?: boolean }
   | { state: 'signaled'; signal: string; coreDumped: boolean }
@@ -28,9 +29,8 @@ const SUDO_FAILURE = 'Sorry, try again.';
 /** Shell-reported sudo absence (dash, bash-as-sh, BusyBox), never sudo's own child
  * diagnostics; the busybox multi-call stub also means sudo is unavailable. */
 const SUDO_MISSING = /(?:^|[\r\n])(?:(?!sudo:)[^\r\n]{0,128}sudo: (?:command )?not found|sudo: applet not found)/u;
-/** C-locale sudoers authorization denial, mirroring describeSudoOutcome's patterns:
- * the credential may be accepted, the policy still refuses the account, and sudo's
- * own exit means the reviewed payload never started. */
+/** C-locale sudoers diagnostic. Business output can imitate this text; even a
+ * prompt marker plus a nonzero exit cannot prove that the payload never started. */
 const SUDO_DENIED = /(?:^|[\r\n])(?:sudo:[^\r\n]{0,256}(?:not allowed to execute|not in the sudoers|may not run sudo)|[a-z_][a-z0-9_.-]{0,63}[$]? is not in the sudoers file\b|Sorry,\s*user [^\r\n]{1,128} (?:is not allowed to execute|may not run sudo)\b)/iu;
 /** pam's su password prompt; su reads the answer on the same line, no newline. */
 const SU_PROMPT = 'Password:';

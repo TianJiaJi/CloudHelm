@@ -3,7 +3,7 @@ import type { LocalScope } from '@cloudhelm/contracts';
 import { agentAuthorization } from './agent-authorization.js';
 
 /** Bump whenever guidance text changes; stamped into operation audit records for replay. */
-export const PROMPT_VERSION = '2026-12.1';
+export const PROMPT_VERSION = '2026-12.2';
 
 export function agentPrompt(hosts: RuntimeHost[], localScopes: LocalScope[], extensionPrompt: string,
   reviewModesByHost?: Record<string, RuntimeHost['defaultMode']>): string {
@@ -63,8 +63,8 @@ export const executionGuidelines = `# Choose the next step
 - inspect_host_environment stays observational: connection and escalation happen elsewhere.
 
 # Stops and unknown outcomes
-- A stop, denied approval, failed auth or takeover halts remote work until explicit user continuation.
-- Explain denials; variants, splitting, encoding, tool or identity changes stay out; the path forward runs through explicit user direction.
+- A user stop, failed auth or takeover halts remote work until explicit user continuation.
+- After a user denial or unresolved mutation, use authorized foreground read-only queries with the current identity to investigate. Do not try writes, variants, wrappers or alternate identities. Explain findings and what still needs user direction.
 - After interruption, disconnect or unknown effects, inspect the original operation/state; the backend blocks automatic replays until reconciliation.
 - Outcome locks allow read-only checks; writes stay blocked.
 - read_operation_log is conversation-owned; others use the host recovery card.

@@ -18,11 +18,13 @@ it.each([
   vi.spyOn(SshTransport.prototype, 'execFixed').mockResolvedValue({ exitCode: 0, output: '/srv/app\n' });
   const dispatch = vi.spyOn(SshCommandTerminal.prototype, 'execute').mockResolvedValue();
   const f = await securityWorker(host);
-  const model = await openAiFixture(async () => ({ calls: [{ id: 'review', name: 'run_remote', arguments: { hostId: host.id, command } }] }));
+  const model = await openAiFixture(async (request) => request.messages.some((message) => message.role === 'tool')
+    ? { text: '用户拒绝，未执行。' }
+    : { calls: [{ id: 'review', name: 'run_remote', arguments: { hostId: host.id, command } }] });
   try {
     const task = f.task('维护应用并核对影响');
     await f.start(task, { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: model.baseUrl });
-    await vi.waitFor(() => expect(f.state.getTask(task.id).status).toBe('paused'), { timeout: 15000 });
+    await vi.waitFor(() => expect(f.state.getTask(task.id).status).toBe('answered'), { timeout: 15000 });
     expect(model.errors).toEqual([]); expect(dispatch).not.toHaveBeenCalled();
     const approval = f.messages.find((message) => 'event' in message && message.event.type === 'approval-open');
     expect(approval && 'event' in approval && approval.event.type === 'approval-open' && approval.event.value.explanation).toContain(ruleId);

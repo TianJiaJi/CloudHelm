@@ -15,7 +15,8 @@ describe('backend enforcement of stopped remote work', () => {
       const fixture = await openAiFixture(async (request) => {
         if (request.review) return { text: '{"verdict":"deny","reason":"unsafe"}' };
         requests++;
-        if (requests > 1) throw new Error('The agent must stop rather than plan a workaround');
+        if (requests === 2) return { text: '操作未获批准，没有执行替代操作。' };
+        if (requests > 1) throw new Error('Unexpected additional model request');
         return { calls: [
           { id: 'first', name: 'run_remote', arguments: { hostId: 'fixture', command: cause === 'credential-command'
             ? 'sudo -S cat /root/test/test' : 'python3 -c "print(1)"' } },
@@ -46,13 +47,12 @@ describe('backend enforcement of stopped remote work', () => {
       try {
         await runner.start();
         expect(fixture.errors).toEqual([]);
-        expect(requests).toBe(1);
+        expect(requests).toBe(2);
         expect(execute).not.toHaveBeenCalled();
         expect(openTerminal).toHaveBeenCalledTimes(1);
         expect(write).not.toHaveBeenCalled();
         const statuses = events.filter((event) => event.type === 'task-status');
-        expect(statuses.at(-1)).toMatchObject({ status: 'paused' });
-        expect(JSON.stringify(statuses)).toContain('审核未放行');
+        expect(statuses.at(-1)).toMatchObject({ status: 'answered' });
       } finally { await fixture.close(); }
     }
   );

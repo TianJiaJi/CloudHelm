@@ -51,14 +51,20 @@ interface Entry {
   begin: () => void;
 }
 
+export interface OperationSlot {
+  /** Suspend capacity, not authorization; successful resumption rejoins FIFO. */
+  whileWaiting<T>(wait: () => Promise<T>, resumeWhen: (value: T) => boolean, signal?: AbortSignal): Promise<T>;
+}
+
 interface Lane {
+  pipelines: number;
   unstarted: Entry[];
   inFlight: number;
   writesInFlight: number;
   readsInFlight: number;
 }
 
-const newLane = (): Lane => ({ unstarted: [], inFlight: 0, writesInFlight: 0, readsInFlight: 0 });
+const newLane = (): Lane => ({ pipelines: 0, unstarted: [], inFlight: 0, writesInFlight: 0, readsInFlight: 0 });
 
 /** Drop-in replacement for the task-runner serialCall chain. The conversation
  * lane runs with CONVERSATION_LIMITS (P0-3b): exclusive writes, capped
@@ -68,12 +74,42 @@ export class OperationScheduler {
 
   constructor(private readonly limits: SchedulerLimits = FULLY_SERIAL_LIMITS) {}
 
-  run<T>(key: SchedulerKey, operation: ProposedOperation, analyzer: CommandAnalyzer, task: () => Promise<T>): Promise<T> {
+  run<T>(key: SchedulerKey, operation: ProposedOperation, analyzer: CommandAnalyzer, task: (slot: OperationSlot) => Promise<T>): Promise<T> {
     const lane = this.laneFor(key);
+    lane.pipelines++;
+    let held = false;
+    const release = () => {
+      if (!held) return;
+      held = false;
+      lane.inFlight--;
+      if (entry.klass === 'write') lane.writesInFlight--; else lane.readsInFlight--;
+      this.pump(lane);
+    };
+    const slot: OperationSlot = {
+      whileWaiting: async (wait, resumeWhen, signal) => {
+        if (!held) throw new Error('Operation slot is already suspended');
+        release();
+        const value = await wait();
+        if (resumeWhen(value) && !signal?.aborted) await new Promise<void>((resolve) => {
+          const cancel = () => {
+            const index = lane.unstarted.indexOf(entry);
+            if (index < 0) return;
+            lane.unstarted.splice(index, 1);
+            signal?.removeEventListener('abort', cancel);
+            this.pump(lane); resolve();
+          };
+          entry.begin = () => { held = true; signal?.removeEventListener('abort', cancel); resolve(); };
+          lane.unstarted.push(entry);
+          signal?.addEventListener('abort', cancel, { once: true });
+          if (signal?.aborted) cancel(); else this.pump(lane);
+        });
+        return value;
+      }
+    };
     // The queue position is reserved synchronously (serialCall chains at call
     // time), so classification latency can never reorder submissions.
     const entry: Entry = { klass: 'write', ready: false, begin: () => {} };
-    const started = new Promise<void>((resolve) => { entry.begin = resolve; });
+    const started = new Promise<void>((resolve) => { entry.begin = () => { held = true; resolve(); }; });
     lane.unstarted.push(entry);
     void classifyForScheduling(operation, analyzer).then((klass) => {
       entry.klass = klass;
@@ -83,12 +119,15 @@ export class OperationScheduler {
     this.pump(lane);
     return started.then(async () => {
       try {
-        return await task();
+        return await task(slot);
       } finally {
-        lane.inFlight--;
-        if (entry.klass === 'write') lane.writesInFlight--; else lane.readsInFlight--;
-        if (lane.unstarted.length === 0 && lane.inFlight === 0) this.lanes.get(key.taskId)?.delete(key.terminalId);
-        this.pump(lane);
+        release();
+        lane.pipelines--;
+        if (lane.pipelines === 0) {
+          const byTerminal = this.lanes.get(key.taskId);
+          byTerminal?.delete(key.terminalId);
+          if (byTerminal?.size === 0) this.lanes.delete(key.taskId);
+        }
       }
     });
   }

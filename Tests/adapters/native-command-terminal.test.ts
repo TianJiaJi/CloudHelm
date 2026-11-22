@@ -106,24 +106,24 @@ it('translates marker windows into sudo challenges and routes only answers to op
   expect(f.exited).toHaveBeenCalledExactlyOnceWith(0);
 });
 
-it('reports a shell-missing sudo as sudo-unavailable without mistaking sudo\'s own child diagnostic', async () => {
+it('keeps missing-sudo text as inference, not zero-effects proof', async () => {
   const missing = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: false, sudoMissing: true });
   await missing.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(missing.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'none',
-    privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable', source: 'transport',
-      businessCommand: 'not-started', recovery: 'confirm-alternative' } });
+  expect(missing.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'possible',
+    privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable', source: 'output-inference',
+      businessCommand: 'unknown', recovery: 'verify' } });
   expect(missing.exited).toHaveBeenCalledExactlyOnceWith(127);
 
   const child = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: false, sudoMissing: false });
   await child.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(child.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'none' });
+  expect(child.failure).not.toHaveBeenCalled();
   expect(child.exited).toHaveBeenCalledExactlyOnceWith(127);
 });
 
-it('distinguishes a failed directory change from sudo-driven 125 exits', async () => {
+it('does not infer no effects from exit 125 or a missing prompt marker', async () => {
   const denied = ptyFixture({ state: 'exited', exitCode: 125, markerSeen: false, sudoMissing: false });
   await denied.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(denied.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'permission-denied', effects: 'none' });
+  expect(denied.failure).not.toHaveBeenCalled();
   expect(denied.exited).toHaveBeenCalledExactlyOnceWith(125);
 
   const marked = ptyFixture({ state: 'exited', exitCode: 125, markerSeen: true, sudoMissing: false });
@@ -132,16 +132,16 @@ it('distinguishes a failed directory change from sudo-driven 125 exits', async (
   expect(marked.exited).toHaveBeenCalledExactlyOnceWith(125);
 });
 
-it('classifies a transport-proven sudoers denial as authorization-denied with the payload not started', async () => {
+it('retains sudoers diagnostics without claiming trusted startup evidence', async () => {
   const denied = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, sudoDenied: true });
   await denied.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(denied.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'none',
-    privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied', source: 'transport',
-      businessCommand: 'not-started', recovery: 'confirm-alternative' } });
+  expect(denied.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
+    privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied', source: 'output-inference',
+      businessCommand: 'unknown', recovery: 'verify' } });
   expect(denied.exited).toHaveBeenCalledExactlyOnceWith(1);
 
-  // Without the denial evidence or the marker window the exit stays unclassified:
-  // only sudo's own denial after a real prompt proves the payload never started.
+  // A prompt marker cannot upgrade diagnostic text to trusted startup evidence.
+  // Its absence is not evidence that no payload ran either.
   const unproven = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false });
   await unproven.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
   expect(unproven.failure).not.toHaveBeenCalled();
@@ -149,7 +149,9 @@ it('classifies a transport-proven sudoers denial as authorization-denied with th
 
   const unmarked = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: false, sudoMissing: false, sudoDenied: true });
   await unmarked.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-pty' });
-  expect(unmarked.failure).not.toHaveBeenCalled();
+  expect(unmarked.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
+    privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied', source: 'output-inference',
+      businessCommand: 'unknown', recovery: 'verify' } });
   expect(unmarked.exited).toHaveBeenCalledExactlyOnceWith(1);
 });
 
@@ -211,12 +213,12 @@ it('dispatches the backend-built su wrap on the su-window PTY with a one-time ma
   expect(f.failure).not.toHaveBeenCalled();
 });
 
-it('classifies su authentication rejection as a user-action failure, guarded by the exit code', async () => {
+it('keeps su failure text unconfirmed and preserves successful exits', async () => {
   const rejected = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, suAuthenticationFailed: true });
   await rejected.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
-  expect(rejected.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'none', requiresUserAction: true,
-    privilege: { method: 'su', stage: 'authentication', code: 'authentication-rejected', source: 'transport',
-      businessCommand: 'not-started', recovery: 'user-action' } });
+  expect(rejected.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'authentication-failed', effects: 'possible',
+    privilege: { method: 'su', stage: 'authentication', code: 'authentication-rejected', source: 'output-inference',
+      businessCommand: 'unknown', recovery: 'verify' } });
   expect(rejected.exited).toHaveBeenCalledExactlyOnceWith(1);
 
   // A payload echoing the failure text but exiting 0 must never pause the task.
@@ -229,16 +231,16 @@ it('classifies su authentication rejection as a user-action failure, guarded by 
 it('classifies a missing su or unknown target account as unsupported, passing business exits through', async () => {
   const missing = ptyFixture({ state: 'exited', exitCode: 127, markerSeen: true, sudoMissing: false, suMissing: true });
   await missing.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
-  expect(missing.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'none',
-    privilege: { method: 'su', stage: 'preparation', code: 'unsupported', source: 'transport',
-      businessCommand: 'not-started', recovery: 'user-action' } });
+  expect(missing.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'possible',
+    privilege: { method: 'su', stage: 'preparation', code: 'unsupported', source: 'output-inference',
+      businessCommand: 'unknown', recovery: 'verify' } });
   expect(missing.exited).toHaveBeenCalledExactlyOnceWith(127);
 
   const user = ptyFixture({ state: 'exited', exitCode: 1, markerSeen: true, sudoMissing: false, suUserMissing: true });
   await user.terminal.execute(await suWrap(), '/srv', () => true, { executionChannel: 'native-pty', sudoAuthorization: true });
-  expect(user.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'none',
-    privilege: { method: 'su', stage: 'preparation', code: 'unsupported', source: 'transport',
-      businessCommand: 'not-started', recovery: 'user-action' } });
+  expect(user.failure).toHaveBeenCalledExactlyOnceWith({ failureKind: 'unsupported', effects: 'possible',
+    privilege: { method: 'su', stage: 'preparation', code: 'unsupported', source: 'output-inference',
+      businessCommand: 'unknown', recovery: 'verify' } });
   expect(user.exited).toHaveBeenCalledExactlyOnceWith(1);
 
   // A business-level 127 without su diagnostics is an ordinary failed command.

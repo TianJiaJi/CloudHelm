@@ -2,9 +2,9 @@ import { MessagePreparations } from './message-preparations.js';
 import { ShellMarkerParser } from '@cloudhelm/adapters';
 import { createTerminalCodec } from '@cloudhelm/adapters';
 import { PrivilegedRuntime } from './privileged-runtime.js';
-import { ApprovalInterruptedError, commandEnvironmentFacts, type ApprovalInterruption, resolveHostRiskDomain, safeDiagnostic } from '@cloudhelm/core';
+import { commandEnvironmentFacts, type ApprovalInterruption, resolveHostRiskDomain, safeDiagnostic } from '@cloudhelm/core';
 import { eventDiagnostic, reservationDiagnostic } from './diagnostic-events.js';
-import { HostEnvironmentRegistry, HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
+import { ApprovalCoordinator, HostEnvironmentRegistry, HostSerialExecutor, PermissionAwareExecutor, InteractionCoordinator, TerminalManager } from '@cloudhelm/application';
 import { BashAnalyzer, HostKeyError, SshCommandTerminal, SshTransport, type SshHost, type SshLoginPrompt } from '@cloudhelm/adapters';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -25,24 +25,6 @@ import { testHostConnection } from './host-connection-test.js';
 import { InputCommitClient } from './input-commit-client.js';
 import { OperationCommitClient } from './operation-commit-client.js';
 import { RequestBudgetClient } from './request-budget-client.js';
-
-/** Each renewal adds this much decision time, capped by the hard deadline. */
-const APPROVAL_RENEWAL_MS = 10 * 60_000;
-const APPROVAL_MAX_RENEWALS = 5;
-
-/** Server-owned approval wait state; soft expiry reminds, hard expiry cancels. */
-interface PendingApproval {
-  taskId: string;
-  hostId: string;
-  expiresAt: number;
-  hardExpiresAt: number;
-  renewals: number;
-  view: ApprovalView;
-  reminder?: ReturnType<typeof setTimeout>;
-  hardTimeout?: ReturnType<typeof setTimeout>;
-  resolve(allowed: boolean): void;
-  reject(error: Error): void;
-}
 
 export class WorkerServer {
   private readonly budget: RequestBudgetClient;
@@ -75,7 +57,11 @@ export class WorkerServer {
   private readonly connectionAttempts = new Map<string, AbortController>();
   private readonly interactions: InteractionCoordinator;
   private readonly tasks = new Map<string, TaskRunner>();
-  private readonly pendingApprovals = new Map<string, PendingApproval>();
+  private readonly approvals = new ApprovalCoordinator<ApprovalView>({
+    opened: (value) => this.post({ event: { type: 'approval-open', value } }),
+    reminder: (id) => this.post({ event: { type: 'approval-reminder', id } }),
+    closed: (id) => this.post({ event: { type: 'approval-close', id } })
+  });
   private readonly pendingInputs = new Map<string, { connectionId: string; expiresAt: number; resolve(answer: string | null): void; timeout: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly send: (message: RuntimeMessage) => void) {
@@ -180,7 +166,7 @@ export class WorkerServer {
         if (!runner) throw new Error('对话运行已失效');
         if (runner.needsReviewProfile(call.reviewer)) {
           this.preparations.cancelTask(call.taskId);
-          for (const [id, pending] of this.pendingApprovals) if (pending.taskId === call.taskId) this.cancelApproval(id, 'stale');
+          this.approvals.cancelWhere((pending) => pending.taskId === call.taskId);
           runner.setReviewProfile(call.reviewer);
         }
         return;
@@ -208,16 +194,12 @@ export class WorkerServer {
       case 'connect': return this.connect(call.host, call.jump, call.riskBindings);
       case 'test-host': return testHostConnection(call.host, call.jump);
       case 'update-host-safety':
-        for (const [id, pending] of this.pendingApprovals) {
-          if (pending.hostId === call.hostId) this.cancelApproval(id, 'stale');
-        }
+        this.approvals.cancelWhere((pending) => pending.hostId === call.hostId);
         for (const runner of this.tasks.values()) runner.updateHostSafety(call.hostId, call.mode,
           call.protectedReadPaths, call.protectedWritePaths, call.revision);
         return;
       case 'update-conversation-review-mode': {
-        for (const [id, pending] of this.pendingApprovals) {
-          if (pending.taskId === call.taskId && pending.hostId === call.hostId) this.cancelApproval(id, 'stale');
-        }
+        this.approvals.cancelWhere((pending) => pending.taskId === call.taskId && pending.hostId === call.hostId);
         const runner = this.tasks.get(call.taskId);
         if (!runner) throw new Error('对话运行已失效');
         runner.updateConversationReviewMode(call.hostId, call.mode, call.revision);
@@ -334,19 +316,12 @@ export class WorkerServer {
         return;
       }
       case 'renew-approval': {
-        const renewed = this.extendApproval(call.approvalId, APPROVAL_RENEWAL_MS);
+        const renewed = this.extendApproval(call.approvalId);
         if (!renewed) throw new Error('审批续期不可用或次数已用尽');
         return renewed;
       }
       case 'decide-approval': {
-        const pending = this.pendingApprovals.get(call.approvalId);
-        if (!pending) throw new Error('Approval expired');
-        if (Date.now() >= pending.hardExpiresAt) {
-          this.cancelApproval(call.approvalId, 'expired');
-          throw new Error('Approval expired');
-        }
-        if (typeof call.approved !== 'boolean') throw new Error('Invalid approval decision');
-        if (!this.settleApproval(call.approvalId, call.approved)) throw new Error('Approval channel unavailable');
+        this.approvals.decide(call.approvalId, call.approved);
         return;
       }
       case 'answer-input': {
@@ -525,77 +500,14 @@ export class WorkerServer {
     return terminalId;
   }
 
-  private requestApproval(view: ApprovalView): Promise<boolean> {
-    if (!Number.isSafeInteger(view.expiresAt)) return Promise.reject(new Error('Invalid approval deadline'));
-    if (view.expiresAt <= Date.now()) return Promise.reject(new ApprovalInterruptedError('expired'));
-    if (this.pendingApprovals.has(view.id)) return Promise.reject(new Error('Approval already pending'));
-    return new Promise((resolve, reject) => {
-      // Views without a hard ceiling keep the soft deadline as the hard one.
-      const hardExpiresAt = Math.max(view.hardExpiresAt ?? view.expiresAt, view.expiresAt);
-      const pending: PendingApproval = { taskId: view.taskId, hostId: view.hostId, expiresAt: view.expiresAt,
-        hardExpiresAt, renewals: 0, view: structuredClone(view),
-        resolve: (allowed: boolean) => { this.clearApprovalTimers(pending); queueMicrotask(() => resolve(allowed)); },
-        reject: (error: Error) => { this.clearApprovalTimers(pending); reject(error); } };
-      // Register before publishing: even an immediate reply must bind this recipient.
-      this.pendingApprovals.set(view.id, pending);
-      try {
-        this.armApprovalTimers(pending);
-        this.post({ event: { type: 'approval-open', value: view } });
-      } catch {
-        this.pendingApprovals.delete(view.id);
-        pending.reject(new Error('Approval channel unavailable'));
-      }
-    });
-  }
+  private requestApproval(view: ApprovalView): Promise<boolean> { return this.approvals.request(view); }
 
-  /** The soft deadline reminds without cancelling; the hard deadline cancels. */
-  private armApprovalTimers(pending: PendingApproval): void {
-    if (pending.hardExpiresAt > pending.expiresAt) {
-      pending.reminder = setTimeout(() => {
-        pending.reminder = undefined;
-        try { this.post({ event: { type: 'approval-reminder', id: pending.view.id } }); }
-        catch { this.cancelApproval(pending.view.id, 'canceled'); }
-      }, Math.max(0, pending.expiresAt - Date.now()));
-    }
-    pending.hardTimeout = setTimeout(() => this.cancelApproval(pending.view.id, 'expired'),
-      Math.max(0, pending.hardExpiresAt - Date.now()));
-  }
-
-  private clearApprovalTimers(pending: PendingApproval): void {
-    if (pending.reminder !== undefined) { clearTimeout(pending.reminder); pending.reminder = undefined; }
-    if (pending.hardTimeout !== undefined) { clearTimeout(pending.hardTimeout); pending.hardTimeout = undefined; }
-  }
-
-  /** Renewal extends only the wait window; bindings, content, and fingerprints stay fixed. */
-  private extendApproval(id: string, extendMs: number): { expiresAt: number; hardExpiresAt: number } | undefined {
-    const pending = this.pendingApprovals.get(id);
-    if (!pending || pending.renewals >= APPROVAL_MAX_RENEWALS || pending.hardExpiresAt <= pending.expiresAt) return undefined;
-    const expiresAt = Math.min(Math.max(pending.expiresAt, Date.now()) + extendMs, pending.hardExpiresAt);
-    if (expiresAt <= Date.now()) return undefined;
-    pending.expiresAt = expiresAt;
-    pending.renewals++;
-    pending.view = { ...pending.view, expiresAt, hardExpiresAt: pending.hardExpiresAt, renewals: pending.renewals };
-    this.clearApprovalTimers(pending);
-    try {
-      this.armApprovalTimers(pending);
-      this.post({ event: { type: 'approval-open', value: pending.view } });
-    } catch { this.cancelApproval(id, 'canceled'); return undefined; }
-    return { expiresAt, hardExpiresAt: pending.hardExpiresAt };
-  }
-
-  private settleApproval(id: string, value: boolean | ApprovalInterruptedError): boolean {
-    const pending = this.pendingApprovals.get(id);
-    if (!pending) return false;
-    this.pendingApprovals.delete(id);
-    try { this.post({ event: { type: 'approval-close', id } }); }
-    catch { pending.reject(new Error('Approval channel unavailable')); return false; }
-    if (value instanceof ApprovalInterruptedError) pending.reject(value);
-    else pending.resolve(value);
-    return true;
+  private extendApproval(id: string, extendMs?: number): { expiresAt: number; hardExpiresAt: number } | undefined {
+    return this.approvals.renew(id, extendMs);
   }
 
   private cancelApproval(id: string, outcome: ApprovalInterruption = 'canceled'): void {
-    this.settleApproval(id, new ApprovalInterruptedError(outcome));
+    this.approvals.cancel(id, outcome);
   }
 
 }

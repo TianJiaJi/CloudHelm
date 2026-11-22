@@ -123,7 +123,7 @@ export class TaskRunner {
       bumpControlVersion: () => { this.controlVersion++; },
       markNeedsRecovery: () => this.recovery.markNeedsRecovery(),
       releaseReplayProtection: () => { this.execution.releaseReplayProtection(); },
-      clearRemoteBlocked: () => { this.remoteBlocked = undefined; },
+      clearRemoteBlocked: () => this.clearRemoteBlock(),
       resetReport: () => { this.journal.resetReport(); this.signals.event({ type: 'verification-state', taskId: this.task.id }); },
       resetProgress: () => { this.progress.reset(); },
       observeProgress: (kind, key) => { this.progress.observe(kind, key); },
@@ -145,7 +145,7 @@ export class TaskRunner {
       bumpControlVersion: () => ++this.controlVersion,
       setStatus: (status, summary, resumeReason) => this.setStatus(status, summary, resumeReason),
       blockRemote: (reason, human, resumeReason) => this.blockRemote(reason, human, resumeReason),
-      clearRemoteBlocked: () => { this.remoteBlocked = undefined; },
+      clearRemoteBlocked: () => this.clearRemoteBlock(),
       resetProgress: () => { this.progress.reset(); },
       finishRun: () => this.finishRun(),
       event: (event) => this.signals.event(event),
@@ -388,6 +388,11 @@ export class TaskRunner {
     if (this.remoteBlocked || !['running', 'waiting-review'].includes(this.status)) {
       throw new Error(this.remoteBlocked ?? 'Task is paused; wait for an explicit user continuation.');
     }
+  }
+
+  private clearRemoteBlock(): void {
+    this.remoteBlocked = undefined;
+    this.execution.resetDiagnosisOnly();
   }
 
   private blockRemote(reason: string, human = false, resumeReason?: ResumeReason): void {

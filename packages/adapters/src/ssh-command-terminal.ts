@@ -182,37 +182,21 @@ export class SshCommandTerminal implements RawTerminal {
     try {
       const outcome: NativePtyOutcome = await session.result;
       if (outcome.state === 'not-dispatched') this.failure({ failureKind: 'not-dispatched', effects: 'none' });
-      if (outcome.state === 'exited') {
-        if (subform === 'sudo') {
-          if (outcome.exitCode === 127) {
-            // A shell-reported missing sudo differs from sudo's own child diagnostic:
-            // only the first can offer the reviewed su alternative.
-            this.failure({ failureKind: 'unsupported', effects: 'none',
-              ...(outcome.sudoMissing ? { privilege: { method: 'sudo', stage: 'preparation', code: 'sudo-unavailable',
-                source: 'transport', businessCommand: 'not-started', recovery: 'confirm-alternative' } as const } : {}) });
-          } else if (outcome.exitCode === 125 && !outcome.markerSeen) {
-            // The wrapper reports a failed directory change before sudo ever starts.
-            this.failure({ failureKind: 'permission-denied', effects: 'none' });
-          } else if (outcome.exitCode === 1 && outcome.markerSeen && outcome.sudoDenied) {
-            // sudo accepted the credential but the sudoers policy refused the
-            // account: the marker proves the prompt ran and sudo's denial exit
-            // proves the reviewed payload never started, so a separately
-            // reviewed su alternative is offerable instead of a blind retry.
-            this.failure({ failureKind: 'authentication-failed', effects: 'none',
-              privilege: { method: 'sudo', stage: 'authorization', code: 'authorization-denied',
-                source: 'transport', businessCommand: 'not-started', recovery: 'confirm-alternative' } as const });
-          }
-        } else if (outcome.suAuthenticationFailed && outcome.exitCode === 1) {
-          // su rejects the password and exits without retrying: the task must
-          // pause for a human decision instead of silently re-dispatching.
-          this.failure({ failureKind: 'authentication-failed', effects: 'none', requiresUserAction: true,
-            privilege: { method: 'su', stage: 'authentication', code: 'authentication-rejected',
-              source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } as const });
-        } else if (outcome.suMissing || outcome.suUserMissing) {
-          this.failure({ failureKind: 'unsupported', effects: 'none',
-            privilege: { method: 'su', stage: 'preparation', code: 'unsupported',
-              source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } as const });
-        }
+      if (outcome.state === 'exited' && outcome.exitCode !== 0) {
+        // All diagnostic flags below come from a mixed authentication/business
+        // stream. Neither a prompt marker nor exit 1/125/127 establishes that
+        // the payload never ran (including NOPASSWD commands without a marker).
+        // Keep useful diagnostics, but never clear effects or authorize su from them.
+        const unavailable = subform === 'sudo' ? outcome.sudoMissing : outcome.suMissing || outcome.suUserMissing;
+        const denied = subform === 'sudo' ? outcome.sudoDenied : outcome.suAuthenticationFailed;
+        if (unavailable || denied) this.failure({
+          failureKind: unavailable ? 'unsupported' : 'authentication-failed', effects: 'possible',
+          privilege: { method: subform,
+            stage: unavailable ? 'preparation' : subform === 'sudo' ? 'authorization' : 'authentication',
+            code: unavailable ? subform === 'sudo' ? 'sudo-unavailable' : 'unsupported'
+              : subform === 'sudo' ? 'authorization-denied' : 'authentication-rejected',
+            source: 'output-inference', businessCommand: 'unknown', recovery: 'verify' }
+        });
       }
       if (outcome.state === 'signaled') this.data(`远端命令收到 ${outcome.signal}；未观察到可确认的退出码。`);
       if (outcome.state === 'unknown') this.data('原生 SSH 命令结果未知；请核验原操作，不要直接重放。');

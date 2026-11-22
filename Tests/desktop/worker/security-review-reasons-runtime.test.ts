@@ -15,12 +15,14 @@ it('shows the exact uncertainty in a real approval and retains it after rejectio
   vi.spyOn(SshTransport.prototype, 'execFixed').mockResolvedValue({ exitCode: 0, output: '/srv/app\n' });
   const dispatch = vi.spyOn(SshCommandTerminal.prototype, 'execute').mockResolvedValue();
   const f = await securityWorker(host);
-  const model = await openAiFixture(async () => ({ calls: [{ id: 'uncertain', name: 'run_remote', arguments: { hostId: host.id, command: 'ss -K' } }] }));
+  const model = await openAiFixture(async (request) => request.messages.some((message) => message.role === 'tool')
+    ? { text: '用户拒绝，未执行。' }
+    : { calls: [{ id: 'uncertain', name: 'run_remote', arguments: { hostId: host.id, command: 'ss -K' } }] });
   try {
     const task = f.task('检查网络状态');
     await f.start(task, { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: model.baseUrl });
     // The production fixture rejects approval through the actual Worker IPC handler.
-    await vi.waitFor(() => expect(f.state.getTask(task.id).status).toBe('paused'), { timeout: 15000 });
+    await vi.waitFor(() => expect(f.state.getTask(task.id).status).toBe('answered'), { timeout: 15000 });
     expect(model.errors).toEqual([]); expect(dispatch).not.toHaveBeenCalled();
     const approval = f.messages.find((message) => 'event' in message && message.event.type === 'approval-open');
     expect(approval && 'event' in approval && approval.event.type === 'approval-open' && approval.event.value.explanation)

@@ -1,5 +1,5 @@
-import type { ExecutionOptions, ProposedOperation, SafetyDecision } from '@cloudhelm/core';
-import type { SafetyGate } from '@cloudhelm/application';
+import type { ProposedOperation, SafetyDecision } from '@cloudhelm/core';
+import type { SafetyGate, GateExecutionObserver } from '@cloudhelm/application';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
 import { taskOperationPreflight, type TaskOperationPreflightDeps } from './task-operation-preflight.js';
 import { blockedOperationFeedback } from './operation-feedback.js';
@@ -12,10 +12,7 @@ type Feedback = Awaited<ReturnType<RemoteToolDependencies['runOperation']>>;
 export type OperationAttempt = { feedback: Feedback } | { operation: ProposedOperation; outcome: Awaited<ReturnType<SafetyGate['execute']>> };
 
 /** Gate observer selection mirrors SafetyGate.execute's own parameter shape. */
-export interface GateObserver {
-  onProcessStarted?: ExecutionOptions['onProcessStarted'];
-  onFileInspection?: ExecutionOptions['onFileInspection'];
-}
+export type GateObserver = GateExecutionObserver;
 
 export interface OperationPipelineContext {
   gate: SafetyGate;

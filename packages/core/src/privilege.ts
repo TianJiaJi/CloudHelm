@@ -19,7 +19,7 @@ export function privilegeGuidance(feedback: PrivilegeFeedback): string {
     'authentication-rejected': '认证被拒绝；这不能证明具体是哪项凭据或账户策略有误。',
     'authentication-unconfirmed': '认证未完成或认证机制不兼容，无法确定是否为密码错误。',
     'authorization-denied': '观察到 sudo 授权限制；可能仅针对当前命令，不代表不在某个用户组。',
-    'sudo-unavailable': '执行通道确认 sudo 程序不可用。',
+    'sudo-unavailable': feedback.source === 'transport' ? '执行通道确认 sudo 程序不可用。' : '输出包含疑似 sudo 不可用的信息。',
     cancelled: '认证已取消或输入已失效。', timeout: '认证等待超时。',
     'attempts-exhausted': '本次操作的认证次数已用尽。',
     'transport-unavailable': '提权执行通道已中断。', unsupported: '当前认证或执行形式不受支持。'
