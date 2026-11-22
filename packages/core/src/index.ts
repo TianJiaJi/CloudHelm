@@ -10,6 +10,7 @@ export * from './ssh-settings.js';
 export * from './command-semantics.js';
 export * from './native-command-route.js';
 export * from './ports.js';
+export * from './file-start-target.js';
 export * from './fingerprint.js';
 export * from './file-edit.js';
 export * from './file-transaction.js';

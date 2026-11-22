@@ -16,6 +16,7 @@
 | G1-G 统一结果正交事实 | 局部回归通过 | OperationResult/OperationOutcome v2：handoff/businessStart/liveness/effects 四正交事实全执行路线见证；358 项局部通过、类型与四项 lint 通过 | 后台/写交接点启动许可、三模式裁决契约未接入；G1 收尾全量与构建未跑 |
 | G1-H PTY/会话启动许可 | 局部回归通过 | native-pty 与会话路线在各自 exec 交接点单次消费启动许可；终端校验派发绑定后重绑被审命令与目录；gate 铸造/填充扩展至两条路线；269 项局部通过、类型与四项 lint 通过 | 后台 setsid 与 SFTP 写交接点许可、三模式裁决契约未接入；G1 收尾全量与构建未跑 |
 | G1-I 后台setsid启动许可 | 局部回归通过 | native-background 仅在 setsid launch 派发点单次消费启动许可；stat 核验/watcher/stop 不触碰许可；gate 铸造/填充扩展至该路线；91 项局部通过、类型与四项 lint 通过 | SFTP 写交接点许可、三模式裁决契约未接入；G1 收尾全量与构建未跑 |
+| G1-J SFTP文件路线许可 | 局部回归通过 | 结构化 SFTP 写（upload/write-file/delete-path）在 writeFile/deleteFile 交接点单次消费文件启动许可，绑定路径/kind/内容哈希；受控事务保持每步复核不铸造；预检与读回不消费；144 项局部通过、类型与四项 lint 通过 | 三模式裁决契约未接入；G1 收尾全量与构建未跑 |
 | G2 核验、写锁及一次确认恢复 | 未进行本轮完整交付 | 现版已有能力仅作为复用基线 | 统一恢复用例、显式上下文、完整业务/失联两分支 |
 | G3 隔离真机对照 | 未开始 | 无新证据 | 明确授权、固定环境/任务/模型及请求/成功率统计 |
 | G4 受控切换 | 未开始 | 无新证据 | 数据/会话/未决账兼容、单一路由、移除旧入口 |
@@ -42,6 +43,7 @@
 - [G1-G 统一结果正交事实](AGENT_REFACTOR_G1_OUTCOME_REPORT.md)
 - [G1-H PTY/会话启动许可](AGENT_REFACTOR_G1_PTY_SESSION_CLAIM_REPORT.md)
 - [G1-I 后台setsid启动许可](AGENT_REFACTOR_G1_BACKGROUND_CLAIM_REPORT.md)
+- [G1-J SFTP文件路线许可](AGENT_REFACTOR_G1_SFTP_CLAIM_REPORT.md)
 
 历史失败保留在对应报告；复跑通过不追认先前失败链。
 
@@ -56,3 +58,5 @@ G1-G 验证后以“统一工具结果的正交事实协议”提交本地分支
 G1-H 验证后以“扩展PTY与会话路线的单次启动许可”提交本地分支，不 push；本报告和代码同一提交，准确哈希以本地 `git log` 为准。
 
 G1-I 验证后以“扩展后台setsid路线的单次启动许可”提交本地分支，不 push；本报告和代码同一提交，准确哈希以本地 `git log` 为准。
+
+G1-J 验证后以“补充SFTP文件路线的分步准入核验”提交本地分支，不 push；本报告和代码同一提交，准确哈希以本地 `git log` 为准。

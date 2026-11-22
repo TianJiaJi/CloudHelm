@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { FileTransactionRunner, RemoteFileError, RemoteFileMissingError, type SshTransport } from '@cloudhelm/adapters';
-import { operationFingerprint, type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
+import { operationFingerprint, type ExecutionOptions, type FileStartTarget, type OperationExecutor, type OperationResult, type ProposedOperation } from '@cloudhelm/core';
 import type { TerminalManager } from '@cloudhelm/application';
 import { LocalFileAccess } from './local-file-access.js';
 import { executeControlledFile } from './controlled-file-executor.js';
@@ -75,6 +75,15 @@ export class FileOperationExecutor implements OperationExecutor {
         }
       }
       if (!authorized()) return notDispatched('Authorization expired before the remote call; nothing was written. Propose the operation again.');
+      // The one structured-write handoff: consume the single-use claim against
+      // the resolved destination and the exact bytes about to be sent. A denial
+      // closes the boundary without any SFTP mutation.
+      if (options?.claimFileStart) {
+        const dispatched: FileStartTarget = { hostId: operation.scope.hostId, path: remotePath, operationKind: operation.kind,
+          ...(operation.kind !== 'delete-path' ? { contentSha256: createHash('sha256').update(intended).digest('hex') } : {}) };
+        if (!options.claimFileStart(dispatched))
+          return notDispatched('Write start claim was already consumed, expired, or did not match the reviewed target; nothing was sent. Propose the operation again.');
+      }
       remoteStarted = true;
       const written = operation.kind === 'delete-path'
         ? { backup: await this.ssh.deleteFile(operation.scope.hostId, remotePath, assertAuthorized, signal) }

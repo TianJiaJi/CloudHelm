@@ -47,6 +47,16 @@ export interface NativeStartTarget {
   cwd: string;
 }
 
+/** The reviewed structured-write destination: one resolved target path, the
+ * operation kind and the exact content hash that may be sent (delete-path
+ * binds the path only). */
+export interface FileStartTarget {
+  hostId: string;
+  path: string;
+  operationKind: 'upload' | 'write-file' | 'delete-path';
+  contentSha256?: string;
+}
+
 export interface ExecutionOptions {
   /** Private backend callback: never serialize file contents into ordinary logs. */
   onFileInspection?: (snapshot: import('./file-transaction.js').FileInspection) => void;
@@ -58,6 +68,8 @@ export interface ExecutionOptions {
   canEnterExecutor?: () => boolean;
   /** Private single-use claim matched against the actual native-exec destination and text. */
   claimStart?: (target: NativeStartTarget) => boolean;
+  /** Private single-use claim matched against the actual structured SFTP write destination. */
+  claimFileStart?: (target: FileStartTarget) => boolean;
   /** Synchronous current-context check; remains valid for already-started work beyond approval expiry. */
   isAuthorized?: () => boolean;
   /** Trusted supervised-process observation. Not proof of target authentication or readiness. */

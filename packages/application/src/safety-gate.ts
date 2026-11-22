@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { executeReview } from './review-execution.js';
 import {
-  ApprovalInterruptedError, ReviewInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationFingerprint, scriptFilePath, redactOutput,
+  ApprovalInterruptedError, ReviewInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationFingerprint, structuredFileTargetOf, scriptFilePath, redactOutput,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
   type ExecutionOptions, type OperationExecutor, type OperationResult, type ProposedOperation, type RiskEvaluator,
   type SafetyDecision, type SafetySettings, type ScriptInspector, type TerminalLease
@@ -273,16 +273,33 @@ export class SafetyGate {
         if (bound) startConsumed = true;
         return bound;
       };
+      // Structured SFTP writes (upload / plain write-file / delete-path) get the
+      // equivalent single-use claim: it is consumed at the one writeFile or
+      // deleteFile handoff, so consumption attests the handoff and the executor's
+      // own read-back attestation remains the only start/change witness.
+      const structuredWriteTarget = structuredFileTargetOf(operation);
+      let fileClaimClosed = false;
+      let fileStartConsumed = false;
+      const claimFileStart: NonNullable<ExecutionOptions['claimFileStart']> = (target) => {
+        if (fileClaimClosed) return false;
+        fileClaimClosed = true;
+        const bound = structuredWriteTarget !== undefined && target?.hostId === structuredWriteTarget.hostId
+          && target.operationKind === structuredWriteTarget.operationKind && target.path === structuredWriteTarget.path
+          && (target.contentSha256 ?? undefined) === structuredWriteTarget.contentSha256 && stillCurrent();
+        if (bound) fileStartConsumed = true;
+        return bound;
+      };
       let result: OperationResult;
       try { result = await this.deps.executor.execute(operation, fingerprint, signal, { readOnly, impactAnalysis: structuredClone(impact), canEnterExecutor: stillCurrent,
         ...(operation.kind === 'command' && !operation.processControl
           && (operation.executionChannel === 'native-exec' || operation.executionChannel === 'native-pty'
             || operation.executionChannel === 'native-background'
             || operation.scope.sessionId !== undefined) ? { claimStart } : {}),
+        ...(structuredWriteTarget ? { claimFileStart } : {}),
         isAuthorized: dispatchCurrent, onProcessStarted: observer?.onProcessStarted, onFileInspection: observer?.onFileInspection }); }
       catch (error) {
         result = { operationId: operation.id, status: 'unknown', stdoutTail: error instanceof Error ? error.message : String(error) };
-      } finally { startClaimed = true; } // A completed attempt cannot resurrect an unused claim.
+      } finally { startClaimed = true; fileClaimClosed = true; } // A completed attempt cannot resurrect an unused claim.
       // For native-exec, native-pty, native-background and session commands the
       // single-use claim IS the dispatch boundary: it is consumed immediately
       // before the one business dispatch, so consumption attests the handoff and
@@ -295,6 +312,17 @@ export class SafetyGate {
         result = { ...result,
           handoff: result.handoff ?? (startConsumed ? 'handed-off' : 'not-sent'),
           businessStart: result.businessStart ?? (startConsumed
+            ? result.status === 'succeeded' && result.exitCode === 0 ? 'started' : 'unknown'
+            : 'not-started') };
+      }
+      // Structured SFTP writes mirror the command semantics with the writeFile/
+      // deleteFile handoff as the single dispatch boundary: consumption attests
+      // the handoff, the executor's verified read-back attests the change, and
+      // an unconsumed claim proves nothing was sent.
+      if (structuredWriteTarget) {
+        result = { ...result,
+          handoff: result.handoff ?? (fileStartConsumed ? 'handed-off' : 'not-sent'),
+          businessStart: result.businessStart ?? (fileStartConsumed
             ? result.status === 'succeeded' && result.exitCode === 0 ? 'started' : 'unknown'
             : 'not-started') };
       }
