@@ -50,7 +50,7 @@ it('shows the current blocked command, simple risk and refusal/acceptance withou
   expect(markup).toContain('拒绝，保持阻断');
   expect(markup).toContain('知晓风险，仅解除这条写入阻断');
   expect(markup).toContain('接受风险并继续对话');
-  expect(markup).toContain('请点击对话顶部的「继续 AI」或发送消息');
+  expect(markup).toContain('选择「仅解除」不会续跑');
   expect(markup).not.toContain('切换到来源对话');
   expect(markup).not.toContain('风险接管说明');
 });
@@ -67,6 +67,29 @@ it('shows just one blocker at a time and advances after the previous record is r
   expect(render(data)).not.toContain('阻断项 old');
   data.operations[1]!.reconciledAt = 11;
   expect(render(data)).toBe('');
+});
+
+it('shows evidence reconciliation after the active card disappears, without claiming writes resumed', () => {
+  const resolved: OperationView = { ...original, taskId: 'new', status: 'succeeded', reconciledAt: 10,
+    reconciliation: { kind: 'evidence', outcome: 'succeeded', explanation: 'fixture observation', at: 10 } };
+  const markup = render(snapshot([resolved]));
+  expect(markup).toContain('原操作已按证据核验');
+  expect(markup).toContain('不代表本轮恢复写入');
+  expect(markup).not.toContain('接受风险并继续对话');
+  expect(render(snapshot([{ ...resolved, taskId: 'source' }, blocked]))).toBe('');
+});
+
+it('shows a correlated acceptance and its backend continuation note alongside another blocker', () => {
+  const accepted: OperationView = { ...original, reconciledAt: 10,
+    reconciliation: { kind: 'risk-accepted', explanation: 'fixture acceptance', at: 10, sourceTaskId: 'new' },
+    recoveryDecision: { version: 1, actionId: 'acceptance', action: 'accept-and-continue', at: 10, sourceTaskId: 'new',
+      released: true, resumed: false, resumeNote: '同风险域仍有其他待核验操作' } };
+  const markup = render(snapshot([accepted, { ...original, id: 'next' }, blocked]));
+  expect(markup).toContain('已记录风险接管');
+  expect(markup).toContain('未自动续跑：同风险域仍有其他待核验操作');
+  expect(markup).toContain('阻断项 next');
+  expect(render(snapshot([{ ...accepted, recoveryDecision: { ...accepted.recoveryDecision!, error: '写锁同步状态未确认' } }])))
+    .toContain('写锁同步状态未确认');
 });
 
 it('does not treat a completed read-only query or proposed command as a new lock event', () => {

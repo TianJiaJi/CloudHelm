@@ -56,23 +56,44 @@ function RecoveryItem({ operation, snapshot, conversation, current, remaining, h
     {resolvable ? <div className={styles.cardActions}>
       <Button size="compact" disabled={busy} onClick={() => void resolveRisk('reject')}>拒绝，保持阻断</Button>
       <Button size="compact" disabled={busy} onClick={() => void resolveRisk('release')}>知晓风险，仅解除这条写入阻断</Button>
-      <Button size="compact" disabled={busy} onClick={() => void resolveRisk('accept-and-continue')}>接受风险并继续对话</Button>
+      <Button variant="primary" size="compact" disabled={busy} onClick={() => void resolveRisk('accept-and-continue')}>接受风险并继续对话</Button>
     </div> : <p>原操作仍在运行或审核中，不能解除；请等待真实退出。</p>}
-    <small>风险确认不等于继续聊天。全部阻断项解除后，请点击对话顶部的「继续 AI」或发送消息；AI 不会自动重放原命令，新的命令仍须审核。</small>
+    <small>选择「仅解除」不会续跑。「接受风险并继续」仅在后端确认可续跑时生效。原命令不会自动重放，新命令仍须审核。</small>
   </Card>;
 }
 
-/** Show a single host-wide blocker only after this conversation encounters it. */
+function RecoveryReceipt({ operation }: { operation: OperationView }): React.JSX.Element {
+  const decision = operation.recoveryDecision;
+  const evidence = operation.reconciliation?.kind === 'evidence';
+  return <p role="status">
+    {evidence ? '原操作已按证据核验。' : '已记录风险接管；这不证明原操作成功。'}
+    {' 此处置不代表本轮恢复写入；新的写入仍须通过安全检查。'}
+    {!evidence && (decision?.error ? <> {decision.error}</> : decision?.resumed ? ' 已发起续跑。'
+      : decision?.resumeNote ? <> 未自动续跑：{decision.resumeNote}</> : null)}
+  </p>;
+}
+
+/** Show one pending blocker and the latest explicitly associated recovery receipt. */
 export function RecoveryCard({ snapshot, hostId, conversation, report }: {
   snapshot: AppSnapshot; hostId: string; conversation?: TaskView; report(error: string): void;
 }): React.JSX.Element | null {
   if (!conversation) return null;
   const current = snapshot.operations.filter((item) => item.taskId === conversation.id && item.hostId === hostId
     && item.failureKind === 'unresolved-prior-operation').at(-1);
-  if (!current && !snapshot.operations.some((item) => item.taskId === conversation.id && item.hostId === hostId
-    && operationOutcomeResolvable(item))) return null;
-  const blockers = snapshot.operations.filter((item) => sharesHostRiskDomain(snapshot.hostRiskBindings, item.hostId, hostId) && operationNeedsVerification(item));
-  if (!blockers.length) return null;
-  return <RecoveryItem key={`${blockers[0]!.id}:${current?.id ?? ''}`} operation={blockers[0]!} snapshot={snapshot}
-    conversation={conversation} current={current} remaining={blockers.length} hostId={hostId} report={report} />;
+  const domainOperations = snapshot.operations.filter((item) => sharesHostRiskDomain(snapshot.hostRiskBindings, item.hostId, hostId));
+  const blockers = current || domainOperations.some((item) => item.taskId === conversation.id && item.hostId === hostId
+    && operationOutcomeResolvable(item)) ? domainOperations.filter(operationNeedsVerification) : [];
+  const receipt = domainOperations.filter((item) => item.reconciledAt && item.reconciliation
+    && !operationNeedsVerification(item) && (item.reconciliation.kind === 'evidence'
+      ? item.taskId === conversation.id && item.hostId === hostId
+      : item.recoveryDecision?.sourceTaskId === conversation.id || (!item.recoveryDecision?.sourceTaskId
+        && item.taskId === conversation.id && item.hostId === hostId)))
+    .sort((a, b) => b.reconciledAt! - a.reconciledAt!)[0];
+  const blocker = blockers[0];
+  if (!receipt && !blocker) return null;
+  return <>
+    {receipt && <RecoveryReceipt operation={receipt} />}
+    {blocker && <RecoveryItem key={`${blocker.id}:${current?.id ?? ''}`} operation={blocker} snapshot={snapshot}
+      conversation={conversation} current={current} remaining={blockers.length} hostId={hostId} report={report} />}
+  </>;
 }
