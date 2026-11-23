@@ -171,10 +171,12 @@ nextActions: 允许模型当前做什么
 ### 3.3 G1 剩余：三模式裁决契约
 
 - 模式一：审批等待 + 拒绝后诊断（已部分完成）
-- 模式二：显式自审（`adjudication-required`）— 需要明确"可核对的自审条件"，不能只留"拿得准"
+- 模式二：显式自审（`adjudication-required`）— 需要明确“可核对的自审条件”，不能只留“拿得准”
 - 模式三：预授权范围命中 + 越界拒绝
 
 改 `packages/application/src/review-execution.ts`、`review-coordination.ts`。分级表变更走 Core 策略版本。
+
+**状态（本轮更新）**：模式二已落地端到端闭环（`adjudication-required` 回执绑定指纹与终端代次，同模型显式二次确认后放行，失败升级人工；无 dedicated reviewer 时自审为默认路径，独立审核需显式 reviewer 配置）。模式三已落地预授权范围契约（core 纯匹配器 + contracts 校验 + `update-host-safety` 增量下发 + 越界未执行回执；解释器与提权入口双层拦截）。本节 G1 部分结项，剩余为真实环境验收。
 
 ### 3.4 G2 — 核验、写锁与一次确认恢复
 
