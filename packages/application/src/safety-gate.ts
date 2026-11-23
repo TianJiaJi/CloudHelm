@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { executeReview } from './review-execution.js';
+import { executeReview, verifyAdjudicationReproposal } from './review-execution.js';
+import { AdjudicationRegistry } from './adjudication-registry.js';
 import {
   ApprovalInterruptedError, ReviewInterruptedError, decideSafety, validProcessControl, inspectScriptSafety, analyzeOperationImpact, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, operationFingerprint, structuredFileTargetOf, scriptFilePath, redactOutput,
   type ApprovalRequester, type CommandAnalysis, type CommandAnalyzer, type OperationAudit,
@@ -35,6 +36,11 @@ export interface SafetyGateDependencies {
   admitsOperation?(operation: ProposedOperation, readOnly: boolean): boolean;
   /** Worker-owned review generation, revoked on stop/model/policy changes. */
   reviewSignal?(): AbortSignal;
+  /** Explicitly configured independent review port. Absent means the ai-review
+   * tier runs the self-adjudication protocol instead of calling the evaluator. */
+  independentReview?(): boolean;
+  /** Task-scoped self-adjudication bindings shared by every gate of one task. */
+  adjudications?: AdjudicationRegistry;
   settings(hostId: string): SafetySettings;
 }
 
@@ -48,8 +54,14 @@ const APPROVAL_HARD_MS = 60 * 60_000;
 
 export class SafetyGate {
   private readonly inFlight = new Set<string>();
+  private internalAdjudications?: AdjudicationRegistry;
 
   constructor(private readonly deps: SafetyGateDependencies) {}
+
+  private adjudications(): AdjudicationRegistry {
+    this.internalAdjudications ??= this.deps.adjudications ?? new AdjudicationRegistry();
+    return this.internalAdjudications;
+  }
 
   async execute(proposed: ProposedOperation, signal?: AbortSignal, manualReview = false,
     observer?: GateExecutionObserver): Promise<GateOutcome> {
@@ -176,29 +188,51 @@ export class SafetyGate {
       };
       if (safety.verdict === 'evaluate') {
         const basis = safeReviewBasis(`[${safety.ruleId}] ${safety.reason}`);
-        const review = await executeReview(this.deps.evaluator, operation, analysis, {
-          classification: safety, inspectedScriptSha256: inspectedScript?.sha256, impactAnalysis: structuredClone(impact)
-        }, stillCurrent, signal, reviewSignal);
-        if (review.kind === 'canceled' || review.kind === 'stale' || !stillCurrent()) {
-          const canceled = review.kind === 'canceled' || signal?.aborted
-            || reviewSignal?.reason instanceof ReviewInterruptedError && reviewSignal.reason.outcome === 'canceled';
-          const interrupted: SafetyDecision = { verdict: 'error',
-            ruleId: canceled ? 'review-canceled' : 'authorization-expired',
-            reason: `${canceled ? '审核已取消' : '审核绑定已失效'}，操作未执行；静态依据：${basis}` };
-          await this.deps.audit.decided(operation.id, interrupted, fingerprint);
-          return { decision: interrupted };
+        if (this.deps.independentReview?.()) {
+          const review = await executeReview(this.deps.evaluator, operation, analysis, {
+            classification: safety, inspectedScriptSha256: inspectedScript?.sha256, impactAnalysis: structuredClone(impact)
+          }, stillCurrent, signal, reviewSignal);
+          if (review.kind === 'canceled' || review.kind === 'stale' || !stillCurrent()) {
+            const canceled = review.kind === 'canceled' || signal?.aborted
+              || reviewSignal?.reason instanceof ReviewInterruptedError && reviewSignal.reason.outcome === 'canceled';
+            const interrupted: SafetyDecision = { verdict: 'error',
+              ruleId: canceled ? 'review-canceled' : 'authorization-expired',
+              reason: `${canceled ? '审核已取消' : '审核绑定已失效'}，操作未执行；静态依据：${basis}` };
+            await this.deps.audit.decided(operation.id, interrupted, fingerprint);
+            return { decision: interrupted };
+          }
+          const timedOut = review.kind === 'timeout';
+          const assessment = review.kind === 'assessment' ? review.assessment
+            : { verdict: 'error' as const, reason: '审核模型等待超时' };
+          const result = typeof assessment === 'string' ? { verdict: assessment } : assessment;
+          const detail = result.reason ? `：${safeReviewBasis(result.reason).slice(0, 400)}` : result.verdict === 'deny' ? '（审核模型未提供具体理由）' : '';
+          safety = result.verdict === 'allow'
+            ? { verdict: 'allow', ruleId: 'ai-review-allow', reason: `独立审核已放行${detail}；静态依据：${basis}` }
+            : result.verdict === 'deny'
+              ? { verdict: 'deny', ruleId: 'ai-review-deny', reason: `独立审核拒绝该操作${detail}；静态依据：${basis}` }
+              : { verdict: 'ask', ruleId: result.verdict === 'error' ? timedOut ? 'ai-review-timeout' : 'ai-review-unavailable' : 'ai-review-uncertain',
+                reason: `独立审核需要人工判断${detail}；静态依据：${basis}` };
+        } else {
+          // Self-adjudication protocol: the same proposer must explicitly confirm
+          // its own proposal before dispatch. A minted receipt binds the exact
+          // content/identity fingerprint; only a matching, unexpired, pending
+          // confirmation can consume it, and any failed verification escalates.
+          const registry = this.adjudications();
+          const verification = verifyAdjudicationReproposal(operation, fingerprint, registry);
+          if (verification.kind === 'receipt') {
+            const binding = registry.pending(fingerprint, operation.scope.taskId, operation.scope.hostId);
+            const required: SafetyDecision = { verdict: 'evaluate', ruleId: 'adjudication-required', impact: safety.impact,
+              reason: `自审确认要求（[${safety.ruleId}] ${safety.reason}）：同一模型需显式二次确认此操作后才会派发。裁决引用: ${binding.id}，有效期至 ${new Date(binding.expiresAt).toISOString()}。本次未执行、未派发、无任何效果。确认执行：用同一工具重提完全相同的操作，并在 adjudications 数组中携带该裁决引用、confirmed=true 与依据；不确认：携带 confirmed=false 或不再重提，需要时可请求人工审核。`,
+              adjudication: { id: binding.id, expiresAt: binding.expiresAt, fingerprint } };
+            await this.deps.audit.decided(operation.id, required, fingerprint);
+            return { decision: required, readOnly };
+          }
+          safety = verification.kind === 'confirmed'
+            ? { verdict: 'allow', ruleId: 'self-adjudication-confirmed', impact: safety.impact,
+              reason: `同一模型已显式二次确认此裁决（${verification.binding.id}）并重提相同操作；依据：${verification.adjudication.basis.map((item) => redactOutput(item).slice(0, 400)).join('；')}` }
+            : { verdict: 'ask', ruleId: 'adjudication-escalated', impact: safety.impact,
+              reason: `自审确认未通过（${verification.cause}），已升级人工审核；操作未执行。原始依据：[${safety.ruleId}] ${safety.reason}` };
         }
-        const timedOut = review.kind === 'timeout';
-        const assessment = review.kind === 'assessment' ? review.assessment
-          : { verdict: 'error' as const, reason: '审核模型等待超时' };
-        const result = typeof assessment === 'string' ? { verdict: assessment } : assessment;
-        const detail = result.reason ? `：${safeReviewBasis(result.reason).slice(0, 400)}` : result.verdict === 'deny' ? '（审核模型未提供具体理由）' : '';
-        safety = result.verdict === 'allow'
-          ? { verdict: 'allow', ruleId: 'ai-review-allow', reason: `独立审核已放行${detail}；静态依据：${basis}` }
-          : result.verdict === 'deny'
-            ? { verdict: 'deny', ruleId: 'ai-review-deny', reason: `独立审核拒绝该操作${detail}；静态依据：${basis}` }
-            : { verdict: 'ask', ruleId: result.verdict === 'error' ? timedOut ? 'ai-review-timeout' : 'ai-review-unavailable' : 'ai-review-uncertain',
-              reason: `独立审核需要人工判断${detail}；静态依据：${basis}` };
       }
 
       if (safety.verdict === 'ask') {

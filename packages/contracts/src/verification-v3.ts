@@ -8,6 +8,16 @@ export const OutputExpectationSchema = Type.Object({ expectedOutput: Type.String
   expectedExitCode: Type.Optional(Type.Integer({ minimum: 0, maximum: 255 })) }, { additionalProperties: false });
 export type OutputExpectation = Static<typeof OutputExpectationSchema>;
 
+/** Same-proposer confirmation reference for one previously proposed operation.
+ * A tool argument only; the backend re-verifies the referenced binding before
+ * a confirmation can contribute to any decision. */
+export const AdjudicationSchema = Type.Object({
+  adjudicationId: Type.String({ minLength: 1, maxLength: 200 }),
+  confirmed: Type.Boolean(),
+  basis: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { minItems: 1, maxItems: 8 })
+}, { additionalProperties: false });
+export type Adjudication = Static<typeof AdjudicationSchema>;
+
 export const VerificationSubmissionV3Schema = Type.Object({
   version: Type.Literal(3),
   summary: Type.Optional(Text(4096)),

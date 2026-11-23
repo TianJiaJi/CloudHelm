@@ -15,6 +15,7 @@ it.each(['allow', 'deny', 'review', 'error', 'human'] as const)('retains static 
   const decisions: SafetyDecision[] = [];
   const gate = new SafetyGate({ analyzer: new BashAnalyzer(), evaluator: { evaluate }, approvals: { requestApproval },
     executor: { execute }, lease: { currentGeneration: () => 1, isAgentOwner: () => true },
+    independentReview: () => true,
     settings: () => ({ mode: answer === 'human' ? 'ask' : 'ai-review', revision: 1 }),
     audit: { proposed: async () => {}, completed: async () => {}, decided: async (_id, decision) => { decisions.push(decision); } } });
   const result = await gate.execute(operation);

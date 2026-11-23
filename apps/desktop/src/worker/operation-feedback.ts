@@ -56,8 +56,10 @@ export function operationToolResult(result: OperationResult, host: string, readO
   return { result, readOnly, details, structuredContent,
     content: [{ type: 'text' as const, text: operationFeedback(result, host, readOnly) }], isError: result.status !== 'succeeded' };
 }
-export function blockedOperationFeedback(operationId: string, code: string, message: string, priorOperationId?: string, readOnly?: boolean) {
+export function blockedOperationFeedback(operationId: string, code: string, message: string, priorOperationId?: string, readOnly?: boolean,
+  adjudication?: { id: string; expiresAt: number; fingerprint: string }) {
   const details = { ...notStartedOutcome(code), operationId, status: 'not-executed', readOnly: readOnly ?? 'unclassified', code,
-    priorOperationId, logAvailability: priorOperationId ? 'reference-only' : 'unavailable' };
+    priorOperationId, logAvailability: priorOperationId ? 'reference-only' : 'unavailable',
+    ...(adjudication ? { adjudication } : {}) };
   return { readOnly, details, structuredContent: { ...details, taskId: null, terminalId: null, jobId: null }, content: [{ type: 'text' as const, text: `Operation ID: ${operationId}\n${JSON.stringify(details)}\n${feedbackTail(message, 8 * 1024).text}` }], isError: true };
 }

@@ -19,6 +19,7 @@ function fixture() {
     dynamic: false, redirects: false }], redirectTargets: [], hasError: false, hasExpansion: false,
     hasCompound: false, hasRedirection: false, hasPipeline: false }) }, evaluator: { evaluate }, executor: { execute },
     approvals: { requestApproval }, reviewSignal: () => lifetime.signal,
+    independentReview: () => true,
     settings: () => ({ mode: 'ai-review', revision, reviewerRevision: 1 }),
     lease: { currentGeneration: () => 1, isAgentOwner: () => true }, audit: { proposed: async () => {}, completed: vi.fn(),
       decided: async (_id, decision) => { decisions.push(decision); } } });

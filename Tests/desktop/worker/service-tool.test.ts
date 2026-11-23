@@ -31,7 +31,8 @@ function setup(reply: (command: string) => Partial<OperationResult> = () => ({ s
   const requestApproval = vi.fn(async (_request: Parameters<ApprovalRequester['requestApproval']>[0]): Promise<boolean> => approve);
   const evaluate = vi.fn<RiskEvaluator['evaluate']>(async () => assessment);
   const gate = new SafetyGate({ analyzer: new BashAnalyzer(), evaluator: { evaluate }, approvals: { requestApproval },
-    executor: serial, audit, lease: { currentGeneration: () => 1, isAgentOwner: () => true }, settings: () => ({ mode: host.defaultMode, revision: host.policyRevision }) });
+    executor: serial, audit, independentReview: () => true,
+    lease: { currentGeneration: () => 1, isAgentOwner: () => true }, settings: () => ({ mode: host.defaultMode, revision: host.policyRevision }) });
   const tool = createServiceTool({ hosts: [host], localFiles: new LocalFileAccess([]), ensureTerminal,
     scope: (_host, terminalId) => ({ taskId: 'task', hostId: 'host', cwd: '/', runAs: terminalId === 'root-terminal' ? 'root' : 'user',
       loginAs: terminalId === 'root-terminal' ? 'root' : 'user', sessionId: terminalId === 'root-terminal' ? 'confirmed-root' : undefined,

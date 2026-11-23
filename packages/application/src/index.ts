@@ -1,4 +1,5 @@
 export * from './safety-gate.js';
+export * from './adjudication-registry.js';
 export * from './approval-coordinator.js';
 export * from './conversation-input-queue.js';
 export * from './host-environment-registry.js';

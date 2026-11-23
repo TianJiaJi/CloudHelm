@@ -21,7 +21,9 @@ it.each(['pause', 'host-policy', 'conversation-policy', 'reviewer', 'model'] as 
       provider: 'cloudhelm-custom', modelId: 'fixture', requestCount: 0, requestLimit: 10, createdAt: 1, updatedAt: 1 };
     const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', port: 22, username: 'user', auth: 'agent',
       status: 'connected', defaultMode: 'ai-review', protectedPaths: [], policyRevision: 1 };
-    const profile = { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: model.baseUrl };
+    const profile = { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: model.baseUrl,
+      reviewer: { selection: { kind: 'model' as const, provider: 'cloudhelm-custom', modelId: 'fixture' },
+        provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: model.baseUrl, revision: 1 } };
     const events: Parameters<TaskSignals['event']>[0][] = [];
     const terminal = new TerminalManager({ data() {}, state() {} });
     const execute = vi.spyOn(terminal, 'execute');

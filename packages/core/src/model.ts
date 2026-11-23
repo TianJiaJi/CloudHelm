@@ -38,7 +38,25 @@ export interface OperationDelegation {
   toolCallId?: string;
 }
 
-export type ProposedOperation = OperationDelegation &
+/** Same-proposer explicit confirmation of one previously proposed operation.
+ * Carries no authority of its own: the gate re-verifies the referenced binding
+ * (content fingerprint, identity, policy and terminal generations, expiry)
+ * before a confirmation can contribute to any decision. */
+export interface OperationAdjudication {
+  /** Reference to the receipt the gate returned with the prior outcome. */
+  adjudicationId: string;
+  /** Explicit second confirmation by the same proposer. */
+  confirmed: boolean;
+  /** Cited grounds for the confirmation; redacted and bounded before audit. */
+  basis: string[];
+}
+
+/** Optional model-supplied confirmations for a re-proposed operation. */
+export interface OperationAdjudications {
+  adjudications?: OperationAdjudication[];
+}
+
+export type ProposedOperation = OperationDelegation & OperationAdjudications &
   (
     | { id: string; kind: 'inspect-file'; path: string; privilege?: 'root'; recoveryDirectoryId?: string; scope: OperationScope }
     | { id: string; kind: 'command'; command: string; serviceUnit?: string;
@@ -149,6 +167,9 @@ export interface SafetyDecision {
   ruleId: string;
   reason: string;
   impact?: 'ordinary' | 'high' | 'unknown';
+  /** Receipt metadata for an 'adjudication-required' decision: a reference the
+   * proposer returns with its explicit confirmation, never a replayable grant. */
+  adjudication?: { id: string; expiresAt: number; fingerprint: string };
 }
 
 export interface SafetySettings {

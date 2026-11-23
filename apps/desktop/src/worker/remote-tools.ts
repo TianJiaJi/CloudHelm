@@ -10,7 +10,7 @@ import { createSelectedReadTool } from '@cloudhelm/adapters';
 import type { SafetyGate } from '@cloudhelm/application';
 import type { ProposedOperation } from '@cloudhelm/core';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
-import { OutputExpectationSchema } from '@cloudhelm/contracts';
+import { OutputExpectationSchema, AdjudicationSchema } from '@cloudhelm/contracts';
 import { hasJournalCredentials } from './journal-secrets.js';
 import { blockedOperationFeedback } from './operation-feedback.js';
 
@@ -24,7 +24,8 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     const parameters = Type.Object({ hostId: Type.String(), command: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()),
       privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])),
       background: Type.Optional(Type.Boolean()),
-      outputExpectation: Type.Optional(OutputExpectationSchema) }, { additionalProperties: false });
+      outputExpectation: Type.Optional(OutputExpectationSchema),
+      adjudications: Type.Optional(Type.Array(AdjudicationSchema, { maxItems: 8 })) }, { additionalProperties: false });
     const tool: BusinessTool<Static<typeof parameters>> = {
       name: 'run_remote', label: 'Execute an audited remote SSH command',
       description: 'Execute one logical action in an authorized SSH terminal. Use cwd; prefer absolute paths. Default waits for exit. Execution-form preference: structured tools (service managers, file tools) > one plain native command > client-side transform (read the file, transform locally, write back structurally) > remote script/interpreter payload (bash -c, python3 -c, perl -e, eval, base64 blocks); the last cannot be proven read-only, always takes the conservative review route and is audit-marked, so reserve it for genuinely necessary cases. For explicitly requested temporary long-running work set background=true: returns a job observation after process start, NOT authentication success, readiness or exit. Inspect via query_operation_history/read_operation_log; use service managers for production services. For a required root action set privilege=root and provide one literal command without sudo/su: backend verifies identity, uses sudo when needed, and can offer confirmed su only after a proven not-started sudo failure. Passwords are requested privately only when needed, with no root-session setup. sessionId is legacy/explicit-identity access, incompatible with privilege=root. After cancellation, denial or an unknown effect, keep the recorded result and inspect it; retries and identity switches stay blocked until reconciliation. Optional outputExpectation compares this run only, not whole-task success; no report submission is required. Read truncated output with read_operation_log; replaying for output stays blocked.',
@@ -44,6 +45,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
             delegationId, toolCallId: _id,
             ...(params.background ? { executionMode: 'background' as const } : {}),
             outputExpectation: params.outputExpectation ? structuredClone(params.outputExpectation) : undefined,
+            ...(params.adjudications ? { adjudications: params.adjudications } : {}),
             scope: deps.scope(host, terminalId, params.cwd) };
           return params.privilege === 'root' ? privilege.run(gate, host, operation, lifetime)
             : deps.runOperation(gate, operation, lifetime, host.label);
@@ -55,7 +57,8 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     };
     const readParameters = Type.Object({ hostId: Type.String(), path: Type.String(), cwd: Type.Optional(Type.String()),
       maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1048576 })),
-      privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])) },  { additionalProperties: false });
+      privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])),
+      adjudications: Type.Optional(Type.Array(AdjudicationSchema, { maxItems: 8 })) },  { additionalProperties: false });
     const readTool: BusinessTool<Static<typeof readParameters>> = {
       access: 'query', deferred: true, available: () => !!files || !!deps.readRemoteFile,
       name: 'read_remote_file', label: 'Read a bounded remote file for editing',
@@ -87,7 +90,8 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     const writeParameters = Type.Object({ hostId: Type.String(), path: Type.String(), content: Type.String(), cwd: Type.Optional(Type.String()),
       sessionId: Type.Optional(Type.String()),
       expectedSha256: Type.Optional(Type.String({ pattern: '^[a-f0-9]{64}$' })),
-      createOnly: Type.Optional(Type.Boolean()) }, { additionalProperties: false });
+      createOnly: Type.Optional(Type.Boolean()),
+      adjudications: Type.Optional(Type.Array(AdjudicationSchema, { maxItems: 8 })) }, { additionalProperties: false });
     const writeTool: BusinessTool<Static<typeof writeParameters>> = {
       name: 'write_remote_file', label: 'Write an audited remote file',
       description: 'Create new UTF-8 files only over SFTP, at most 1 MiB; parent directory must exist. Current backend refuses existing-file replacement because complete ACL/xattr preservation is unverified, even with a hash or root SSH. expectedSha256 is legacy and rejected before terminal allocation. New files use private exclusive staging and non-overwriting rename; createOnly=true is explicit. Verify the read-back hash. prepare_remote_edit is the read-only diff path for existing files; identity changes, shell staging and delete/recreate stay outside this tool\'s flow. sudo/su contexts leave SFTP at its own identity.',
@@ -103,10 +107,12 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
         return deps.runOperation(gate, { id: randomUUID(), kind: 'write-file', path: params.path, content: params.content,
           delegationId: randomUUID(), toolCallId: _id,
           ...(params.createOnly ? { createOnly: true } : {}),
+          ...(params.adjudications ? { adjudications: params.adjudications } : {}),
           scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
       }
     };
-    const deleteParameters = Type.Object({ hostId: Type.String(), path: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) }, { additionalProperties: false });
+    const deleteParameters = Type.Object({ hostId: Type.String(), path: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()),
+      adjudications: Type.Optional(Type.Array(AdjudicationSchema, { maxItems: 8 })) }, { additionalProperties: false });
     const deleteTool: BusinessTool<Static<typeof deleteParameters>> = {
       name: 'delete_remote_file', label: 'Delete an audited remote file',
       description: 'Delete only a regular file on an authorized host, retaining a private content-only recovery copy. It does not restore owner/group/mode, ACL/xattr or service state. Directories and symlinks are refused. The existing-file replacement refusal stays in force across deletion; prepare_remote_edit is the path for editing existing files.',
@@ -117,6 +123,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
         const terminalId = await deps.ensureTerminal(host.id, params.sessionId);
         return deps.runOperation(gate, { id: randomUUID(), kind: 'delete-path', path: params.path,
           delegationId: randomUUID(), toolCallId: _id,
+          ...(params.adjudications ? { adjudications: params.adjudications } : {}),
           scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
       }
     };
@@ -136,7 +143,8 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     };
     const readLocalTool = { ...createSelectedReadTool((path, signal) => deps.localFiles.read(path, signal)),
       available: () => deps.localFiles.hasScopes === true };
-    const uploadParameters = Type.Object({ hostId: Type.String(), localPath: Type.String(), remotePath: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()) }, { additionalProperties: false });
+    const uploadParameters = Type.Object({ hostId: Type.String(), localPath: Type.String(), remotePath: Type.String(), cwd: Type.Optional(Type.String()), sessionId: Type.Optional(Type.String()),
+      adjudications: Type.Optional(Type.Array(AdjudicationSchema, { maxItems: 8 })) }, { additionalProperties: false });
     const uploadTool: BusinessTool<Static<typeof uploadParameters>> = {
       name: 'upload_selected_file', label: 'Upload an audited selected file',
       description: 'Upload a regular file of at most 1 MiB from a user-selected local source to a new file on an authorized SSH host. Existing targets are refused because ACL/xattr preservation is unverified, and the refusal holds across delete/recreate; prepare_remote_edit is the path for editing existing files. Changes require safety review.',
@@ -151,6 +159,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
             localRoot: scope.path, remotePath: params.remotePath, size: data.length,
             delegationId: randomUUID(), toolCallId: _id,
             contentSha256: createHash('sha256').update(data).digest('hex'),
+            ...(params.adjudications ? { adjudications: params.adjudications } : {}),
             scope: deps.scope(host, terminalId, params.cwd) }, signal, host.label);
         } catch (error) { return { content: [{ type: 'text' as const, text: String(error) }], details: undefined, isError: true }; }
       }

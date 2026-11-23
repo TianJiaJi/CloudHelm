@@ -44,6 +44,6 @@ async function attemptOperation(context: OperationPipelineContext, operation: Pr
   const outcome = await context.gate.execute(operation, context.signal, context.manualReview, context.gateObserver(operation));
   context.coordinateDecision(outcome.decision);
   if (!outcome.result) return { feedback: blockedOperationFeedback(operation.id, outcome.decision.ruleId,
-    `Executed: false; effects: none. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}`, undefined, outcome.readOnly) };
+    `Executed: false; effects: none. SafetyGate ${outcome.decision.verdict} (${outcome.decision.ruleId}): ${outcome.decision.reason}`, undefined, outcome.readOnly, outcome.decision.adjudication) };
   return { operation, outcome };
 }

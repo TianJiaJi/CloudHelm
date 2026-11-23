@@ -17,6 +17,7 @@ function setup() {
     analyzer: { analyze: async (raw) => ({ raw, calls: [{ name: 'python3', args: ['-c', 'print(1)'], dynamic: false, redirects: false }],
       redirectTargets: [], hasExpansion: false, hasPipeline: false, hasCompound: false, hasRedirection: false, hasError: false }) },
     evaluator: { evaluate: async () => 'error' }, approvals: { requestApproval }, executor: { execute },
+    independentReview: () => true,
     audit: { proposed: async () => {}, decided: async () => {}, completed: async () => {} },
     lease: { currentGeneration: () => generation, isAgentOwner: () => true },
     settings: () => ({ mode: 'ai-review', revision })
@@ -144,6 +145,7 @@ it.each(['ask', 'ai-review', 'permissive'] as const)(
         hasRedirection: false, hasError: false }) },
       scripts: { inspect: async () => { throw new Error('Unreadable'); }, verify: async () => true },
       evaluator: { evaluate }, approvals: { requestApproval: approve }, executor: { execute },
+      independentReview: () => true,
       audit: { proposed: async () => {}, decided: async () => {}, completed: async () => {} },
       lease: { currentGeneration: () => 1, isAgentOwner: () => true }, settings: () => ({ mode, revision: 1 })
     });
@@ -166,6 +168,7 @@ it('lets the independent reviewer auto-allow an unreadable script in ai-review m
       hasRedirection: false, hasError: false }) },
     scripts: { inspect: async () => { throw new Error('Unreadable'); }, verify: async () => true },
     evaluator: { evaluate }, approvals: { requestApproval: approve }, executor: { execute },
+    independentReview: () => true,
     audit: { proposed: async () => {}, decided: async () => {}, completed: async () => {} },
     lease: { currentGeneration: () => 1, isAgentOwner: () => true }, settings: () => ({ mode: 'ai-review', revision: 1 })
   });
@@ -189,6 +192,7 @@ it.each(['ask', 'ai-review', 'permissive'] as const)(
         hasRedirection: false, hasError: false }) },
       scripts: { inspect: async () => ({ source: 'useradd demo', sha256: 'sha' }), verify: async () => true },
       evaluator: { evaluate }, approvals: { requestApproval: approve }, executor: { execute },
+      independentReview: () => true,
       audit: { proposed: async () => {}, decided: async () => {}, completed: async () => {} },
       lease: { currentGeneration: () => 1, isAgentOwner: () => true }, settings: () => ({ mode, revision: 1 })
     });
@@ -233,6 +237,7 @@ it('routes an identified high-impact command through the reviewer only in ai-rev
       redirectTargets: [], hasExpansion: false, hasPipeline: false, hasCompound: false,
       hasRedirection: false, hasError: false }) },
     evaluator: { evaluate }, approvals: { requestApproval: approve }, executor: { execute },
+    independentReview: () => true,
     audit: { proposed: async () => {}, decided: async () => {}, completed: async () => {} },
     lease: { currentGeneration: () => 1, isAgentOwner: () => true }, settings: () => ({ mode: 'ai-review', revision: 1 })
   });

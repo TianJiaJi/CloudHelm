@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Type, type Static } from 'typebox';
 import { serviceQuery, serviceLogQuery, serviceObservation, type BusinessTool } from '@cloudhelm/core';
+import { AdjudicationSchema } from '@cloudhelm/contracts';
 import type { SafetyGate } from '@cloudhelm/application';
 import type { RemoteToolDependencies } from './remote-tool-dependencies.js';
 import { feedbackTail } from './operation-feedback.js';
@@ -9,7 +10,8 @@ import { OperationPrivilege } from './operation-privilege.js';
 const parameters = Type.Object({ hostId: Type.String(), unit: Type.String({ minLength: 1, maxLength: 200 }),
   action: Type.Union([Type.Literal('inspect'), Type.Literal('restart'), Type.Literal('logs')]),
   privilege: Type.Optional(Type.Union([Type.Literal('current'), Type.Literal('root')])),
-  sudo: Type.Optional(Type.Boolean()), sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })) }, { additionalProperties: false });
+  sudo: Type.Optional(Type.Boolean()), sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+  adjudications: Type.Optional(Type.Array(AdjudicationSchema, { maxItems: 8 })) }, { additionalProperties: false });
 type Phase = 'preflight' | 'restart' | 'check' | 'logs' | 'inspect';
 interface Observation {
   phase: Phase; operationId: string; status: string; readOnly: boolean | 'unclassified';
@@ -55,7 +57,9 @@ export function createServiceTool(deps: RemoteToolDependencies, gate: SafetyGate
           // TaskRunner derives sudo's effective runAs before fingerprinting. A
           // per-step copy prevents that derivation from contaminating later reads.
           const operation = { id, kind: 'command' as const, command, serviceUnit: params.unit,
-            delegationId, toolCallId: _id, scope: structuredClone(scope) };
+            delegationId, toolCallId: _id,
+            ...(params.adjudications ? { adjudications: params.adjudications } : {}),
+            scope: structuredClone(scope) };
           const value = root ? await privilege.run(gate, host, operation, signal)
             : await deps.runOperation(gate, operation, signal, host.label);
           if (value.result && value.result.operationId !== id) throw new Error('Mismatched service operation observation');

@@ -19,7 +19,7 @@ it.each([
     });
     const decisions: SafetyDecision[] = [];
     const gate = new SafetyGate({ analyzer: new BashAnalyzer(), executor: { execute }, evaluator: { evaluate },
-      approvals: { requestApproval }, settings: () => ({ mode, revision: 1 }),
+      approvals: { requestApproval }, independentReview: () => true, settings: () => ({ mode, revision: 1 }),
       lease: { currentGeneration: () => 1, isAgentOwner: () => true }, audit: { proposed: async () => {},
         classified: async (_id, readOnly, impact) => { expect(readOnly).toBe(false); classified = impact; },
         decided: async (_id, decision) => { decisions.push(decision); }, completed: vi.fn() } });

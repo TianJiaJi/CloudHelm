@@ -1,7 +1,7 @@
 import type { ConversationSession, DiagnosticEvent, ExecutionOptions, HostEnvironmentAccess, OperationAudit,
   OperationExecutor, OperationResult, OperationScope, ProposedOperation, SafetyDecision, ScriptInspector } from '@cloudhelm/core';
 import { operationIntentKey, privilegeGuidance, redactOutput, safeDiagnostic } from '@cloudhelm/core';
-import { ConversationTerminalPool, SafetyGate, type TerminalManager } from '@cloudhelm/application';
+import { ConversationTerminalPool, SafetyGate, AdjudicationRegistry, type TerminalManager } from '@cloudhelm/application';
 import type { BashAnalyzer } from '@cloudhelm/adapters';
 import type { OperationView, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
 import { operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
@@ -69,6 +69,8 @@ export class ExecutionScheduler {
   private readonly replayProtected = new Set<string>();
   private consecutiveAiDenials = 0;
   private diagnosisOnly = false;
+  /** Task-scoped self-adjudication bindings, shared by every gate this task creates. */
+  private readonly adjudications = new AdjudicationRegistry();
 
   resetDiagnosisOnly(): void { this.diagnosisOnly = false; }
   private readonly aiDeniedOperations = new Map<string, ProposedOperation>();
@@ -269,6 +271,14 @@ export class ExecutionScheduler {
       analyzer: this.deps.analyzer,
       scripts: this.deps.scripts,
       reviewSignal: () => this.deps.reviews.signal(),
+      // An explicitly configured dedicated reviewer (selection kind model/jev)
+      // keeps the independent-review port; the same model or an unconfigured
+      // reviewer runs the self-adjudication protocol instead.
+      independentReview: () => {
+        const selection = this.deps.profile().reviewer?.selection;
+        return selection?.kind === 'model' || selection?.kind === 'jev';
+      },
+      adjudications: this.adjudications,
       evaluator: createTaskRiskEvaluator(this.deps.task.id, this.deps.signals.budget, () => this.deps.assertRemoteActive(),
         () => this.deps.requestGeneration(), () => this.deps.profile(),
       () => this.operationViews().slice(-5).map((item) => `${item.kind} ${item.status}: ${item.kind === 'command' ? redactOutput(item.preview).slice(0, 400) : item.preview.split('\n')[0]}`), (event) => this.diagnostic(event)),
