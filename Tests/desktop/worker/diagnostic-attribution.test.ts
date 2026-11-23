@@ -23,6 +23,19 @@ it('never attributes duplicate or unbound assistant notifications to another mod
   expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({ request: 10, logicalRequestId: 'logical-one', attempt: 2, responseAttributed: true });
   expect(diagnostic.mock.calls.at(-1)?.[0]).toEqual({ event: 'model.response-unattributed', responseAttributed: false });
 });
+it('carries redacted provider failure prose on errored model responses with a length cap', () => {
+  const diagnostic = vi.fn();
+  const observe = taskSessionEvents('task', { diagnostic, event() {}, request: () => ({ count: 3, started: Date.now() - 100 }),
+    activity() {}, compactionFailed() {}, turnEnd() {} });
+  observe({ type: 'response', attempt, status: 'error', error: '402 Insufficient Balance (sk-abcdefghijklmnopqrstuv)' });
+  expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({ event: 'model.response', status: 'error',
+    error: '402 Insufficient Balance (sk-abcdefghijklmnopqrstuv)' });
+  expect(safeDiagnostic(diagnostic.mock.calls[0]?.[0])).toMatchObject({ event: 'model.response', status: 'error',
+    error: '402 Insufficient Balance ([REDACTED KEY])' });
+  const capped = safeDiagnostic({ event: 'model.response', status: 'error', error: 'x'.repeat(600) });
+  expect(capped.error).toHaveLength(500);
+  expect(safeDiagnostic({ event: 'model.response', status: 'stop', error: '' })).toEqual({ event: 'model.response', status: 'stop', level: 'debug' });
+});
 it('keeps chat, command/file bodies, output and raw error prose out of production diagnostic events', () => {
   const sentinel = 'private-file-content-not-a-recognizable-credential';
   const chat = eventDiagnostic({ event: { type: 'task-message', taskId: 'task', role: 'user', text: sentinel, createdAt: 1 } });

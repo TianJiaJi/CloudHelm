@@ -62,12 +62,12 @@ export function createTaskReviewer(taskId: string, budget: BudgetPort | undefine
       logicalRequestId: attempt.logicalRequestId, attempt: attempt.attempt, transport: attempt.transport,
       request: result.used, provider: model?.provider, model: model?.modelId });
   });
-  const respond = (operation: ProposedOperation, status: string) => {
+  const respond = (operation: ProposedOperation, status: string, error?: string) => {
     const request = requests.get(operation);
     if (!request) return;
     hooks?.diagnostic?.({ event: 'model.response', taskId, operationId: operation.id, purpose: 'review',
       logicalRequestId: request.logicalRequestId, attempt: request.attempt, transport: request.transport,
-      status, responseAttributed: true, durationMs: Date.now() - request.started });
+      status, error, responseAttributed: true, durationMs: Date.now() - request.started });
   };
   const observe = (operation: ProposedOperation, signal: AbortSignal | undefined,
     run: () => Promise<RiskAssessment | RiskAssessment['verdict']>) => {
@@ -77,7 +77,7 @@ export function createTaskReviewer(taskId: string, budget: BudgetPort | undefine
       respond(operation, typeof result === 'string' ? result : result.verdict);
       return result;
     }, (error: unknown) => {
-      respond(operation, signal?.aborted ? 'aborted' : 'error');
+      respond(operation, signal?.aborted ? 'aborted' : 'error', error instanceof Error ? error.message : undefined);
       throw error;
     });
   };

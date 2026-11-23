@@ -57,7 +57,7 @@ export type SessionEvent =
   | { type: 'usage'; value: SessionUsage }
   | { type: 'tool-start'; id: string; name: string; args: unknown; parentToolCallId?: string }
   | { type: 'tool-end'; id: string; name: string; isError: boolean; parentToolCallId?: string; durationMs?: number }
-  | { type: 'response'; attempt?: ModelRequestAttempt; status?: string }
+  | { type: 'response'; attempt?: ModelRequestAttempt; status?: string; error?: string }
   | { type: 'turn-end' }
   | { type: 'compaction'; status: 'running' | 'complete' | 'failed'; error?: string };
 export type QueuedSessionInput = Pick<import('./conversation-input.js').ConversationInput, 'id' | 'kind' | 'text' | 'document'>;

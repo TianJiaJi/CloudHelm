@@ -74,7 +74,7 @@ describe('reviewer model diagnostics', () => {
     await expect(client.ordinary(operation, undefined, { provider: 'openai', modelId: 'test', apiKey: 'fixture' }))
       .rejects.toThrow('fixture review failure');
     expect(diagnostics.find((event) => event.event === 'model.request')).toMatchObject({ attempt: 1 });
-    expect(diagnostics.find((event) => event.event === 'model.response')).toMatchObject({ status: 'error' });
+    expect(diagnostics.find((event) => event.event === 'model.response')).toMatchObject({ status: 'error', error: 'fixture review failure' });
   });
 
   it('emits no request or response when no attempt was authorized', async () => {

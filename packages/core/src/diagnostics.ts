@@ -10,6 +10,8 @@ export interface DiagnosticEvent {
   sessionId?: string; sha256?: string; model?: string; provider?: string;
   roundId?: string; logicalRequestId?: string; purpose?: string; transport?: string; resumeReason?: string;
   reconciliationKind?: string; classification?: string; errorCode?: string;
+  /** Provider/transport failure prose for an errored request; redacted, flattened and capped. */
+  error?: string;
   attempt?: number; policyRevision?: number; readOnly?: boolean; responseAttributed?: boolean;
   evidenceOperationIds?: string[]; evidenceOmitted?: number;
   durationMs?: number; request?: number; exitCode?: number; size?: number;
@@ -30,6 +32,10 @@ export function safeDiagnostic(input: DiagnosticEvent): DiagnosticEvent {
     result[field] = redactOutput(input[field]!).replace(/[\u0000-\u001f\u007f]/gu, '').slice(0, 200);
   if (typeof input.readOnly === 'boolean') result.readOnly = input.readOnly;
   if (typeof input.responseAttributed === 'boolean') result.responseAttributed = input.responseAttributed;
+  if (typeof input.error === 'string') {
+    const error = redactOutput(input.error).replace(/[\u0000-\u001f\u007f]/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, 500);
+    if (error) result.error = error;
+  }
   if (Array.isArray(input.evidenceOperationIds)) {
     result.evidenceOperationIds = input.evidenceOperationIds.filter((id) => typeof id === 'string' && /^[\w.:-]{1,200}$/u.test(id)).slice(0, 8);
     result.evidenceOmitted = input.evidenceOperationIds.length - result.evidenceOperationIds.length;

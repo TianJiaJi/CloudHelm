@@ -34,7 +34,7 @@ export function taskSessionEvents(taskId: string, hooks: {
       lastResponse = key;
       hooks.diagnostic({ event: 'model.response', request: request.count, logicalRequestId: attempt.logicalRequestId,
         purpose: attempt.purpose, attempt: attempt.attempt, transport: attempt.transport, status: event.status,
-        responseAttributed: true, durationMs: Date.now() - request.started });
+        error: event.error, responseAttributed: true, durationMs: Date.now() - request.started });
     }
     if (event.type === 'turn-end') hooks.turnEnd();
   };
