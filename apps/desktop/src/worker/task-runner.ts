@@ -20,7 +20,7 @@ import { TaskProgress } from './task-progress.js';
 import { observeProgressTools } from './task-progress-observer.js';
 import { RequestBudgetError, PrivilegeError, privilegeGuidance, safeDiagnostic, type ConversationSession, type SessionStorage, type DiagnosticEvent, type OperationResult, type OperationExecutor, type OperationScope, type ScriptInspector } from '@cloudhelm/core';
 import type { LocalScope, OperationView, InterruptionSource, UserInterruption, PreauthorizationScope, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
-import { isActiveTaskStatus } from '@cloudhelm/contracts';
+import { isActiveTaskStatus, mergeConnectionLosses } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 import { deriveInputIntent } from './task-intent.js';
 import { ExecutionScheduler } from './execution-scheduler.js';
@@ -31,6 +31,7 @@ import { createTaskPrompt } from './task-prompt.js';
 import { WorkJournal } from './work-journal.js';
 import { LocalFileAccess } from './local-file-access.js';
 import { LogicalContextTracker, createSetDefaultCwdTool } from './logical-context.js';
+import { classifyConnectionLoss, connectionLossText } from './connection-loss.js';
 
 export class TaskRunner {
   private profile: RuntimeProfile;
@@ -148,6 +149,7 @@ export class TaskRunner {
       resumeReason: () => this.resumeReason,
       controlVersion: () => this.controlVersion,
       operationViews: () => this.operationViews(),
+      connectionLosses: () => this.task.connectionLosses ?? [],
       bumpControlVersion: () => ++this.controlVersion,
       setStatus: (status, summary, resumeReason) => this.setStatus(status, summary, resumeReason),
       blockRemote: (reason, human, resumeReason) => this.blockRemote(reason, human, resumeReason),
@@ -311,6 +313,23 @@ export class TaskRunner {
     this.setStatus('paused', undefined, 'interrupted');
     this.intents.cancelClarification();
     this.agent?.abort();
+  }
+
+  /** §7.1 loss-time evidence snapshot, taken before pausing, terminal closure or
+   * approval cancellation settles anything; later observations never revise it. */
+  recordConnectionLoss(hostId: string): void {
+    const existing = this.task.connectionLosses ?? [];
+    const lostAt = Date.now();
+    // One physical loss reaches both the user-disconnect path and the transport
+    // callback synchronously; the recent-record window keeps it recorded once.
+    const recent = [...existing].reverse().find((record) => record.hostId === hostId);
+    if (recent && lostAt - recent.lostAt < 5000) return;
+    const record = classifyConnectionLoss({ hostId, lostAt,
+      operations: this.execution.operationsSnapshot(), pendingOperationIds: this.terminal.pendingOperations(this.task.id) });
+    this.task.connectionLosses = mergeConnectionLosses(existing, record);
+    this.recovery.markNeedsRecovery();
+    this.signals.event({ type: 'connection-loss', taskId: this.task.id, value: record });
+    this.signals.event({ type: 'task-message', taskId: this.task.id, role: 'system', text: connectionLossText(record), createdAt: lostAt });
   }
 
   resume(): Promise<void> {

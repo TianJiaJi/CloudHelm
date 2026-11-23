@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BashAnalyzer, type SqliteStore } from '@cloudhelm/adapters';
-import type { AppEvent, LogicalHostContext, ModelProfileDraft, TaskIntentState, TaskView } from '@cloudhelm/contracts';
+import type { AppEvent, ConnectionLossRecord, LogicalHostContext, ModelProfileDraft, TaskIntentState, TaskView } from '@cloudhelm/contracts';
 import { operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
 import { AppState } from '../../../apps/desktop/src/main/app-state.js';
 
@@ -254,6 +254,22 @@ it('persists logical working contexts idempotently and survives restart', () => 
     restoreStatus: 'unverified', updatedAt: 200 }]);
   expect(setup(store).state.getTask(task.id).logicalContexts).toEqual([{ ...context, defaultCwd: null, revision: 2,
     restoreStatus: 'unverified', updatedAt: 200 }]);
+  write.mockRestore();
+});
+
+it('persists connection loss records idempotently and survives restart', () => {
+  const { state, store } = setup(); state.saveProfile(customProfile()); const task = conversation(state);
+  const loss: ConnectionLossRecord = { version: 1, hostId: 'host', lostAt: 100,
+    operations: [{ operationId: 'op', classification: 'handed-off-or-unclear' }] };
+  state.record({ type: 'connection-loss', taskId: task.id, value: structuredClone(loss) });
+  expect(state.getTask(task.id).connectionLosses).toEqual([loss]);
+  expect(setup(store).state.getTask(task.id).connectionLosses).toEqual([loss]);
+  const write = vi.spyOn(store, 'put');
+  state.record({ type: 'connection-loss', taskId: task.id, value: structuredClone(loss) });
+  expect(write).not.toHaveBeenCalled();
+  state.record({ type: 'connection-loss', taskId: task.id, value: { ...structuredClone(loss), lostAt: 200, operations: [] } });
+  expect(write).toHaveBeenCalledOnce();
+  expect(state.getTask(task.id).connectionLosses).toEqual([loss, { ...loss, lostAt: 200, operations: [] }]);
   write.mockRestore();
 });
 

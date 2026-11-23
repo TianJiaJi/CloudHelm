@@ -211,6 +211,34 @@ export function mergeLogicalContext(existing: LogicalHostContext[] | undefined, 
   return [...(existing ?? []).filter((context) => context.hostId !== next.hostId), structuredClone(next)];
 }
 
+/** §7.1 evidence classification of one operation at the moment a connection was lost.
+ * The record is loss-time evidence and is never revised by later observations. */
+export type ConnectionLossClassification = 'not-handed-off' | 'observed-complete' | 'handed-off-or-unclear';
+
+export interface ConnectionLossOperation {
+  operationId: string;
+  classification: ConnectionLossClassification;
+  /** Read-only losses add no business write lock; re-issuing them carries no mutation risk. */
+  readOnly?: boolean;
+}
+
+export interface ConnectionLossRecord {
+  version: 1;
+  hostId: string;
+  lostAt: number;
+  operations: ConnectionLossOperation[];
+}
+
+/** Appends one loss record per event; redelivery of the same (host, loss) is idempotent
+ * and only the eight most recent records are kept. Returns the existing array when
+ * nothing changed, so callers can skip persistence. */
+export function mergeConnectionLosses(existing: ConnectionLossRecord[] | undefined, next: ConnectionLossRecord): ConnectionLossRecord[] {
+  const current = existing ?? [];
+  if (current.some((record) => record.hostId === next.hostId && record.lostAt === next.lostAt)) return current;
+  const merged = [...current, structuredClone(next)];
+  return merged.length > 8 ? merged.slice(merged.length - 8) : merged;
+}
+
 export interface TaskView {
   budget?: import('./request-budget.js').RequestBudgetState;
   intent?: TaskIntentState;
@@ -225,6 +253,8 @@ export interface TaskView {
   reviewRevision?: number;
   /** Per-host logical working context; the only path by which a default cwd survives restarts. */
   logicalContexts?: LogicalHostContext[];
+  /** §7.1 loss-time evidence records; feeds the rebuilt-connection recovery report. */
+  connectionLosses?: ConnectionLossRecord[];
   localScopes: LocalScope[];
   status: TaskStatus;
   resumeReason?: ResumeReason;
@@ -469,6 +499,7 @@ export type AppEvent =
   | { type: 'clarification'; value: ClarificationRequest }
   | { type: 'task-intent'; taskId: string; value: TaskIntentState }
   | { type: 'logical-context'; taskId: string; value: LogicalHostContext }
+  | { type: 'connection-loss'; taskId: string; value: ConnectionLossRecord }
   | { type: 'snapshot'; value: AppSnapshot }
   | { type: 'terminal-data'; terminalId: string; data: string; operationId?: string }
   | { type: 'terminal-state'; terminalId: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed' }

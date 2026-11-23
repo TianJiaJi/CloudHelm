@@ -1,10 +1,10 @@
 import { RequestBudgetError, type ConversationSession, type OperationResult, type OperationScope, type ProposedOperation } from '@cloudhelm/core';
 import type { TerminalManager } from '@cloudhelm/application';
-import type { AppEvent, OperationView, ResumeReason, TaskStatus, UserInterruption } from '@cloudhelm/contracts';
+import type { AppEvent, ConnectionLossRecord, OperationView, ResumeReason, TaskStatus, UserInterruption } from '@cloudhelm/contracts';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 import type { ConversationTerminalPool } from '@cloudhelm/application';
 import { buildRecoveryProbe, probeEvidence, recoveryProbeUnit, type ProbeEvidence } from './recovery-probe.js';
-import { recoveryContextMessage } from './recovery-context.js';
+import { connectionLossResumeContext, recoveryContextMessage } from './recovery-context.js';
 import { interruptionContext } from './task-input-context.js';
 import type { TaskRequestBudget } from './task-request-budget.js';
 
@@ -18,6 +18,8 @@ export interface RecoveryManagerDeps {
   resumeReason(): ResumeReason | undefined;
   controlVersion(): number;
   operationViews(): OperationView[];
+  /** Persisted §7.1 loss records backing the rebuilt-connection report. */
+  connectionLosses(): ConnectionLossRecord[];
   bumpControlVersion(): number;
   setStatus(status: TaskStatus, summary?: string, resumeReason?: ResumeReason): void;
   blockRemote(reason: string, human?: boolean, resumeReason?: ResumeReason): void;
@@ -35,6 +37,7 @@ export class RecoveryManager {
   private resuming?: { version: number; promise: Promise<void> };
   private needsRecovery = false;
   private pending?: UserInterruption;
+  private readonly reportedLosses = new Set<string>();
 
   constructor(private readonly deps: RecoveryManagerDeps) {}
 
@@ -98,14 +101,26 @@ export class RecoveryManager {
     await this.appendInterruptionContext(agent);
     this.needsRecovery = false;
     const operations = this.deps.operationViews();
-    await agent.resumeWithContext(recoveryContextMessage(operations, reason));
+    await agent.resumeWithContext(this.lossReport(operations) ?? recoveryContextMessage(operations, reason));
     if (this.deps.status() === 'running') this.deps.finishRun();
+  }
+
+  /** §7.2 rebuilt-connection report: loss records the model has not acknowledged
+   * yet become one bounded context; acknowledged keys are never re-injected. */
+  private lossReport(operations: readonly OperationView[]): string | undefined {
+    const unreported = this.deps.connectionLosses()
+      .filter((record) => !this.reportedLosses.has(`${record.hostId}:${record.lostAt}`));
+    if (!unreported.length) return undefined;
+    const report = connectionLossResumeContext(unreported, operations);
+    for (const record of unreported) this.reportedLosses.add(`${record.hostId}:${record.lostAt}`);
+    return report;
   }
 
   /** Recovery and interruption context the next continued turn must acknowledge first. */
   async recoveryPreamble(agent: ConversationSession): Promise<void> {
     if (this.needsRecovery) {
-      await agent.context(recoveryContextMessage(this.deps.operationViews()));
+      const operations = this.deps.operationViews();
+      await agent.context(this.lossReport(operations) ?? recoveryContextMessage(operations));
       this.needsRecovery = false;
     }
     await this.appendInterruptionContext(agent);

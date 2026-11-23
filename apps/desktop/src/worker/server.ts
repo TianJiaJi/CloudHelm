@@ -36,9 +36,12 @@ export class WorkerServer {
   private readonly logRequests = new Map<string, { resolve(value: LogPage): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   private readonly ssh = new SshTransport((hostId) => {
     this.manualSessions?.disconnect(hostId);
+    // Loss-time evidence is captured before pausing, approval cancellation or
+    // terminal closure settles anything; the record is never revised afterwards.
     for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(hostId)) {
-      this.preparations.cancelTask(runner.task.id); runner.pause();
+      this.preparations.cancelTask(runner.task.id); runner.recordConnectionLoss(hostId); runner.pause();
     }
+    this.approvals.cancelWhere((pending) => pending.hostId === hostId);
     this.terminal.closeHost(hostId);
     this.post({ event: { type: 'host-status', hostId, status: 'disconnected' } });
   });
@@ -187,7 +190,10 @@ export class WorkerServer {
       case 'disconnect':
         this.connectionAttempts.get(call.hostId)?.abort();
         this.manualSessions.disconnect(call.hostId);
-        for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(call.hostId)) runner.pause();
+        for (const runner of this.tasks.values()) if (runner.task.hostIds.includes(call.hostId)) {
+          runner.recordConnectionLoss(call.hostId); runner.pause();
+        }
+        this.approvals.cancelWhere((pending) => pending.hostId === call.hostId);
         this.terminal.closeHost(call.hostId);
         this.ssh.disconnect(call.hostId);
         this.post({ event: { type: 'host-status', hostId: call.hostId, status: 'disconnected' } });

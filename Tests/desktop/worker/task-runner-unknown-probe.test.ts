@@ -266,6 +266,7 @@ function directHarness(options: DirectOptions = {}) {
     resumeReason: () => undefined,
     controlVersion: () => controlVersion,
     operationViews: () => execution.operationViews(),
+    connectionLosses: () => [],
     bumpControlVersion: () => ++controlVersion,
     setStatus,
     blockRemote,
