@@ -425,7 +425,11 @@ export interface InputRequestView {
   expiresAt: number;
 }
 
+export type DiagnosisRestriction = 'user-denied' | 'outcome-unverified';
+
 export interface ExecutionView {
+  /** Current-turn restriction from Worker, distinct from the host's unresolved write lock. */
+  diagnosisRestriction?: DiagnosisRestriction;
   model: 'running' | 'idle';
   remote: 'running' | 'unknown' | 'idle';
   stopping: boolean;

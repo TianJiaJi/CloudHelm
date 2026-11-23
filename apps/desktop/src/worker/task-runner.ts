@@ -562,7 +562,8 @@ export class TaskRunner {
     const remote = pending ? 'running' : this.operationViews().some((op) => op.status === 'unknown' && !op.reconciledAt) ? 'unknown' : 'idle';
     if (model === 'idle' && !pending) this.stopping = false;
     this.signals.event({ type: 'execution', taskId: this.task.id, value: {
-      model, remote, stopping: this.stopping, canStop: model === 'running' || pending
+      model, remote, stopping: this.stopping, canStop: model === 'running' || pending,
+      ...(this.execution.diagnosisRestriction ? { diagnosisRestriction: this.execution.diagnosisRestriction } : {})
     } });
   }
 

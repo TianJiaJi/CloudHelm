@@ -13,7 +13,7 @@ import { useUi } from './store.js';
 import { ApprovalCard, InputCard } from './interaction-cards.js';
 import { VerificationCard } from './workspace-pages.js';
 import { ActivityLabel, AgentPlan, AssistantIdentity } from './agent-panel-parts.js';
-import { RecoveryCard } from './recovery-card.js';
+import { DiagnosisNotice, RecoveryCard } from './recovery-card.js';
 import { RequestBudgetCard } from './request-budget-card.js';
 import { ConversationTranscript, type StreamFilter } from './conversation-transcript.js';
 import { presentError } from './error-presentation.js';
@@ -98,6 +98,7 @@ export function StreamArea({ snapshot, host, conversation, report, openInput, hi
       {conversation.session && !running && conversation.resumeReason && conversation.resumeReason !== 'report' && (!conversation.budget || conversation.budget.roundUsed < conversation.budget.roundLimit) && ['paused', 'failed', 'human-control', 'recovering'].includes(conversation.status)
         && <button onClick={() => void capture(() => window.cloudhelm.resumeConversation(conversation.id), report)}><Icon name="play" size={13} />继续 AI</button>}
     </div>}
+    {conversation && <DiagnosisNotice reason={snapshot.execution?.[conversation.id]?.diagnosisRestriction} running={running === true} />}
     {conversation && <RequestBudgetCard key={`budget:${conversation.id}`} task={conversation} execution={snapshot.execution?.[conversation.id]} report={report} />}
     {conversation?.status === 'paused' && conversation.resumeReason === 'verify' && host
       && snapshot.operations.some((item) => item.taskId === conversation.id && item.hostId === host.id && item.reconciliation?.kind === 'risk-accepted')

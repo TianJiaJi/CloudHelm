@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { operationNeedsVerification, operationOutcomeResolvable, sharesHostRiskDomain, type AppSnapshot, type OperationView, type TaskView } from '@cloudhelm/contracts';
+import { operationNeedsVerification, operationOutcomeResolvable, sharesHostRiskDomain, type AppSnapshot, type DiagnosisRestriction, type OperationView, type TaskView } from '@cloudhelm/contracts';
 import { Button, Card } from './ui/index.js';
 import styles from './ui.module.css';
 
@@ -71,6 +71,18 @@ function RecoveryReceipt({ operation }: { operation: OperationView }): React.JSX
     {!evidence && (decision?.error ? <> {decision.error}</> : decision?.resumed ? ' 已发起续跑。'
       : decision?.resumeNote ? <> 未自动续跑：{decision.resumeNote}</> : null)}
   </p>;
+}
+
+/** Display backend state without inferring that a reconciliation restores write permission. */
+export function DiagnosisNotice({ reason, running }: { reason?: DiagnosisRestriction; running: boolean }): React.JSX.Element | null {
+  if (!reason) return null;
+  return <div className={styles.agentActivity} role="status">
+    <strong>本轮仅限只读调查</strong>
+    {' · '}{reason === 'user-denied' ? '有操作未获批准。' : '先前写入曾出现未确认的结果。'}
+    {running ? ' AI 可以继续核验，不能发起新写入。等待本轮结束后可发送新消息。'
+      : ' 如需继续，请发送新消息；若对话已暂停，也可使用「继续 AI」。'}
+    {' 新一轮仍须遵守未解除的写锁及审核。'}
+  </div>;
 }
 
 /** Show one pending blocker and the latest explicitly associated recovery receipt. */

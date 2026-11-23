@@ -3,7 +3,7 @@ import type { ConversationSession, DiagnosticEvent, ExecutionOptions, HostEnviro
 import { operationIntentKey, privilegeGuidance, redactOutput, safeDiagnostic } from '@cloudhelm/core';
 import { ConversationTerminalPool, SafetyGate, AdjudicationRegistry, type TerminalManager } from '@cloudhelm/application';
 import type { BashAnalyzer } from '@cloudhelm/adapters';
-import type { OperationView, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
+import type { DiagnosisRestriction, OperationView, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
 import { operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 import { PROMPT_VERSION } from './agent-prompt.js';
@@ -70,11 +70,19 @@ export class ExecutionScheduler {
   private readonly proposedOperations = new Map<string, ProposedOperation>();
   private readonly replayProtected = new Set<string>();
   private consecutiveAiDenials = 0;
-  private diagnosisOnly = false;
+  private diagnosisOnly?: DiagnosisRestriction;
   /** Task-scoped self-adjudication bindings, shared by every gate this task creates. */
   private readonly adjudications = new AdjudicationRegistry();
 
-  resetDiagnosisOnly(): void { this.diagnosisOnly = false; }
+  get diagnosisRestriction(): DiagnosisRestriction | undefined { return this.diagnosisOnly; }
+
+  resetDiagnosisOnly(): void { this.diagnosisOnly = undefined; }
+
+  private restrictToDiagnosis(reason: DiagnosisRestriction): void {
+    if (this.diagnosisOnly === reason) return;
+    this.diagnosisOnly = reason;
+    this.deps.publishExecution();
+  }
   private readonly aiDeniedOperations = new Map<string, ProposedOperation>();
   private readonly manualReviewsInFlight = new Set<string>();
   private lastFailureKey = '';
@@ -142,11 +150,11 @@ export class ExecutionScheduler {
       if (findings) return appendProbeFindings(operationToolResult(result, hostLabel, outcome.readOnly, operation.scope, logicalContext), findings);
       if (outcome.readOnly === true || !this.deps.terminal.isAgentOwner(operation.scope.terminalId)) {
         this.deps.blockRemote('远端操作结果未知，已暂停。请先核验，避免重复执行。', false, 'verify');
-      } else this.diagnosisOnly = true;
+      } else this.restrictToDiagnosis('outcome-unverified');
     } else if (!this.deps.terminal.isAgentOwner(operation.scope.terminalId)) {
       this.deps.blockRemote('远端终端已暂停或被接管，请核验后手动继续。');
     } else if (result.status === 'failed' && result.effects === 'possible' && outcome.readOnly !== true) {
-      this.diagnosisOnly = true;
+      this.restrictToDiagnosis('outcome-unverified');
     } else if (result.status === 'failed') {
       const key = `${operation.scope.hostId}:${this.preview(operation)}:${result.exitCode ?? 'unknown'}`;
       this.sameFailureCount = key === this.lastFailureKey ? this.sameFailureCount + 1 : 1;
@@ -206,7 +214,7 @@ export class ExecutionScheduler {
   private coordinateDecision(decision: SafetyDecision): void {
     const coordination = reviewCoordination(decision);
     if (coordination === 'diagnosis-only') {
-      this.diagnosisOnly = true;
+      this.restrictToDiagnosis('user-denied');
       return;
     }
     if (decision.ruleId === 'ai-review-deny' && this.consecutiveAiDenials >= 3) {

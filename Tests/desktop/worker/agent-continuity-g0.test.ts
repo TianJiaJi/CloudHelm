@@ -34,14 +34,17 @@ async function scenario(first: string, result: (operation: ProposedOperation) =>
     };
   });
   const requestApproval = vi.fn(async () => approved);
+  const restrictions = new Set<string>();
   const runner = new TaskRunner(task, [host], { provider: 'cloudhelm-custom', modelId: 'fixture',
     apiKey: 'g0-synthetic-key', baseUrl: fixture.baseUrl }, [], terminal, { execute },
   async () => terminal.open(host.id, { write() { throw new Error('No SSH or credential channel in G0 fixture'); },
     resize() {}, close() {}, onData() {}, onClose() {} }, task.id, '/tmp'),
-  { event() {}, requestApproval, cancelApproval() {} });
+  { event(event) {
+    if (event.type === 'execution' && event.value.diagnosisRestriction) restrictions.add(event.value.diagnosisRestriction);
+  }, requestApproval, cancelApproval() {} });
   try {
     await runner.start();
-    return { commands, requests, toolMessages, status: task.status, errors: [...fixture.errors], approvals: requestApproval.mock.calls.length };
+    return { commands, requests, toolMessages, restrictions: [...restrictions], status: task.status, errors: [...fixture.errors], approvals: requestApproval.mock.calls.length };
   } finally { runner.dispose(); await fixture.close(); }
 }
 
@@ -51,6 +54,7 @@ it('G0-C01: an effect-free failed query reaches the model and permits a differen
   expect(observed.errors).toEqual([]);
   expect(observed.commands).toEqual(['stat /tmp/g0-missing', 'df -h']);
   expect(observed.requests).toBe(3);
+  expect(observed.restrictions).toEqual([]);
   expect(observed.status).toBe('answered');
   expect(observed.toolMessages.join('\n')).toContain('synthetic path missing');
 });
@@ -60,6 +64,7 @@ it('G0-C02: a user denial allows unrelated diagnosis but prevents further writes
     status: 'succeeded', exitCode: 0, effects: 'none', stdoutTail: 'must not execute denied action' }), false, true);
   expect(observed).toMatchObject({ errors: [], approvals: 1, commands: ['df -h'], requests: 4, status: 'answered' });
   expect(observed.toolMessages.join('\n')).toContain('continuation-read-only');
+  expect(observed.restrictions).toEqual(['user-denied']);
 });
 
 it.each(['failed', 'unknown'] as const)('G0-C03: %s mutation allows diagnosis without permitting writes or clearing verification', async (status) => {
@@ -67,4 +72,5 @@ it.each(['failed', 'unknown'] as const)('G0-C03: %s mutation allows diagnosis wi
     status, exitCode: status === 'failed' ? 1 : undefined, effects: 'possible', stdoutTail: 'synthetic partially applied change' }), true, true);
   expect(observed).toMatchObject({ errors: [], commands: ['mkdir /tmp/g0-work', 'df -h'], requests: 4, status: 'paused' });
   expect(observed.toolMessages.join('\n')).toContain('unresolved-prior-operation');
+  expect(observed.restrictions).toEqual(['outcome-unverified']);
 });

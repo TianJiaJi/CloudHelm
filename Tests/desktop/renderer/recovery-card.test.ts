@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { AppSnapshot, OperationView } from '@cloudhelm/contracts';
-import { RecoveryCard } from '../../../apps/desktop/src/renderer/recovery-card.js';
+import { DiagnosisNotice, RecoveryCard } from '../../../apps/desktop/src/renderer/recovery-card.js';
 
 const original: OperationView = { id: 'old', taskId: 'source', hostId: 'host', kind: 'command',
   preview: 'docker ps -a', status: 'failed', effects: 'possible', exitCode: 1, createdAt: 1 };
@@ -14,6 +14,15 @@ const snapshot = (operations: OperationView[]): AppSnapshot => ({ operations: op
     { id: 'new', hostIds: ['host'], goal: '运行检查' }] } as AppSnapshot);
 const render = (data: AppSnapshot) => renderToStaticMarkup(createElement(RecoveryCard, { snapshot: data, hostId: 'host',
   conversation: data.conversations[1], report: () => undefined }));
+
+it('shows a backend restriction separately from recovery receipts and makes no unlock promise', () => {
+  const notice = (reason: Parameters<typeof DiagnosisNotice>[0]['reason'], running: boolean) =>
+    renderToStaticMarkup(createElement(DiagnosisNotice, { reason, running }));
+  expect(notice(undefined, true)).toBe('');
+  expect(notice('user-denied', true)).toContain('有操作未获批准');
+  expect(notice('outcome-unverified', true)).toContain('AI 可以继续核验，不能发起新写入');
+  expect(notice('outcome-unverified', false)).toContain('仍须遵守未解除的写锁及审核');
+});
 
 it('projects a historical revision blocker from backend risk bindings after the current revision is blocked', () => {
   const data = snapshot([{ ...original, hostId: 'previous-profile' }, blocked]);
