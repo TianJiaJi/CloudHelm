@@ -273,7 +273,8 @@ try {
   await cleanupDesktopSmoke(instances, userData, (message) => console.warn(redact(message)));
   if (replayText?.text) await writeFile(path.join(output, 'g3-replay.jsonl'), redact(replayText.text));
   summary.finishedAt = new Date().toISOString();
-  await writeFile(path.join(output, 'g3-summary.json'), JSON.stringify(summary, null, 2));
+  // Redact the whole artifact: username/home paths may equal the test password.
+  await writeFile(path.join(output, 'g3-summary.json'), redact(JSON.stringify(summary, null, 2)));
   console.log(`G3 evidence: ${output}`);
   console.log(redact(JSON.stringify(summary.focus)));
 }
