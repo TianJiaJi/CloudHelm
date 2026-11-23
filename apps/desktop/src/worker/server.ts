@@ -14,6 +14,7 @@ import type { LogPage, RuntimeCall, RuntimeHost, RuntimeMessage } from '@cloudhe
 /** Bounded read for the model's edit loop; reading more than this requires a narrower ask. */
 const REMOTE_READ_LIMIT = 128 * 1024;
 import { assertRemoteReadAllowed, resolveRemoteReadTarget } from './remote-read-guard.js';
+import { cdProbeCommand, isValidRemotePath } from './logical-context.js';
 import { TaskRunner } from './task-runner.js';
 import { assertCommittedRiskAcceptance } from './risk-acceptance.js';
 import { OperationInputBridge } from './operation-input-bridge.js';
@@ -275,6 +276,13 @@ export class WorkerServer {
             const target = resolveRemoteReadTarget(filePath, cwd);
             assertRemoteReadAllowed(target, host.protectedReadPaths ?? host.protectedPaths);
             return this.ssh.readFileForEdit(hostId, target, maxBytes, signal);
+          }, async (hostId, remotePath) => {
+            // Verification runs on the current authorized connection; any failure leaves the default untouched.
+            try {
+              const probe = await this.ssh.execFixed(hostId, cdProbeCommand(remotePath));
+              const canonical = probe.output.trim();
+              return probe.exitCode === 0 && !canonical.includes('\n') && isValidRemotePath(canonical) ? { canonical } : { failed: true as const };
+            } catch { return { failed: true as const }; }
           });
         this.tasks.set(call.task.id, runner);
         const start = runner.start(call.restored, call.thinkingLevel, call.document, call.initialMessage, call.intent);

@@ -185,6 +185,32 @@ export const TaskIntentStateSchema = Type.Object({
 });
 export type TaskIntentState = Static<typeof TaskIntentStateSchema>;
 
+/** Versioned per-host logical working context. The default working directory survives
+ * restarts only through this record; login observations and explicit actions are both
+ * confirmed before the default is trusted, and an unconfirmed default is never a fallback. */
+export interface LogicalHostContext {
+  version: 1;
+  hostId: string;
+  loginAs: string;
+  /** Last confirmed default working directory; null means unconfirmed, never "use home". */
+  defaultCwd: string | null;
+  revision: number;
+  source: 'login-observed' | 'explicit';
+  /** Set only after a rebuild re-verification of a persisted record. */
+  restoreStatus?: 'restored' | 'unverified';
+  updatedAt: number;
+}
+
+/** Idempotent per-host merge for persisted logical contexts; a redelivered or stale
+ * record never rewrites a newer confirmed revision. Returns the existing array when
+ * nothing changed, so callers can skip persistence. */
+export function mergeLogicalContext(existing: LogicalHostContext[] | undefined, next: LogicalHostContext): LogicalHostContext[] {
+  const current = existing?.find((context) => context.hostId === next.hostId);
+  if (current && (current.revision > next.revision
+    || (current.revision === next.revision && current.updatedAt >= next.updatedAt))) return existing ?? [];
+  return [...(existing ?? []).filter((context) => context.hostId !== next.hostId), structuredClone(next)];
+}
+
 export interface TaskView {
   budget?: import('./request-budget.js').RequestBudgetState;
   intent?: TaskIntentState;
@@ -197,6 +223,8 @@ export interface TaskView {
   hostIds: string[];
   reviewModesByHost?: Record<string, ReviewMode>;
   reviewRevision?: number;
+  /** Per-host logical working context; the only path by which a default cwd survives restarts. */
+  logicalContexts?: LogicalHostContext[];
   localScopes: LocalScope[];
   status: TaskStatus;
   resumeReason?: ResumeReason;
@@ -440,6 +468,7 @@ export type AppEvent =
   | { type: 'context-usage'; taskId: string; value: ContextUsageView }
   | { type: 'clarification'; value: ClarificationRequest }
   | { type: 'task-intent'; taskId: string; value: TaskIntentState }
+  | { type: 'logical-context'; taskId: string; value: LogicalHostContext }
   | { type: 'snapshot'; value: AppSnapshot }
   | { type: 'terminal-data'; terminalId: string; data: string; operationId?: string }
   | { type: 'terminal-state'; terminalId: string; hostId: string; taskId?: string; state: 'agent' | 'human' | 'suspended' | 'closed' }

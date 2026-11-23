@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BashAnalyzer, type SqliteStore } from '@cloudhelm/adapters';
-import type { AppEvent, ModelProfileDraft, TaskIntentState, TaskView } from '@cloudhelm/contracts';
+import type { AppEvent, LogicalHostContext, ModelProfileDraft, TaskIntentState, TaskView } from '@cloudhelm/contracts';
 import { operationNeedsVerification, operationOutcomeResolvable } from '@cloudhelm/contracts';
 import { AppState } from '../../../apps/desktop/src/main/app-state.js';
 
@@ -232,6 +232,29 @@ describe('persisted intent and message provenance', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ source: 'clarification', clarificationToolCallId: 'tool' });
   });
+});
+
+it('persists logical working contexts idempotently and survives restart', () => {
+  const { state, store } = setup(); state.saveProfile(customProfile()); const task = conversation(state);
+  const context: LogicalHostContext = { version: 1, hostId: 'host', loginAs: 'fixture', defaultCwd: '/srv/app',
+    revision: 1, source: 'explicit', updatedAt: 100 };
+  state.record({ type: 'logical-context', taskId: task.id, value: structuredClone(context) });
+  expect(state.getTask(task.id).logicalContexts).toEqual([context]);
+  expect(setup(store).state.getTask(task.id).logicalContexts).toEqual([context]);
+  const write = vi.spyOn(store, 'put');
+  state.record({ type: 'logical-context', taskId: task.id, value: structuredClone(context) });
+  state.record({ type: 'logical-context', taskId: task.id, value: { ...context, revision: 0, updatedAt: 999 } });
+  state.record({ type: 'logical-context', taskId: task.id, value: { ...context, revision: 1, updatedAt: 50 } });
+  expect(write).not.toHaveBeenCalled();
+  expect(state.getTask(task.id).logicalContexts).toEqual([context]);
+  state.record({ type: 'logical-context', taskId: task.id, value: { ...context, defaultCwd: null, revision: 2,
+    restoreStatus: 'unverified', updatedAt: 200 } });
+  expect(write).toHaveBeenCalledOnce();
+  expect(state.getTask(task.id).logicalContexts).toEqual([{ ...context, defaultCwd: null, revision: 2,
+    restoreStatus: 'unverified', updatedAt: 200 }]);
+  expect(setup(store).state.getTask(task.id).logicalContexts).toEqual([{ ...context, defaultCwd: null, revision: 2,
+    restoreStatus: 'unverified', updatedAt: 200 }]);
+  write.mockRestore();
 });
 
 describe('conversation credential binding', () => {

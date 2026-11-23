@@ -28,7 +28,7 @@ export function createTaskPrompt(task: TaskView, hosts: RuntimeHost[], operation
     if ((sudoContexts?.length ?? 0) > 8) throw new Error('提权上下文过多，请关闭旧会话后继续');
     const projection = { version: 1, ...(sudoContexts?.length ? { sudoContexts } : {}), tools: {
       inspect_host_environment: remote, query_operation_history: remote && owned.length > 0,
-      run_remote: remote, stop_remote_job: remote && owned.some((op) => op.executionJob?.status === 'running'), write_remote_file: remote, delete_remote_file: remote, manage_service: remote,
+      run_remote: remote, set_default_cwd: remote, stop_remote_job: remote && owned.some((op) => op.executionJob?.status === 'running'), write_remote_file: remote, delete_remote_file: remote, manage_service: remote,
       prepare_remote_edit: remote ? 'conditional' : false,
       apply_remote_edit: remote ? 'conditional' : false, restore_remote_edit: remote ? 'conditional' : false,
       discard_remote_edit: remote ? 'conditional' : false, check_remote_edit: remote ? 'conditional' : false,

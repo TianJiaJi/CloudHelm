@@ -36,6 +36,8 @@ export interface OperationScope {
   policyRevision: number;
   conversationRevision?: number;
   reviewerRevision?: number;
+  /** Logical working-context revision in effect when this scope was built; missing means a pre-context legacy scope. */
+  contextRevision?: number;
   allowedWorkingRoots: string[];
   /** Legacy combined rule; new scopes set the directional lists below. */
   protectedPaths: string[];

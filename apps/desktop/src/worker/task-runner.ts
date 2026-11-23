@@ -30,6 +30,7 @@ import { createRemoteTools } from './remote-tools.js';
 import { createTaskPrompt } from './task-prompt.js';
 import { WorkJournal } from './work-journal.js';
 import { LocalFileAccess } from './local-file-access.js';
+import { LogicalContextTracker, createSetDefaultCwdTool } from './logical-context.js';
 
 export class TaskRunner {
   private profile: RuntimeProfile;
@@ -53,6 +54,7 @@ export class TaskRunner {
   private stopping = false;
   private status: TaskStatus = 'draft';
   private resumeReason?: ResumeReason;
+  private readonly logicalContexts: LogicalContextTracker;
 
   constructor(
     readonly task: TaskView,
@@ -69,7 +71,8 @@ export class TaskRunner {
     private readonly scripts?: ScriptInspector,
     private readonly environment?: HostEnvironmentAccess,
     priorInputs: readonly ConversationInput[] = [],
-    private readonly readRemoteFile?: (hostId: string, path: string, cwd: string | undefined, signal?: AbortSignal, maxBytes?: number) => Promise<import('./remote-tool-dependencies.js').RemoteFileSnapshot>
+    private readonly readRemoteFile?: (hostId: string, path: string, cwd: string | undefined, signal?: AbortSignal, maxBytes?: number) => Promise<import('./remote-tool-dependencies.js').RemoteFileSnapshot>,
+    private readonly verifyDefaultCwd?: (hostId: string, path: string) => Promise<{ canonical: string } | { failed: true }>
   ) {
     const unobservedConnection = randomUUID();
     this.terminalPool = new ConversationTerminalPool(task.id, terminal, openTerminal, (hostId) => {
@@ -78,6 +81,8 @@ export class TaskRunner {
       return { hostId, loginAs: host.username,
         connectionId: this.environment?.snapshot(hostId, host.username).connectionId ?? unobservedConnection };
     });
+    this.logicalContexts = new LogicalContextTracker(task.logicalContexts,
+      (value) => signals.event({ type: 'logical-context', taskId: task.id, value }));
     this.execution = new ExecutionScheduler({
       task, hosts: this.hosts, terminal, executor, analyzer: this.analyzer, scripts,
       signals, privileged: this.privileged, environment: this.environment,
@@ -99,7 +104,8 @@ export class TaskRunner {
       probeUnknown: (operation, signal) => this.recovery.probeUnknown(operation, signal),
       finishRun: () => this.finishRun(),
       publishExecution: () => this.publishExecution(),
-      scope: (host, terminalId, cwd) => this.scope(host, terminalId, cwd)
+      scope: (host, terminalId, cwd) => this.scope(host, terminalId, cwd),
+      logicalContext: (hostId) => this.logicalContexts.receiptContext(hostId)
     });
     this.background = createBackgroundOperations(task.id, priorOperations, this.execution.operationRecords,
       (operation) => signals.event({ type: 'operation', value: operation }), () => { if (!this.isRunning()) this.privileged?.close(); });
@@ -194,7 +200,11 @@ export class TaskRunner {
       queryReferenceAllowed: (id) => this.execution.hasOperation(id) || this.hosts.some((host) => host.id === id)
         || this.terminalPool.owns(id) || this.execution.operationsSnapshot().some((op) => op.executionJob?.jobId === id),
       systemPrompt: currentSystemPrompt(), currentSystemPrompt,
-      tools: observeProgressTools([...remoteTools, createBackgroundJobTool({ background: this.background, terminal: this.terminal,
+      tools: observeProgressTools([...remoteTools, createSetDefaultCwdTool({ hosts: this.hosts,
+        verify: this.verifyDefaultCwd ? (hostId, path) => this.verifyDefaultCwd!(hostId, path) : undefined,
+        apply: (hostId, loginAs, canonical) => this.logicalContexts.setExplicit(hostId, loginAs, canonical, () => this.reviews.invalidate()),
+        assertActive: () => this.assertRemoteActive() }),
+        createBackgroundJobTool({ background: this.background, terminal: this.terminal,
         executor: this.executor, hosts: this.hosts, operations: () => this.operationViews(), assertActive: () => this.assertRemoteActive(),
         scope: (host, id, cwd) => this.scope(host, id, cwd), runOperation: (gate, operation, signal, label) => this.execution.runOperation(gate, operation, signal, label),
         createGate: (executor) => this.execution.createGate(executor) }),
@@ -346,6 +356,10 @@ export class TaskRunner {
     // An occupied A and a new B coexist. Only a retired/human terminal is a replacement.
     if (previous && previous !== opened && !this.terminal.isAgentOwner(previous))
       this.signals.event({ type: 'terminal-replaced', previousTerminalId: previous, terminalId: opened });
+    const host = this.hosts.find((candidate) => candidate.id === hostId);
+    if (host) await this.logicalContexts.syncFromProbe(hostId, host.username, this.terminal.workingDirectory(opened), {
+      verify: this.verifyDefaultCwd ? (path) => this.verifyDefaultCwd!(hostId, path) : undefined,
+      invalidate: () => this.reviews.invalidate() });
     return opened;
   }
 
@@ -371,12 +385,18 @@ export class TaskRunner {
     this.task.reviewRevision = revision;
   }
 
-  private scope(host: RuntimeHost, terminalId: string, cwd = this.terminal.workingDirectory(terminalId)): OperationScope {
+  private scope(host: RuntimeHost, terminalId: string, cwd?: string): OperationScope {
+    const context = this.logicalContexts.get(host.id);
+    // An unconfirmed default never silently falls back to a home directory or /.
+    if (cwd === undefined && context?.defaultCwd === null)
+      throw new Error('该主机的默认工作目录未确认（重建复核未通过或尚未重新设置），不会回退到家目录或 /。请先调用 set_default_cwd 设置已验证的默认目录，或为本操作显式指定 cwd。');
     return {
-      taskId: this.task.id, hostId: host.id, cwd, runAs: host.username, loginAs: host.username, ...this.privileged?.scope(terminalId),
+      taskId: this.task.id, hostId: host.id, cwd: cwd ?? context?.defaultCwd ?? this.terminal.workingDirectory(terminalId),
+      runAs: host.username, loginAs: host.username, ...this.privileged?.scope(terminalId),
       terminalId, terminalGeneration: this.terminal.currentGeneration(terminalId), policyRevision: host.policyRevision,
       conversationRevision: this.task.reviewRevision ?? 1,
       reviewerRevision: this.profile.reviewer?.revision ?? 1,
+      ...(context ? { contextRevision: context.revision } : {}),
       allowedWorkingRoots: ['/srv', '/opt', `/home/${host.username}`, '/root'],
       protectedPaths: [...host.protectedPaths], protectedReadPaths: [...(host.protectedReadPaths ?? host.protectedPaths)],
       protectedWritePaths: [...(host.protectedWritePaths ?? host.protectedPaths)], goal: this.intents.goal(), intent: this.intents.snapshot()

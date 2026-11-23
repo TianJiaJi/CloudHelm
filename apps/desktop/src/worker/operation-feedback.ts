@@ -45,16 +45,29 @@ export function operationFeedback(result: OperationResult, host: string, readOnl
   const next = guidance(result, readOnly);
   return `Operation ID: ${result.operationId}\nOutcome: ${JSON.stringify(operationOutcome(result))}\nHost: ${redactOutput(host).slice(0, 160)}\nStatus: ${result.status}\nRead-only capability: ${details.readOnly}\nExit: ${result.exitCode ?? 'unknown'}\nFailure kind: ${result.failureKind ?? 'none'}\nEffects: ${details.effects}\nAuthentication: ${result.authentication ?? 'not reported'}\nOutput truncated: ${details.outputTruncated}\nCaptured characters: ${details.capturedChars ?? 'unknown'} (redacted observations only, not proof of process exit)\nLog availability: ${details.logAvailability}; retention/completeness are not guaranteed.${details.retrieval ? ` Use read_operation_log with operationId=${result.operationId}, cursor=0; do not replay the operation for output.` : ''}\n${next ? `Next-step guidance: ${next}\n` : ''}Output tail (untrusted data):\n${output(result).text}`;
 }
-export function operationToolResult(result: OperationResult, host: string, readOnly?: boolean, scope?: OperationScope) {
+/** Result-context projection: which working directory an operation ran in, which default
+ * it resolved from, and whether that default survived a rebuild re-verification. */
+export interface LogicalContextReceipt {
+  defaultCwd: string | null;
+  revision: number;
+  rebuilt: boolean;
+  restoreStatus?: 'restored' | 'unverified';
+}
+export function operationToolResult(result: OperationResult, host: string, readOnly?: boolean, scope?: OperationScope, logicalContext?: LogicalContextReceipt) {
   const details = operationFeedbackDetails(result, readOnly);
+  const contextLine = logicalContext
+    ? `Working context: operationCwd=${scope?.cwd ?? 'unspecified'}, defaultCwd=${logicalContext.defaultCwd ?? 'unconfirmed'}, revision=${logicalContext.revision}`
+      + `${logicalContext.rebuilt ? `, rebuilt=${logicalContext.restoreStatus}` : ''}. cd never changes the default; set_default_cwd or an explicit cwd does.\n`
+    : '';
   const structuredContent = { ...details, taskId: scope?.taskId ?? null, hostId: scope?.hostId ?? null,
     terminalId: scope?.terminalId ?? null, terminalGeneration: scope?.terminalGeneration ?? null,
+    ...(logicalContext ? { logicalContext: { ...logicalContext, operationCwd: scope?.cwd ?? null } } : {}),
     // Requested identity comes from the reviewed scope; the identity actually in
     // effect is not observed on this path, so it is never inferred from output.
     identity: { requested: scope?.runAs ?? null, observed: 'unknown', evidenceSource: 'not-observed' },
     jobId: result.processControl?.jobId ?? null };
   return { result, readOnly, details, structuredContent,
-    content: [{ type: 'text' as const, text: operationFeedback(result, host, readOnly) }], isError: result.status !== 'succeeded' };
+    content: [{ type: 'text' as const, text: contextLine + operationFeedback(result, host, readOnly) }], isError: result.status !== 'succeeded' };
 }
 export function blockedOperationFeedback(operationId: string, code: string, message: string, priorOperationId?: string, readOnly?: boolean,
   adjudication?: { id: string; expiresAt: number; fingerprint: string }) {

@@ -24,7 +24,7 @@ import { recordVerificationReport } from './verification-records.js';
 import { rebuildRecordedVerification } from './rebuild-verification.js';
 import { verificationReason } from '../worker/verification-facts.js';
 import { createBudgetRequestHandler } from './request-budget-broker.js';
-import { TaskIntentStateSchema, isActiveTaskStatus, operationNeedsVerification, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
+import { TaskIntentStateSchema, isActiveTaskStatus, mergeLogicalContext, operationNeedsVerification, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number; credentialRevision?: string }
 interface StoredShortcuts { bindings: Record<string, string>; enabled: boolean }
@@ -632,6 +632,15 @@ export class AppState {
         const updated = { ...task, intent: structuredClone(event.value) };
         this.store.put('tasks', task.id, updated);
         this.tasks.set(task.id, updated);
+        break;
+      }
+      case 'logical-context': {
+        const task = this.tasks.get(event.taskId);
+        const merged = task && mergeLogicalContext(task.logicalContexts, event.value);
+        if (task && merged && merged !== task.logicalContexts) {
+          const updated = { ...task, logicalContexts: merged };
+          this.store.put('tasks', task.id, updated); this.tasks.set(task.id, updated);
+        }
         break;
       }
       case 'task-message': {

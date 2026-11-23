@@ -9,7 +9,7 @@ import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 import { PROMPT_VERSION } from './agent-prompt.js';
 import type { BackgroundOperations } from './background-operations.js';
 import { commitOperationSnapshot } from './operation-commit-client.js';
-import { blockedOperationFeedback, operationToolResult } from './operation-feedback.js';
+import { blockedOperationFeedback, operationToolResult, type LogicalContextReceipt } from './operation-feedback.js';
 import { operationPreview } from './operation-preview.js';
 import { applyOperationDecision, applyOperationObservation } from './operation-observation.js';
 import { runOperationPipeline } from './operation-retry.js';
@@ -60,6 +60,8 @@ export interface ExecutionSchedulerDeps {
   finishRun(): void;
   publishExecution(): void;
   scope(host: RuntimeHost, terminalId: string, cwd?: string): OperationScope;
+  /** Working-context projection for operation receipts; undefined hosts run without a tracked logical context. */
+  logicalContext?(hostId: string): LogicalContextReceipt | undefined;
 }
 
 /** Owns operation execution: dispatch pipelines, gates, operation views and review coordination. */
@@ -129,14 +131,15 @@ export class ExecutionScheduler {
     operation = final.operation;
     const outcome = final.outcome;
     const result = outcome.result!;
-    if (this.deps.background().detached(operation.id) || operation.kind === 'command' && operation.processControl) return operationToolResult(result, hostLabel, outcome.readOnly, operation.scope);
+    const logicalContext = this.deps.logicalContext?.(operation.scope.hostId);
+    if (this.deps.background().detached(operation.id) || operation.kind === 'command' && operation.processControl) return operationToolResult(result, hostLabel, outcome.readOnly, operation.scope, logicalContext);
     if (result.requiresUserAction) {
       this.deps.blockRemote(result.privilege ? privilegeGuidance(result.privilege) : '认证未通过或当前认证形式需要人工接管，已暂停。请处理后手动继续，AI 不会自动改换方式重试。', false, 'interrupted');
     } else if (result.status === 'handed-over') {
       this.deps.blockRemote('终端已转为人工输入；请核验结果后发送消息继续。');
     } else if (result.status === 'unknown') {
       const findings = await this.deps.probeUnknown?.(operation, signal);
-      if (findings) return appendProbeFindings(operationToolResult(result, hostLabel, outcome.readOnly, operation.scope), findings);
+      if (findings) return appendProbeFindings(operationToolResult(result, hostLabel, outcome.readOnly, operation.scope, logicalContext), findings);
       if (outcome.readOnly === true || !this.deps.terminal.isAgentOwner(operation.scope.terminalId)) {
         this.deps.blockRemote('远端操作结果未知，已暂停。请先核验，避免重复执行。', false, 'verify');
       } else this.diagnosisOnly = true;
@@ -157,7 +160,7 @@ export class ExecutionScheduler {
       this.sameFailureCount = 0;
       this.lastFailureKey = '';
     }
-    return operationToolResult(result, hostLabel, outcome.readOnly, operation.scope);
+    return operationToolResult(result, hostLabel, outcome.readOnly, operation.scope, logicalContext);
   }
 
   /** Whitelisted read-only recovery probe dispatched on its own scheduler lane, so a
@@ -183,7 +186,8 @@ export class ExecutionScheduler {
     const result = final.outcome.result;
     if (!result) return blockedOperationFeedback(final.operation.id, 'probe-unobserved',
       'SafetyGate returned no observed result for the recovery probe.');
-    return operationToolResult(result, this.hostLabel(final.operation), final.outcome.readOnly, final.operation.scope);
+    return operationToolResult(result, this.hostLabel(final.operation), final.outcome.readOnly, final.operation.scope,
+      this.deps.logicalContext?.(final.operation.scope.hostId));
   }
 
   private hostLabel(operation: ProposedOperation): string {
