@@ -29,7 +29,7 @@ interface Dependencies {
   restoreSelections(tokens: string[], scopes: LocalScope[]): void;
 }
 
-export function registerConversationIpc({ store, references, sessionRoot, cleanupConversation, state, runtime, connectHost, takeSelections, restoreSelections }: Dependencies): void {
+export function registerConversationIpc({ store, references, sessionRoot, cleanupConversation, state, runtime, connectHost, takeSelections, restoreSelections }: Dependencies): { resumeTask: (id: string) => Promise<void> } {
   const lifecycle = new ConversationLifecycle();
   function handleTask<A extends unknown[], T>(name: string, action: (id: string, ...args: A) => T | Promise<T>): void {
     ipcMain.handle(`cloudhelm:${name}`, (_event, id: string, ...args: A) => lifecycle.use(id, () => action(id, ...args)));
@@ -170,14 +170,18 @@ export function registerConversationIpc({ store, references, sessionRoot, cleanu
     }
     state.setTaskModel(id, profile, live);
   });
-  handleTask('resume-task', async (id: string) => {
+  async function resumeNow(id: string): Promise<void> {
     const task = state.getTask(id); sessionDirectory(task);
     if (task.resumeReason === 'report') throw new Error('报告记录不是待执行工作；请发送新消息说明需求。');
     if (remainingRequests(state.requestBudgets.current(id)) <= 0) throw new RequestBudgetError('budget-exhausted');
     await ensureRuntime(task);
     if (remainingRequests(state.requestBudgets.reopen(id)) <= 0) throw new RequestBudgetError('budget-exhausted');
     await runtime.call({ method: 'resume-task', taskId: id });
-  });
+  }
+  /** Shared host-initiated continuation: the manual「继续 AI」path and the
+   * unified recovery use case dispatch the same checked continuation. */
+  const resumeTask = (id: string) => lifecycle.use(id, () => resumeNow(id));
+  ipcMain.handle('cloudhelm:resume-task', (_event, id: string) => resumeTask(id));
   ipcMain.handle('cloudhelm:extend-request-budget', async (_event, input: unknown) => {
     try {
       if (!Value.Check(ExtendRequestBudgetSchema, input)) throw new RequestBudgetError('budget-invalid');
@@ -218,4 +222,5 @@ export function registerConversationIpc({ store, references, sessionRoot, cleanu
       if (!await cleanup(id)) throw pendingCleanup();
     });
   });
+  return { resumeTask };
 }

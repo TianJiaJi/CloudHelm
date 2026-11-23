@@ -4,6 +4,7 @@ import { Button, Card } from './ui/index.js';
 import styles from './ui.module.css';
 
 const RISK_EXPLANATION = '用户在恢复卡明确知晓原远端操作结果未知且可能继续运行，自愿接管此项未决风险。';
+const REJECTION_EXPLANATION = '用户在恢复卡明确拒绝接管未知结果风险，保持写入阻断。';
 
 function RecoveryItem({ operation, snapshot, conversation, current, remaining, hostId, report }: {
   operation: OperationView; snapshot: AppSnapshot; conversation: TaskView; hostId: string;
@@ -27,10 +28,13 @@ function RecoveryItem({ operation, snapshot, conversation, current, remaining, h
     } catch (error) { report(String(error)); }
     finally { setBusy(false); }
   }
-  async function acceptRisk(): Promise<void> {
+  async function resolveRisk(action: 'reject' | 'release' | 'accept-and-continue'): Promise<void> {
     setBusy(true);
     try {
-      await window.cloudhelm.acceptOperationRisk(operation.id, RISK_EXPLANATION, conversation.id, []);
+      await window.cloudhelm.resolveOperationRisk({ actionId: crypto.randomUUID(), action, operationId: operation.id,
+        explanation: action === 'reject' ? REJECTION_EXPLANATION : RISK_EXPLANATION,
+        sourceTaskId: conversation.id });
+      if (action === 'reject') setDismissed(true);
     } catch (error) { report(String(error)); }
     finally { setBusy(false); }
   }
@@ -50,8 +54,9 @@ function RecoveryItem({ operation, snapshot, conversation, current, remaining, h
       {log && !more && <small>日志已读完；输出本身不能证明命令退出或没有副作用。</small>}
     </details>
     {resolvable ? <div className={styles.cardActions}>
-      <Button size="compact" disabled={busy} onClick={() => setDismissed(true)}>拒绝，保持阻断</Button>
-      <Button size="compact" disabled={busy} onClick={() => void acceptRisk()}>知晓风险，仅解除这条写入阻断</Button>
+      <Button size="compact" disabled={busy} onClick={() => void resolveRisk('reject')}>拒绝，保持阻断</Button>
+      <Button size="compact" disabled={busy} onClick={() => void resolveRisk('release')}>知晓风险，仅解除这条写入阻断</Button>
+      <Button size="compact" disabled={busy} onClick={() => void resolveRisk('accept-and-continue')}>接受风险并继续对话</Button>
     </div> : <p>原操作仍在运行或审核中，不能解除；请等待真实退出。</p>}
     <small>风险确认不等于继续聊天。全部阻断项解除后，请点击对话顶部的「继续 AI」或发送消息；AI 不会自动重放原命令，新的命令仍须审核。</small>
   </Card>;

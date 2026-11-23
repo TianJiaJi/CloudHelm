@@ -49,6 +49,7 @@ it('shows the current blocked command, simple risk and refusal/acceptance withou
   expect(markup).toContain('风险：同一主机的历史对话');
   expect(markup).toContain('拒绝，保持阻断');
   expect(markup).toContain('知晓风险，仅解除这条写入阻断');
+  expect(markup).toContain('接受风险并继续对话');
   expect(markup).toContain('请点击对话顶部的「继续 AI」或发送消息');
   expect(markup).not.toContain('切换到来源对话');
   expect(markup).not.toContain('风险接管说明');

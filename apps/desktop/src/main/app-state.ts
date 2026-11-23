@@ -18,18 +18,20 @@ import { SqliteStore, listModelProviders, validModelUrl } from '@cloudhelm/adapt
 import { OutputRedactor, resolveHostRiskDomain, resolveHostRiskBindings, type CommandAnalyzer, type OutboundLimitState } from '@cloudhelm/core';
 import { HISTORICAL_QUERY_REPAIR, planHistoricalQueryRepair } from './historical-query-repair.js';
 import { RequestBudgetAuthority } from './request-budget-authority.js';
+import { RecoveryDecisionStore, type RecoveryDisposition } from './recovery-decision-store.js';
 import { createRequestBudget } from '@cloudhelm/core';
 import { recordVerificationReport } from './verification-records.js';
 import { rebuildRecordedVerification } from './rebuild-verification.js';
 import { verificationReason } from '../worker/verification-facts.js';
 import { createBudgetRequestHandler } from './request-budget-broker.js';
-import { TaskIntentStateSchema, isActiveTaskStatus, operationNeedsVerification, operationOutcomeResolvable, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
+import { TaskIntentStateSchema, isActiveTaskStatus, operationNeedsVerification, retainOperationResolution, type AppEvent, type AppSnapshot, type ClarificationRequest, type ModelChoice, type ModelProfileDraft, type TerminalViewState, type HostDraft, type HostView, type InputRequestView, type LocalScope, type ModelProviderSettings, type OperationView, type ReviewMode, type ReviewSelection, type ResumeReason, type TaskView } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile, RuntimeReviewProfile } from '@cloudhelm/contracts/runtime';
 interface ProfileRecord { provider: string; modelId: string; baseUrl?: string; contextWindow?: number; maxTokens?: number; credentialRevision?: string }
 interface StoredShortcuts { bindings: Record<string, string>; enabled: boolean }
 interface StoredReviewer { selection: ReviewSelection; revision: number }
 export class AppState {
   readonly requestBudgets: RequestBudgetAuthority;
+  readonly recoveryDecisions: RecoveryDecisionStore;
   readonly thinkingPreferences: ConversationThinking;
   private budgetPreparationActive: (requestId: string, taskId?: string) => boolean = () => false;
   private readonly hosts = new Map<string, HostView>();
@@ -76,6 +78,7 @@ export class AppState {
     }
     for (const operation of store.list<OperationView>('operations')) this.operations.set(operation.id,
       recoverOperation(operation, 'Application exited before outcome was recorded'));
+    this.recoveryDecisions = new RecoveryDecisionStore(store, this.operations, () => this.publish());
     for (const task of this.tasks.values()) this.execution[task.id] = { model: 'idle', stopping: false, canStop: false,
       remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown' && !op.reconciledAt) ? 'unknown' : 'idle' };
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));
@@ -504,20 +507,8 @@ export class AppState {
    * this only records that the user took over the risk so the write lock can be
    * released. Callers re-arm the write lock when this throws.
    */
-  acceptOperationRisk(operationId: string, explanation: string, at: number, sourceTaskId?: string, evidenceOperationIds?: string[]): OperationView {
-    const operation = this.operations.get(operationId);
-    if (!operation) throw new Error('未找到该操作');
-    if (operation.reconciledAt) {
-      if (operation.reconciliation?.kind === 'risk-accepted' && operation.reconciliation.at === at) return structuredClone(operation);
-      throw new Error('该操作已经核验或确认，不能重复解除');
-    }
-    if (!operationOutcomeResolvable(operation)) throw new Error('该操作没有可确认的未知结果');
-    const updated: OperationView = { ...operation, reconciledAt: at,
-      reconciliation: { kind: 'risk-accepted', explanation, at, sourceTaskId, evidenceOperationIds } };
-    this.store.put('operations', operationId, updated);
-    this.operations.set(operationId, updated);
-    this.publish();
-    return structuredClone(updated);
+  acceptOperationRisk(operationId: string, explanation: string, at: number, sourceTaskId?: string, evidenceOperationIds?: string[], disposition?: RecoveryDisposition): OperationView {
+    return this.recoveryDecisions.accept(operationId, explanation, at, sourceTaskId, evidenceOperationIds, disposition);
   }
 
   createTask(goal: string, hostIds: string[], modelId: string, localScopes: LocalScope[]): TaskView {

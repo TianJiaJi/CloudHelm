@@ -98,7 +98,8 @@ async function connectOnce(hostId: string, signal: AbortSignal): Promise<void> {
 function registerIpc(): void {
   const hostTester = new HostConnectionTester(state, (host, jump) => runtime.call({ method: 'test-host', host, jump }));
   ipcMain.handle('cloudhelm:test-host', (_event, input: Parameters<DesktopAPI['testHostConnection']>[0]) => hostTester.test(input));
-  registerConversationIpc({ store, references, sessionRoot: join(app.getPath('userData'), 'pi-sessions'), state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
+  const conversation = registerConversationIpc({ store, references, sessionRoot: join(app.getPath('userData'), 'pi-sessions'), state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
+  registerRecoveryIpc(state, runtime, conversation.resumeTask);
   ipcMain.handle('cloudhelm:snapshot', () => state.snapshot());
   ipcMain.handle('cloudhelm:app-version', () => app.getVersion());
   ipcMain.handle('cloudhelm:add-host', (_event, host: HostDraft, credentials?: Parameters<DesktopAPI['addHost']>[1]) => state.addHost(host, credentials));
@@ -284,7 +285,6 @@ void app.whenReady().then(async () => {
   await runtime.call({ method: 'restore-operations', riskBindings: state.hostRiskBindings(), operations: state.snapshot().operations
     .filter(operationNeedsVerification).map(({ id, hostId }) => ({ id, hostId })) });
   registerIpc();
-  registerRecoveryIpc(state, runtime);
   windowsReady = true;
   createWindow();
   void resumeConversationCleanup(store, join(app.getPath('userData'), 'pi-sessions')).then((pending) => {

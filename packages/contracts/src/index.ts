@@ -51,6 +51,11 @@ export type TaskStatus = 'draft' | 'running' | 'waiting-review' | 'waiting-user'
 /** Only these backend-owned reasons permit a host-initiated continuation. */
 export type ResumeReason = 'verify' | 'report' | 'interrupted' | 'model' | 'budget-exhausted' | 'outbound-limit-exhausted';
 
+/** Named recovery dispositions: `reject` keeps the block, `release` unlocks
+ * without continuation, `accept-and-continue` also continues the conversation
+ * once the continuation conditions hold. */
+export type RecoveryActionKind = 'reject' | 'release' | 'accept-and-continue';
+
 /**
  * How an uncertain remote outcome was resolved. It never rewrites the recorded
  * outcome: `evidence` observed the real result; `risk-accepted` means the user
@@ -64,8 +69,46 @@ export interface OperationReconciliation {
   evidenceOperationIds?: string[];
   /** Conversation from which the user initiated recovery, if any. */
   sourceTaskId?: string;
+  /** Named disposition that produced a `risk-accepted` release; audit only. */
+  action?: RecoveryActionKind;
   explanation: string;
   at: number;
+}
+
+/** Durable audit and idempotency record of the unified recovery use case; the
+ * latest decision wins and a rejection never releases the write lock. */
+export interface RecoveryDecisionRecord {
+  version: 1;
+  actionId: string;
+  action: RecoveryActionKind;
+  at: number;
+  sourceTaskId?: string;
+  explanation?: string;
+  /** Whether the write lock was durably released by this decision. */
+  released: boolean;
+  /** Whether the conversation continuation was dispatched. */
+  resumed: boolean;
+  resumeNote?: string;
+  /** Terminal error recorded when the action stayed unresolved after persistence. */
+  error?: string;
+}
+
+export interface RecoveryActionRequest {
+  /** Client-generated idempotency key; replays return the recorded outcome without re-execution. */
+  actionId: string;
+  action: RecoveryActionKind;
+  operationId: string;
+  explanation?: string;
+  sourceTaskId?: string;
+  evidenceOperationIds?: string[];
+}
+
+export interface RecoveryActionOutcome {
+  actionId: string;
+  action: RecoveryActionKind;
+  released: boolean;
+  resumed: boolean;
+  note?: string;
 }
 
 /** Statuses in which a conversation still owns live work and must not be deleted. */
@@ -199,6 +242,8 @@ export interface OperationView {
   manualReviewAvailable?: boolean;
   reconciledAt?: number;
   reconciliation?: OperationReconciliation;
+  /** Latest explicit recovery decision from the unified use case; audit and idempotency, never a permission. */
+  recoveryDecision?: RecoveryDecisionRecord;
   intentKey?: string;
   /** Backend preflight whose result is not a user-visible business step. */
   internal?: 'identity-probe' | 'recovery-probe';
@@ -437,7 +482,7 @@ export interface DesktopAPI {
   updateConversationReviewMode(taskId: string, hostId: string, mode: ReviewMode): Promise<void>;
   requestAiDenialReview(taskId: string, operationId: string): Promise<void>;
   readRecoveryOperationLog(operationId: string, cursor: number): Promise<{ text: string; nextCursor: number; more: boolean }>;
-  acceptOperationRisk(operationId: string, explanation: string, sourceTaskId?: string, evidenceOperationIds?: string[]): Promise<void>;
+  resolveOperationRisk(request: RecoveryActionRequest): Promise<RecoveryActionOutcome>;
   listModelProviders(): Promise<ModelProviderView[]>;
   modelProviderSettings(providerId: string): Promise<ModelProviderSettings>;
   saveModelProfile(profile: ModelProfileDraft): Promise<void>;

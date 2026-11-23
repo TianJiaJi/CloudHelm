@@ -175,7 +175,7 @@ const api: DesktopAPI = {
     sync();
   },
   resumeConversation: unsupported, extendRequestBudget: unsupported,
-  rebuildVerificationReport: unsupported, readRecoveryOperationLog: unsupported, acceptOperationRisk: unsupported,
+  rebuildVerificationReport: unsupported, readRecoveryOperationLog: unsupported, resolveOperationRisk: unsupported,
   answerClarification: unsupported, cancelClarification: unsupported,
   cancelInput: unsupported, addHost: unsupported, editHost: unsupported, updateHostSafety: unsupported,
   disconnectHost: unsupported, deleteHost: unsupported, trustHostKey: unsupported, setHostSecret: unsupported
