@@ -12,8 +12,8 @@ function setup() {
       signal.addEventListener('abort', () => reject(new Error('preparation canceled')), { once: true });
     }); } };
   const runner = { task: { id: 'task', hostIds: ['host'] }, preparationContext: () => context, preparationSnapshot: () => snapshot,
-    pause: vi.fn(), stopOperation: vi.fn(), setModel: vi.fn(), setThinking: vi.fn(), setReviewKey: vi.fn(),
-    updateConversationReviewMode: vi.fn(), updateHostSafety: vi.fn(), addAuthorization: vi.fn(), message: vi.fn() };
+    recordConnectionLoss: vi.fn(), pause: vi.fn(), stopOperation: vi.fn(), setModel: vi.fn(), setThinking: vi.fn(),
+    setReviewKey: vi.fn(), updateConversationReviewMode: vi.fn(), updateHostSafety: vi.fn(), addAuthorization: vi.fn(), message: vi.fn() };
   (server as unknown as { tasks: Map<string, typeof runner> }).tasks.set('task', runner);
   const profile = { provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'fixture-only', baseUrl: 'http://127.0.0.1:1/v1', contextWindow: 32000, maxTokens: 8192 };
   const call: Extract<RuntimeCall, { method: 'prepare-message' }> = { method: 'prepare-message', requestId: 'prepare', taskId: 'task',
