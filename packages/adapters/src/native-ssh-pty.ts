@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { Client, ClientChannel } from 'ssh2';
+import { OBSERVATION_LIMITS } from '@cloudhelm/core';
 import { renderNativeExecCommand } from './native-exec-command.js';
 
 export type NativePtyOutcome =
@@ -21,7 +22,7 @@ export interface NativePtyHandle {
   resize(cols: number, rows: number): void;
 }
 
-const MAX_OUTPUT_BYTES = 1_048_576;
+const MAX_OUTPUT_BYTES = OBSERVATION_LIMITS.execOutputLimitBytes;
 const MAX_SUPPRESSED_BYTES = 4096;
 const MAX_INJECTIONS = 3;
 /** C-locale sudo retry notice; the LC_ALL=C wrapper guarantees this spelling. */
@@ -57,7 +58,7 @@ export function openNativeSshPty(client: Pick<Client, 'exec'> | undefined, input
   data(text: string): void; authentication(event: { id: string; open: boolean }): void;
   /** Claim immediately before the one PTY dispatch; never consult it after handoff. */
   claimStart?(): boolean;
-}, signal?: AbortSignal, startupTimeoutMs = 15_000): NativePtyHandle {
+}, signal?: AbortSignal, startupTimeoutMs: number = OBSERVATION_LIMITS.channelAllocationMs): NativePtyHandle {
   const rendered = renderNativeExecCommand(input);
   if (!/^[a-f0-9]{32}$/u.test(input.nonce)) throw new Error('Native PTY requires a client-generated marker nonce');
   const scanTarget = `cloudhelm:${input.nonce}`;

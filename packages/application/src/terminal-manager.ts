@@ -73,6 +73,7 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
       if (terminal.pending === pending && pending.isAuthorized()) pending.onProcessStarted?.(event);
     });
     channel.onExit?.((code) => this.complete(terminal, code));
+    channel.onObservationTimeout?.(() => this.expireObservation(terminal));
     this.events.state(terminal.id, terminal.owner);
     return terminal.id;
   }
@@ -260,6 +261,18 @@ export class TerminalManager implements TerminalLease, OperationExecutor {
     this.events.data(terminal.id, data, pending?.operationId);
     pending?.capture.push(data);
     for (const listener of this.listeners.get(terminal.id) ?? []) listener(data);
+  }
+
+  /** Bounded foreground run observation expired: release the tool call with
+   * unknown while the pending command stays reserved for the late exit
+   * observation. No fabricated liveness, no generation or ownership change. */
+  private expireObservation(terminal: TerminalRecord): void {
+    const pending = terminal.pending;
+    if (!pending || pending.reported) return;
+    pending.reported = true;
+    pending.settle({ operationId: pending.operationId, status: 'unknown',
+      effects: pending.readOnly ? undefined : 'possible',
+      ...pending.capture.snapshot(), logRef: terminal.id, remoteCompletion: pending.remoteCompletion });
   }
 
   private complete(terminal: TerminalRecord, exitCode: number | undefined): void {

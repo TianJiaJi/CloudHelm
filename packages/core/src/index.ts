@@ -32,6 +32,7 @@ export * from './sudo-outcome.js';
 export * from './privilege.js';
 export * from './privilege-routing.js';
 export * from './operation-outcome.js';
+export * from './observation-limits.js';
 export * from './agent-session.js';
 export * from './agent-lifecycle.js';
 export * from './request-budget.js';

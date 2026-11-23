@@ -1,4 +1,5 @@
 import type { Client, ClientChannel } from 'ssh2';
+import { OBSERVATION_LIMITS } from '@cloudhelm/core';
 import { renderNativeExecCommand } from './native-exec-command.js';
 
 export type NativeExecOutcome =
@@ -6,8 +7,6 @@ export type NativeExecOutcome =
   | { state: 'exited'; exitCode: number }
   | { state: 'signaled'; signal: string; coreDumped: boolean }
   | { state: 'unknown'; reason: 'allocation' | 'timeout' | 'aborted' | 'channel-error' | 'missing-exit' | 'authorization-expired' | 'output-limit' };
-
-const MAX_OUTPUT_BYTES = 1_048_576;
 
 /** One SSH exec request. Channel closure/abort is never proof of process exit.
  * The caller must persist authorization before calling this function and must
@@ -22,7 +21,7 @@ export function runNativeSshExec(client: Pick<Client, 'exec'>, input: {
    * re-authorized and before any output is delivered. The writer stays valid
    * until the outcome settles; later writes are dropped. */
   stdin?(write: (data: Buffer) => void, end: () => void): void;
-}, signal?: AbortSignal, startupTimeoutMs = 15_000): Promise<NativeExecOutcome> {
+}, signal?: AbortSignal, startupTimeoutMs: number = OBSERVATION_LIMITS.channelAllocationMs): Promise<NativeExecOutcome> {
   const rendered = renderNativeExecCommand(input);
   if (signal?.aborted || !current()) return Promise.resolve({ state: 'not-dispatched', reason: 'authorization-expired' });
   return new Promise((resolve) => {
@@ -58,7 +57,7 @@ export function runNativeSshExec(client: Pick<Client, 'exec'>, input: {
           if (settled) return;
           if (!current()) { finish({ state: 'unknown', reason: 'authorization-expired' }); return; }
           outputBytes += data.length;
-          if (outputBytes > MAX_OUTPUT_BYTES) { finish({ state: 'unknown', reason: 'output-limit' }); return; }
+          if (outputBytes > OBSERVATION_LIMITS.execOutputLimitBytes) { finish({ state: 'unknown', reason: 'output-limit' }); return; }
           try { output(Buffer.from(data)); } catch { finish({ state: 'unknown', reason: 'channel-error' }); }
         };
         stream.on('data', (data: Buffer) => deliver(data, hooks.stdout));

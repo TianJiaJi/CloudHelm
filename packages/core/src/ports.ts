@@ -119,6 +119,8 @@ export interface RawTerminal {
   execute?(command: string, cwd: string, isAuthorized: () => boolean, options?: CommandExecutionOptions): Promise<void>;
   onExecutionFailure?(listener: (failure: ExecutionFailureFact) => void): void;
   onExit?(listener: (exitCode: number | undefined) => void): void;
+  /** Bounded foreground run observation expired; the command stays pending for a late exit observation. */
+  onObservationTimeout?(listener: () => void): void;
   /** Prompt/command echo for the terminal only, separate from captured command output. */
   onDisplay?(listener: (data: string) => void): void;
   onAuthentication?(listener: (challenge: { id: string; prompt?: string }) => void): void;

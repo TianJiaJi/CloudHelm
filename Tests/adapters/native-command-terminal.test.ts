@@ -1,6 +1,8 @@
 import { expect, it, vi } from 'vitest';
 import { BashAnalyzer } from '../../packages/adapters/src/bash-analyzer.js';
 import { suPtyCommand } from '../../packages/core/src/su-plan.js';
+import { OBSERVATION_LIMITS } from '../../packages/core/src/observation-limits.js';
+import type { NativeExecOutcome } from '../../packages/adapters/src/native-ssh-exec.js';
 import type { NativePtyOutcome } from '../../packages/adapters/src/native-ssh-pty.js';
 import { SshCommandTerminal, type CommandTransport } from '../../packages/adapters/src/ssh-command-terminal.js';
 
@@ -49,6 +51,49 @@ it('rejects a changed command rather than falling back to the Python wrapper', a
   await expect(f.terminal.execute('sudo id', '/', () => true, { executionChannel: 'native-exec' }))
     .rejects.toThrow('no longer matches');
   expect(f.runNativeExec).not.toHaveBeenCalled(); expect(f.prepareCommandProgram).not.toHaveBeenCalled();
+});
+
+it('ends the bounded run window with unknown guidance while the native exec keeps observing', async () => {
+  const originalWindow = OBSERVATION_LIMITS.runWindowMs;
+  Object.defineProperty(OBSERVATION_LIMITS, 'runWindowMs', { value: 25, configurable: true });
+  try {
+    let settle!: (outcome: NativeExecOutcome) => void;
+    const runNativeExec = vi.fn(() => new Promise<NativeExecOutcome>((resolve) => { settle = resolve; }));
+    const transport = { connectionGeneration: () => 1, execFixed: vi.fn(async () => ({ exitCode: 0, output: '' })),
+      runNativeExec } as unknown as CommandTransport;
+    const terminal = new SshCommandTerminal(transport, 'host');
+    const data = vi.fn(), exited = vi.fn(), expired = vi.fn();
+    terminal.onData(data); terminal.onExit(exited); terminal.onObservationTimeout(expired);
+    const executing = terminal.execute('id -u', '/', () => true, { executionChannel: 'native-exec' });
+    await vi.waitFor(() => expect(runNativeExec).toHaveBeenCalledOnce(), { timeout: 15_000 });
+    await vi.waitFor(() => expect(expired).toHaveBeenCalledOnce(), { timeout: 15_000 });
+    expect(exited).not.toHaveBeenCalled();
+    expect(data).toHaveBeenCalledWith('运行期观察窗口到期：远端命令仍在执行，本次调用不再等待其退出；结果未知，不会重放命令，请核验原操作。');
+    settle({ state: 'exited', exitCode: 0 });
+    await executing;
+    expect(exited).toHaveBeenCalledExactlyOnceWith(0);
+  } finally {
+    Object.defineProperty(OBSERVATION_LIMITS, 'runWindowMs', { value: originalWindow, configurable: true });
+  }
+});
+
+it('clears the run window once the native exec outcome is observed', async () => {
+  const originalWindow = OBSERVATION_LIMITS.runWindowMs;
+  Object.defineProperty(OBSERVATION_LIMITS, 'runWindowMs', { value: 25, configurable: true });
+  try {
+    const runNativeExec = vi.fn(async () => ({ state: 'exited' as const, exitCode: 0 }));
+    const transport = { connectionGeneration: () => 1, execFixed: vi.fn(async () => ({ exitCode: 0, output: '' })),
+      runNativeExec } as unknown as CommandTransport;
+    const terminal = new SshCommandTerminal(transport, 'host');
+    const data = vi.fn(), expired = vi.fn();
+    terminal.onData(data); terminal.onObservationTimeout(expired);
+    await terminal.execute('id -u', '/', () => true, { executionChannel: 'native-exec' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(expired).not.toHaveBeenCalled();
+    expect(data.mock.calls.flat().join('')).not.toContain('运行期观察窗口到期');
+  } finally {
+    Object.defineProperty(OBSERVATION_LIMITS, 'runWindowMs', { value: originalWindow, configurable: true });
+  }
 });
 
 type PtyHooks = { data(text: string): void; authentication(event: { id: string; open: boolean }): void };

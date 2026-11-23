@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ProposedOperation, RawTerminal } from '@cloudhelm/core';
+import type { OperationResult, ProposedOperation, RawTerminal } from '@cloudhelm/core';
 import { CommandNotStartedError, operationFingerprint } from '@cloudhelm/core';
 import { TerminalManager } from '../../packages/application/src/terminal-manager.js';
 
@@ -14,6 +14,9 @@ class FakeTerminal implements RawTerminal {
   commands: Array<{ command: string; cwd: string }> = [];
   async execute(command: string, cwd: string): Promise<void> { this.commands.push({ command, cwd }); }
   onExit(listener: (code: number | undefined) => void): void { this.exited = listener; }
+  private observationTimeout?: () => void;
+  onObservationTimeout(listener: () => void): void { this.observationTimeout = listener; }
+  expire(): void { this.observationTimeout?.(); }
   complete(code = 0): void { this.exited?.(code); }
   write(text: string): void { this.writes.push(text); }
   resize(): void {}
@@ -143,6 +146,57 @@ describe('real PTY ownership', () => {
     expect(handedOver.remoteCompletion).toBeDefined();
     channel.complete();
     expect(await handedOver.remoteCompletion).toBe('exited');
+  });
+
+  it('releases a silent long-running command with unknown when the bounded run observation expires', async () => {
+    const channel = new FakeTerminal();
+    const completed: OperationResult[] = [];
+    const manager = new TerminalManager({ data() {}, state() {}, completed: (result) => completed.push(result) });
+    const id = manager.open('host', channel, 'task');
+    const proposed = operation('long-run', manager.currentGeneration(id));
+    proposed.scope.terminalId = id;
+    const running = manager.execute(proposed, operationFingerprint(proposed));
+    channel.expire();
+    const released = await running;
+    expect(released.status).toBe('unknown');
+    expect(released.effects).toBe('possible');
+    expect(released.remoteCompletion).toBeDefined();
+    expect(manager.hasPending(id)).toBe(true);
+    expect(manager.stateOf(id)).toBe('agent');
+    expect(completed).toEqual([]);
+    channel.complete(0);
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({ operationId: 'long-run', status: 'succeeded', exitCode: 0 });
+    expect(await released.remoteCompletion).toBe('exited');
+  });
+
+  it('claims no effects when a read-only run observation expires and ignores a repeated expiry', async () => {
+    const channel = new FakeTerminal();
+    const manager = new TerminalManager({ data() {}, state() {} });
+    const id = manager.open('host', channel, 'task');
+    const proposed = operation('read-only', manager.currentGeneration(id));
+    proposed.scope.terminalId = id;
+    const running = manager.execute(proposed, operationFingerprint(proposed), undefined, { readOnly: true });
+    channel.expire();
+    const released = await running;
+    expect(released.status).toBe('unknown');
+    expect(released.effects).toBeUndefined();
+    channel.expire();
+    channel.complete(1);
+  });
+
+  it('ignores the run observation window once the command exit was observed', async () => {
+    const channel = new FakeTerminal();
+    const completed: OperationResult[] = [];
+    const manager = new TerminalManager({ data() {}, state() {}, completed: (result) => completed.push(result) });
+    const id = manager.open('host', channel, 'task');
+    const proposed = operation('settled', manager.currentGeneration(id));
+    proposed.scope.terminalId = id;
+    const running = manager.execute(proposed, operationFingerprint(proposed));
+    channel.complete(5);
+    expect(await running).toMatchObject({ status: 'failed', exitCode: 5 });
+    channel.expire();
+    expect(completed).toHaveLength(1);
   });
 
   it('sends no wrappers or status markers and preserves literal output', async () => {

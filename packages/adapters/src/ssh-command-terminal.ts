@@ -1,7 +1,7 @@
 import { ShellMarkerParser, type ShellCommandEvent } from './shell-integration.js';
 import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { CommandNotStartedError, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, sudoMarkerPrompt, sudoPtyCommand,
+import { CommandNotStartedError, nativeBackgroundEligible, nativeCommandEligible, nativePtySudoEligible, nativePtySuEligible, OBSERVATION_LIMITS, sudoMarkerPrompt, sudoPtyCommand,
   type CommandAnalysis, type CommandExecutionOptions, type ExecutionFailureFact, type NativeStartTarget, type ProcessStartedEvent, type RawTerminal } from '@cloudhelm/core';
 import type { ClientChannel } from 'ssh2';
 import { BashAnalyzer } from './bash-analyzer.js';
@@ -33,6 +33,8 @@ export class SshCommandTerminal implements RawTerminal {
   private authentication = (_challenge: { id: string; prompt?: string }) => {};
   private started = (_event: ProcessStartedEvent) => {};
   private startupTimer?: ReturnType<typeof setTimeout>;
+  private runTimer?: ReturnType<typeof setTimeout>;
+  private observationTimeout = () => {};
   private nativeAbort?: AbortController;
   private ptySession?: NativePtyHandle;
   private ptyAbort?: AbortController;
@@ -51,6 +53,7 @@ export class SshCommandTerminal implements RawTerminal {
   onExecutionFailure(listener: typeof this.failure): void { this.failure = listener; }
   onProcessStarted(listener: (event: ProcessStartedEvent) => void): void { this.started = listener; }
   onExit(listener: (code: number | undefined) => void): void { this.exited = listener; }
+  onObservationTimeout(listener: () => void): void { this.observationTimeout = listener; }
   onClose(listener: () => void): void { this.closedListener = listener; }
   onAuthentication(listener: (challenge: { id: string; prompt?: string }) => void): void { this.authentication = listener; }
 
@@ -128,6 +131,9 @@ export class SshCommandTerminal implements RawTerminal {
       this.exited(undefined); this.busy = false; return;
     }
     current(); this.clearStartup();
+    // The business runs under a bounded run observation: expiry releases the
+    // tool call with unknown while this exec keeps observing for the real exit.
+    this.armRunWindow();
     const controller = new AbortController(); this.nativeAbort = controller;
     const stdout = new StringDecoder('utf8'), stderr = new StringDecoder('utf8');
     const emit = (decoder: StringDecoder, chunk: Buffer) => {
@@ -147,6 +153,7 @@ export class SshCommandTerminal implements RawTerminal {
       if (outcome.state === 'unknown') this.data('原生 SSH 命令结果未知；请核验原操作，不要直接重放。');
       this.exited(outcome.state === 'exited' ? outcome.exitCode : undefined);
     } finally {
+      this.clearRunWindow();
       this.nativeAbort = undefined; this.busy = false;
       if (this.humanOwned && !this.closed) void this.openHuman().catch(() => this.close());
     }
@@ -318,7 +325,7 @@ export class SshCommandTerminal implements RawTerminal {
     const outcome = await this.ssh.runNativeExec!(this.hostId,
       { command, cwd, envPath: '/usr/bin/env', shellPath: '/bin/sh' },
       () => { current(); return true; },
-      { stdout: (data: Buffer) => { if (output.length < 65_536) output += data.toString('utf8'); },
+      { stdout: (data: Buffer) => { if (output.length < OBSERVATION_LIMITS.backgroundProbeBytes) output += data.toString('utf8'); },
         stderr: () => {}, ...(claimStart ? { claimStart } : {}) }, signal);
     return { outcome, output };
   }
@@ -422,12 +429,28 @@ export class SshCommandTerminal implements RawTerminal {
       this.clearStartup();
       try { this.data('启动观察超时，远端结果未知；不会重放命令，请核验原操作。'); } catch { /* Still revoke this channel. */ }
       try { this.close(); } finally { reject?.(new Error('Command startup observation timed out; verify the original operation')); }
-    }, 180_000);
+    }, OBSERVATION_LIMITS.startupWindowMs);
     this.startupTimer.unref?.();
+  }
+
+  private clearRunWindow(): void { clearTimeout(this.runTimer); this.runTimer = undefined; }
+  /** Bounded run observation for a dispatched foreground command. Expiry never
+   * closes the channel, aborts the process, or fabricates an exit: it only
+   * states that this call stops waiting, so the manager can release the tool
+   * call with unknown while the late exit observation stays authoritative. */
+  private armRunWindow(): void {
+    this.clearRunWindow();
+    this.runTimer = setTimeout(() => {
+      this.clearRunWindow();
+      try { this.data('运行期观察窗口到期：远端命令仍在执行，本次调用不再等待其退出；结果未知，不会重放命令，请核验原操作。'); } catch { /* Still release the caller. */ }
+      try { this.observationTimeout(); } catch { /* Late observation must survive listener failures. */ }
+    }, OBSERVATION_LIMITS.runWindowMs);
+    this.runTimer.unref?.();
   }
 
   close(): void {
     this.clearStartup();
+    this.clearRunWindow();
     if (this.closed) return;
     this.closed = true;
     this.nativeAbort?.abort();
