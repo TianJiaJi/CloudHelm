@@ -57,7 +57,7 @@ export function operationOutcome(result: OperationResult): OperationOutcome {
 
 export function notStartedOutcome(code: string): OperationOutcome {
   const correctable = ['unsupported-probe', 'unsupported-authentication-form', 'unsupported-root-command', 'nested-privilege', 'conflicting-identity',
-    'remote-edit-source-changed', 'remote-edit-ambiguous', 'remote-edit-invalid'];
+    'remote-edit-source-changed', 'remote-edit-ambiguous', 'remote-edit-invalid', 'preauthorization-out-of-scope'];
   const primary: OutcomeNextAction = correctable.includes(code) ? 'revise-operation' : code === 'replay-protected' ? 'inspect-result' : 'user-decision';
   return { version: 2, receipt: 'rejected', handoff: 'not-sent', businessStart: 'not-started',
     liveness: 'unknown', exit: null, effects: 'none', nextActions: [primary], replay: 'never' };

@@ -58,8 +58,12 @@ export function ModelPicker({ models, selected, disabled, conversation, choose }
 const descriptions: Record<ReviewMode, string> = {
   ask: '普通读写自动执行；高影响或无法确认影响时询问。',
   'ai-review': '高影响或不透明操作先由独立模型审核；不确定时询问。',
-  permissive: '不透明操作可自动执行；已识别高影响仍询问，硬禁令和保护路径始终生效。'
+  permissive: '不透明操作可自动执行；已识别高影响仍询问，硬禁令和保护路径始终生效。',
+  preauthorized: '仅在用户预先声明的范围内自动执行；范围外操作不执行。'
 };
+/** Modes a conversation may switch between in this menu; 'preauthorized' stays
+ * host-level configuration because its scope is backend contract data. */
+const conversationModes: readonly ReviewMode[] = ['ask', 'ai-review', 'permissive'];
 
 export function PermissionPicker({ host, conversation, legacy, report }: {
   host?: HostView; conversation?: TaskView; legacy: boolean; report(error: string): void;
@@ -83,7 +87,7 @@ export function PermissionPicker({ host, conversation, legacy, report }: {
       </button>
     {permissions.anchor && host && conversation && <MenuSurface anchor={permissions.anchor} label="权限选择" placement="above" align="start" className={styles.picker} close={permissions.close}>
       <div className={styles.menuIntro}>仅当前对话 · {host.label}</div>
-      {(Object.keys(descriptions) as ReviewMode[]).map((mode) => <button type="button" key={mode} role="menuitem"
+      {conversationModes.map((mode) => <button type="button" key={mode} role="menuitem"
         className={mode === 'permissive' ? styles.permissive : undefined}
         aria-current={selectedMode === mode ? 'true' : undefined} onClick={() => void choose(mode)}>
         <span className={styles.permissionText}><strong>{reviewLabel[mode]}</strong><small>{descriptions[mode]}</small></span>

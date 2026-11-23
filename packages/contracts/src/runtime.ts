@@ -42,7 +42,9 @@ export type RuntimeCall =
   | { method: 'set-conversation-model'; taskId: string; profile: RuntimeProfile }
   | { method: 'stop-operation'; taskId: string }
   | { method: 'has-task'; taskId: string }
-  | { method: 'update-host-safety'; hostId: string; mode: ReviewMode; protectedReadPaths: string[]; protectedWritePaths: string[]; revision: number }
+  | { method: 'update-host-safety'; hostId: string; mode: ReviewMode; protectedReadPaths: string[]; protectedWritePaths: string[]; revision: number;
+      /** Present only when this update carries a pre-authorization scope change: the full new scope, or null to clear it. */
+      preauthorization?: import('./index.js').PreauthorizationScope | null }
   | { method: 'open-terminal'; hostId: string }
   | { method: 'close-terminal'; terminalId: string }
   | { method: 'terminal-input'; terminalId: string; data: string; humanIntent: boolean }

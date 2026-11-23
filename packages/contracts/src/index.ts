@@ -32,7 +32,7 @@ export type HostConnectionTestResult =
   | { status: 'failed'; code: HostTestFailure; stage: 'host' | 'jump' }
   | { status: 'trust-required'; requestId: string; stage: 'host' | 'jump'; address: string; port: number;
     fingerprint: string; expectedFingerprint?: string; expiresAt: number };
-export type ReviewMode = 'ask' | 'ai-review' | 'permissive';
+export type ReviewMode = 'ask' | 'ai-review' | 'permissive' | 'preauthorized';
 export type ReviewSelection = { kind: 'current' } | { kind: 'jev' } | { kind: 'model'; provider: string; modelId: string };
 export interface ClarificationQuestion {
   id: string;
@@ -125,6 +125,9 @@ export interface HostView extends HostDraft {
   protectedPaths: string[];
   protectedReadPaths?: string[];
   protectedWritePaths?: string[];
+  /** User-declared pre-authorization scope for defaultMode 'preauthorized';
+   * backend contract data, editing UI is intentionally not part of it. */
+  preauthorization?: import('./host-settings.js').PreauthorizationScope;
   defaultMode: ReviewMode;
   policyRevision: number;
 }
@@ -207,6 +210,11 @@ export interface OperationView {
   toolCallId?: string;
   verificationSource?: import('./verification-v3.js').VerificationSource;
   outputExpectation?: import('./verification-v3.js').OutputExpectation;
+  /** Present when the allowance came from the user-declared pre-authorization
+   * scope; audit projection only, never a replayable grant. */
+  decisionSource?: 'user-preauthorization';
+  preauthorizationMatch?: string;
+  autoAdjudicated?: true;
   /** Backend observed a terminal completion/code, never reconciliation prose; launch failure may still mean the payload did not start. */
   exitObserved?: boolean;
   completedAt?: number;

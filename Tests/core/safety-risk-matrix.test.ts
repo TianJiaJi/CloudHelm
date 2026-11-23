@@ -6,8 +6,8 @@ const analyzer = new BashAnalyzer();
 const operation = (command: string): Extract<ProposedOperation, { kind: 'command' }> => ({ id: 'op', kind: 'command', command,
   scope: { taskId: 'task', hostId: 'host', cwd: '/srv/app', runAs: 'user', terminalId: 'terminal', terminalGeneration: 1,
     policyRevision: 1, allowedWorkingRoots: ['/srv/app'], protectedPaths: [], goal: 'maintain application' } });
-const modes: ReviewMode[] = ['ask', 'ai-review', 'permissive'];
-const routed = { ask: 'ask', 'ai-review': 'evaluate', permissive: 'allow' } as const;
+const modes: ReviewMode[] = ['ask', 'ai-review', 'permissive', 'preauthorized'];
+const routed = { ask: 'ask', 'ai-review': 'evaluate', permissive: 'allow', preauthorized: 'ask' } as const;
 
 it.each(['ss -ltnp', 'df -h && free -m', 'ss -ltnp | grep nginx', 'npm --version'])('keeps proven diagnostics automatic: %s', async (command) => {
   const parsed = await analyzer.analyze(command), op = operation(command);
@@ -37,7 +37,8 @@ it.each(['rsync ./public host:/srv/public', 'git push origin main', 'curl --form
 it.each(['customctl inspect', 'docker --future-option build .', 'git --future-option push'])('keeps unknown syntax unproven: %s', async (command) => {
   const parsed = await analyzer.analyze(command);
   for (const mode of modes) expect(decideSafety(operation(command), { mode, revision: 1 }, parsed))
-    .toMatchObject({ verdict: routed[mode], ruleId: mode === 'permissive' ? 'permissive-mode' : 'uncertain-command' });
+    .toMatchObject({ verdict: mode === 'preauthorized' ? 'deny' : routed[mode],
+      ruleId: mode === 'permissive' ? 'permissive-mode' : mode === 'preauthorized' ? 'preauthorization-out-of-scope' : 'uncertain-command' });
 });
 
 it('checks protected data before transfer review in every mode', async () => {
@@ -80,7 +81,8 @@ it.each([
 it.each(['sudo mkdir -p /srv/app/extra', 'sudo systemctl status demo-h03.service'])('keeps privileged wrappers outside the ordinary fast path: %s', async (command) => {
   const parsed = await analyzer.analyze(command);
   for (const mode of modes) expect(decideSafety(operation(command), { mode, revision: 1 }, parsed))
-    .toMatchObject({ verdict: routed[mode], ruleId: mode === 'permissive' ? 'permissive-mode' : 'uncertain-command' });
+    .toMatchObject({ verdict: mode === 'preauthorized' ? 'deny' : routed[mode],
+      ruleId: mode === 'permissive' ? 'permissive-mode' : mode === 'preauthorized' ? 'preauthorization-out-of-scope' : 'uncertain-command' });
 });
 
 it('keeps the backend service probe automatic even for a unit named like an action', async () => {

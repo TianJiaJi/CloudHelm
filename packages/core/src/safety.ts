@@ -7,7 +7,7 @@ import { commandTransfer } from './command-transfer.js';
 import path from 'node:path';
 import { describeCommandReview } from './command-review-reasons.js';
 import { callDirectory, hasIncompleteCommandSemantics, resolveCommandDirectory, resolveCommandPath } from './command-semantics.js';
-import type { CommandAnalysis, CommandCall, ProposedOperation, SafetyDecision, SafetySettings } from './model.js';
+import type { CommandAnalysis, CommandCall, PreauthorizationScope, ProposedOperation, SafetyDecision, SafetySettings } from './model.js';
 
 const CRITICAL_TREES = new Set(['/', '/etc', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib', '/boot', '/home', '/root', '/var', '/var/lib', '/var/lib/docker', '/bin', '/sbin', '/lib', '/lib64', '/dev', '/proc', '/sys']);
 
@@ -17,6 +17,9 @@ const ORDINARY_COMMANDS = new Set(['mkdir', 'touch', 'cp', 'mv', 'install', 'tee
   'sed', 'patch', 'tar', 'unzip', 'git', 'python', 'python3', 'node',
   'systemctl', 'service', 'docker', 'apt', 'apt-get', 'dnf', 'yum', 'apk', 'brew', 'rsync', 'rm', 'rmdir']);
 const OPAQUE_COMMANDS = new Set(['bash', 'sh', 'zsh', 'fish', 'python', 'python3', 'node', 'perl', 'ruby', 'php', 'eval', 'source', '.']);
+/** Programs whose effects cannot be bounded by a declared command shape; they
+ * never match a pre-authorization scope even if a stored scope names them. */
+const PREAUTHORIZED_NEVER_MATCH = new Set([...OPAQUE_COMMANDS, 'sudo', 'su', 'env', 'xargs', 'nohup', 'exec']);
 const HIGH_IMPACT_COMMANDS = new Set(['useradd', 'userdel', 'usermod', 'groupadd', 'groupdel', 'passwd', 'chpasswd',
   'iptables', 'ip6tables', 'nft', 'ufw', 'firewall-cmd', 'shutdown', 'reboot', 'poweroff']);
 /** Service-manager actions that change what code runs now or at boot, or take the host down. */
@@ -343,6 +346,37 @@ function validRecoveryProbe(operation: Extract<ProposedOperation, { kind: 'comma
     && validServiceUnit(operation.command.slice(RECOVERY_PROBE_QUERY_PREFIX.length));
 }
 
+/** Pure pre-authorization scope match. Hard gates, disclosure and identity checks
+ * run before this in decideSafety and never depend on it; a match only lifts the
+ * uncertainty tier for the exact declared shape. Interpreters and other opaque
+ * entry points never match, even when a saved scope names them: their effects
+ * cannot be bounded by the declared command shape. */
+export function matchPreauthorization(operation: ProposedOperation, scope: PreauthorizationScope, analysis?: CommandAnalysis): string | undefined {
+  if (operation.kind === 'command') {
+    if (!analysis || analysis.hasError || analysis.hasCompound || analysis.hasPipeline || analysis.hasExpansion || analysis.hasRedirection
+      || analysis.calls.length !== 1) return undefined;
+    const call = analysis.calls[0]!;
+    if (call.dynamic || PREAUTHORIZED_NEVER_MATCH.has(path.posix.basename(call.name))) return undefined;
+    const program = path.posix.basename(call.name);
+    for (const rule of scope.commands) {
+      if (rule.program !== program) continue;
+      const prefix = rule.argumentPrefix ?? [];
+      if (prefix.every((expected, index) => call.args[index] === expected)) {
+        return prefix.length ? `command:${program} ${prefix.join(' ')}` : `command:${program}`;
+      }
+    }
+    return undefined;
+  }
+  if (operation.kind !== 'upload' && operation.kind !== 'write-file' && operation.kind !== 'delete-path') return undefined;
+  if (!scope.kinds.includes(operation.kind)) return undefined;
+  const target = literalPath(operation.kind === 'upload' ? operation.remotePath : operation.path, operation.scope.cwd);
+  if (!target) return undefined;
+  for (const root of scope.paths) {
+    if (isInside(target, root)) return `${operation.kind}:${path.posix.resolve(root)}`;
+  }
+  return undefined;
+}
+
 export function decideSafety(operation: ProposedOperation, settings: SafetySettings, analysis?: CommandAnalysis): SafetyDecision {
   const impact = analyzeOperationImpact(operation, analysis);
   if (settings.revision !== operation.scope.policyRevision) return decision('error', 'policy-stale', 'Policy changed after this operation was proposed');
@@ -446,9 +480,30 @@ export function decideSafety(operation: ProposedOperation, settings: SafetySetti
       ? 'Remove named private recovery material using operation-bound root authentication'
       : 'Remove named private recovery material in the target directory', settings);
   }
-  if (operation.kind !== 'command') return decision('allow', 'structured-file', 'Bounded file operation with a literal target');
+  if (operation.kind !== 'command') {
+    // Mode three keeps file mutations inside the user-declared scope; every
+    // other verdict above (privileged edits, high-impact targets, recovery
+    // cleanup) is mode-independent and already settled.
+    if (settings.mode === 'preauthorized' && (operation.kind === 'upload' || operation.kind === 'write-file' || operation.kind === 'delete-path')) {
+      const match = settings.preauthorization && matchPreauthorization(operation, settings.preauthorization);
+      if (match) {
+        return { ...decision('allow', 'preauthorized-file', `预授权范围命中（${match}）：按用户预先声明的范围自动允许；保护路径与高影响检查不因预授权豁免。`),
+          decisionSource: 'user-preauthorization', preauthorizationMatch: match, autoAdjudicated: true };
+      }
+      return decision('deny', 'preauthorization-out-of-scope', '文件操作目标不在主机预授权范围内，未执行；请调整目标路径，或由用户修改预授权范围后重试。');
+    }
+    return decision('allow', 'structured-file', 'Bounded file operation with a literal target');
+  }
   const reason = describeCommandReview(analysis ? analyzeQueryImpact(analysis).reviewReasons ?? ['unrecognized-operation'] : ['parse-incomplete']);
   if (settings.mode === 'ask') return { ...decision('ask', 'uncertain-command', reason), impact: 'unknown' };
   if (settings.mode === 'ai-review') return { ...decision('evaluate', 'uncertain-command', reason), impact: 'unknown' };
+  if (settings.mode === 'preauthorized') {
+    const match = settings.preauthorization && matchPreauthorization(operation, settings.preauthorization, analysis);
+    if (match) {
+      return { ...decision('allow', 'preauthorized-command', `预授权范围命中（${match}）：按用户预先声明的范围自动允许；硬禁令、高影响与身份检查不因预授权豁免。原始依据：${reason}`),
+        decisionSource: 'user-preauthorization', preauthorizationMatch: match, autoAdjudicated: true };
+    }
+    return { ...decision('deny', 'preauthorization-out-of-scope', `命令不在主机预授权范围内，未执行。${reason}`), impact: 'unknown' };
+  }
   return decision('allow', 'permissive-mode', `按所选宽松模式允许，影响未经确认；${reason}`);
 }

@@ -293,11 +293,14 @@ export class ExecutionScheduler {
           && !operation.scope.sessionId && !operation.privilege && !operation.processControl && !operation.executionMode),
       isOperationActive: (operation) => (!this.deps.remoteBlocked() && ['running', 'waiting-review'].includes(this.deps.status()))
         || this.deps.background().hasOperationLease(operation),
-      settings: (hostId) => ({ mode: this.deps.task.reviewModesByHost?.[hostId]
-        ?? this.deps.hosts.find((host) => host.id === hostId)?.defaultMode ?? 'ask',
-        revision: this.deps.hosts.find((host) => host.id === hostId)?.policyRevision ?? -1,
-        conversationRevision: this.deps.task.reviewRevision ?? 1,
-        reviewerRevision: this.deps.profile().reviewer?.revision ?? 1 })
+      settings: (hostId) => {
+        const host = this.deps.hosts.find((candidate) => candidate.id === hostId);
+        return { mode: this.deps.task.reviewModesByHost?.[hostId] ?? host?.defaultMode ?? 'ask',
+          revision: host?.policyRevision ?? -1,
+          conversationRevision: this.deps.task.reviewRevision ?? 1,
+          reviewerRevision: this.deps.profile().reviewer?.revision ?? 1,
+          ...(host?.preauthorization ? { preauthorization: host.preauthorization } : {}) };
+      }
     });
   }
 

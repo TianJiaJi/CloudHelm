@@ -1,4 +1,20 @@
-export type ReviewMode = 'ask' | 'ai-review' | 'permissive';
+export type ReviewMode = 'ask' | 'ai-review' | 'permissive' | 'preauthorized';
+
+/** One bounded command shape a user pre-authorized for a host. */
+export interface PreauthorizationCommandRule {
+  program: string;
+  argumentPrefix?: string[];
+}
+
+/** User-declared, versioned pre-authorization scope. Hard gates, disclosure,
+ * identity and write-lock checks never depend on this scope; matching only
+ * lifts the uncertainty tier for exactly the declared shapes. */
+export interface PreauthorizationScope {
+  revision: number;
+  commands: PreauthorizationCommandRule[];
+  paths: string[];
+  kinds: Array<'upload' | 'write-file' | 'delete-path'>;
+}
 
 export interface OperationIntent {
   originalGoal: string;
@@ -170,6 +186,11 @@ export interface SafetyDecision {
   /** Receipt metadata for an 'adjudication-required' decision: a reference the
    * proposer returns with its explicit confirmation, never a replayable grant. */
   adjudication?: { id: string; expiresAt: number; fingerprint: string };
+  /** Present when the allowance comes from a user-declared pre-authorization
+   * scope rather than model review; the match names the exact scope entry. */
+  decisionSource?: 'user-preauthorization';
+  preauthorizationMatch?: string;
+  autoAdjudicated?: true;
 }
 
 export interface SafetySettings {
@@ -177,6 +198,7 @@ export interface SafetySettings {
   revision: number;
   conversationRevision?: number;
   reviewerRevision?: number;
+  preauthorization?: PreauthorizationScope;
 }
 
 export interface OperationResult {

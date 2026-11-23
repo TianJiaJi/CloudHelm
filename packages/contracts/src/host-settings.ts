@@ -57,3 +57,34 @@ export function validateHostConnectionSettings(host: { auth: string; privateKeyP
   if (environment.some(({ name }) => /password|passwd|passphrase|secret|token|cookie|credential|api_?key/iu.test(name))) throw new Error('秘密不能保存在普通环境变量中，请使用专用凭据输入');
   if (host.connection?.session?.keepaliveCommand?.trim() && !host.connection.session.keepaliveIntervalMs) throw new Error('请设置自定义保活命令的执行周期');
 }
+
+/** Interpreters and other opaque entry points never match a pre-authorization
+ * scope: their effects cannot be bounded by a declared command shape. */
+export const PREAUTHORIZED_EXCLUDED_PROGRAMS = ['bash', 'sh', 'zsh', 'fish', 'python', 'python3', 'node', 'perl', 'ruby', 'php', 'eval', 'source', 'env', 'xargs', 'sudo', 'su', 'nohup', 'exec'] as const;
+
+export const PreauthorizationCommandRuleSchema = Type.Object({
+  program: Type.String({ minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]*$' }),
+  argumentPrefix: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128, pattern: '^[^\\u0000\\r\\n]*$' }), { minItems: 1, maxItems: 8 }))
+}, { additionalProperties: false });
+export type PreauthorizationCommandRule = Static<typeof PreauthorizationCommandRuleSchema>;
+export const PreauthorizationScopeSchema = Type.Object({
+  revision: Type.Integer({ minimum: 1 }),
+  commands: Type.Array(PreauthorizationCommandRuleSchema, { maxItems: 32 }),
+  paths: Type.Array(Type.String({ minLength: 2, maxLength: 4096, pattern: '^/[^\\u0000]*$' }), { maxItems: 32 }),
+  kinds: Type.Array(Type.Union([Type.Literal('upload'), Type.Literal('write-file'), Type.Literal('delete-path')]), { maxItems: 3, uniqueItems: true })
+}, { additionalProperties: false });
+export type PreauthorizationScope = Static<typeof PreauthorizationScopeSchema>;
+
+/** Called at the trusted IPC boundary, in addition to structural validation. */
+export function validatePreauthorizationScope(scope: PreauthorizationScope): void {
+  if (scope.paths.some((value) => /(^|\/)\.\.?(\/|$)/u.test(value) || (value.endsWith('/') && value !== '/'))) {
+    throw new Error('预授权路径必须是规范化的绝对路径，不能包含 .. 或以 / 结尾');
+  }
+  if (new Set(scope.paths).size !== scope.paths.length) throw new Error('预授权路径不能重复');
+  if (scope.commands.some((rule) => PREAUTHORIZED_EXCLUDED_PROGRAMS.includes(rule.program as (typeof PREAUTHORIZED_EXCLUDED_PROGRAMS)[number]))) {
+    throw new Error('解释器与提权入口不能进入预授权范围；它们的效果无法被命令形态约束');
+  }
+  if (new Set(scope.commands.map((rule) => `${rule.program}\u0000${(rule.argumentPrefix ?? []).join('\u0001')}`)).size !== scope.commands.length) {
+    throw new Error('预授权命令规则不能重复');
+  }
+}

@@ -196,7 +196,7 @@ export class WorkerServer {
       case 'update-host-safety':
         this.approvals.cancelWhere((pending) => pending.hostId === call.hostId);
         for (const runner of this.tasks.values()) runner.updateHostSafety(call.hostId, call.mode,
-          call.protectedReadPaths, call.protectedWritePaths, call.revision);
+          call.protectedReadPaths, call.protectedWritePaths, call.revision, call.preauthorization);
         return;
       case 'update-conversation-review-mode': {
         this.approvals.cancelWhere((pending) => pending.taskId === call.taskId && pending.hostId === call.hostId);

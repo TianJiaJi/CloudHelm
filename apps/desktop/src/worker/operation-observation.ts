@@ -7,6 +7,9 @@ export function applyOperationDecision(operation: OperationView, decision: Safet
   operation.reason = decision.reason;
   operation.ruleId = decision.ruleId;
   operation.manualReviewAvailable = decision.ruleId === 'ai-review-deny' && consecutiveAiDenials + 1 < 3;
+  operation.decisionSource = decision.decisionSource;
+  operation.preauthorizationMatch = decision.preauthorizationMatch;
+  operation.autoAdjudicated = decision.autoAdjudicated;
 }
 
 /** One projection for both synchronous results and late transport completions.

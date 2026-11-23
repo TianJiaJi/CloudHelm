@@ -19,7 +19,7 @@ import { taskContextSnapshot } from './task-context.js';
 import { TaskProgress } from './task-progress.js';
 import { observeProgressTools } from './task-progress-observer.js';
 import { RequestBudgetError, PrivilegeError, privilegeGuidance, safeDiagnostic, type ConversationSession, type SessionStorage, type DiagnosticEvent, type OperationResult, type OperationExecutor, type OperationScope, type ScriptInspector } from '@cloudhelm/core';
-import type { LocalScope, OperationView, InterruptionSource, UserInterruption, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
+import type { LocalScope, OperationView, InterruptionSource, UserInterruption, PreauthorizationScope, ReviewMode, ResumeReason, TaskStatus, TaskView } from '@cloudhelm/contracts';
 import { isActiveTaskStatus } from '@cloudhelm/contracts';
 import type { RuntimeHost, RuntimeProfile } from '@cloudhelm/contracts/runtime';
 import { deriveInputIntent } from './task-intent.js';
@@ -349,7 +349,8 @@ export class TaskRunner {
     return opened;
   }
 
-  updateHostSafety(hostId: string, mode: ReviewMode, protectedReadPaths: string[], protectedWritePaths: string[], revision: number): void {
+  updateHostSafety(hostId: string, mode: ReviewMode, protectedReadPaths: string[], protectedWritePaths: string[], revision: number,
+    preauthorization?: PreauthorizationScope | null): void {
     const host = this.hosts.find((candidate) => candidate.id === hostId);
     if (!host) return;
     this.reviews.invalidate();
@@ -359,6 +360,8 @@ export class TaskRunner {
     host.protectedWritePaths = [...protectedWritePaths];
     host.protectedPaths = [...new Set([...protectedReadPaths, ...protectedWritePaths])];
     host.policyRevision = revision;
+    if (preauthorization === null) delete host.preauthorization;
+    else if (preauthorization !== undefined) host.preauthorization = preauthorization;
   }
 
   updateConversationReviewMode(hostId: string, mode: ReviewMode, revision: number): void {

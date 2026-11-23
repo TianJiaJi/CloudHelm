@@ -10,7 +10,7 @@ const invoke = (name: string, ...args: unknown[]) => handlers.get(`cloudhelm:${n
 beforeEach(() => handlers.clear());
 function setup() {
   const host = { id: 'host', defaultMode: 'ask', policyRevision: 1, protectedPaths: ['/protected'] } as HostView;
-  const call = vi.fn(async () => undefined);
+  const call = vi.fn(async (_request: unknown) => undefined);
   const state = { getHost: () => host, updateHost: vi.fn((_id, change) => Object.assign(host, change)) };
   registerHostSafetyIpc(state as unknown as AppState, { call } as unknown as RuntimeBridge);
   return { host, call, state };
@@ -38,5 +38,45 @@ describe('host review mode IPC', () => {
     const { call } = setup();
     await expect(invoke('update-host-review-mode', 'host', 'root')).rejects.toThrow('Invalid safety');
     expect(call).not.toHaveBeenCalled();
+  });
+  it('accepts the preauthorized mode as a host default', async () => {
+    const { host } = setup();
+    await invoke('update-host-review-mode', 'host', 'preauthorized');
+    expect(host).toMatchObject({ defaultMode: 'preauthorized', policyRevision: 2 });
+  });
+});
+
+describe('host pre-authorization scope IPC', () => {
+  const scope = { revision: 1, commands: [{ program: 'systemctl', argumentPrefix: ['status'] }], paths: ['/srv/app'], kinds: ['write-file' as const] };
+  it('validates, persists and forwards a declared scope with a policy revision bump', async () => {
+    const { host, call, state } = setup();
+    await invoke('update-host-preauthorization', 'host', scope);
+    expect(call).toHaveBeenCalledOnce();
+    expect(call.mock.calls[0]![0]).toMatchObject({ method: 'update-host-safety', hostId: 'host', mode: 'ask',
+      protectedReadPaths: ['/protected'], protectedWritePaths: ['/protected'], revision: 2, preauthorization: scope });
+    expect(state.updateHost).toHaveBeenCalledWith('host', expect.objectContaining({ preauthorization: scope, policyRevision: 2 }));
+    expect(host.preauthorization).toEqual(scope);
+  });
+  it('clears the scope with an explicit null and forwards null to the worker', async () => {
+    const { call } = setup();
+    await invoke('update-host-preauthorization', 'host', null);
+    expect(call.mock.calls[0]![0]).toMatchObject({ method: 'update-host-safety', preauthorization: null });
+  });
+  it('rejects structurally or semantically invalid scopes before any update', async () => {
+    const { call, state } = setup();
+    for (const invalid of [
+      { ...scope, paths: ['srv/relative'] },
+      { ...scope, paths: ['/srv/../etc'] },
+      { ...scope, paths: ['/srv/app/'] },
+      { ...scope, commands: [{ program: 'bash' }] },
+      { ...scope, commands: [{ program: 'a b' }] },
+      { ...scope, kinds: ['reboot' as never] },
+      { ...scope, revision: 0 },
+      { commands: [], paths: [], kinds: [], revision: '1' as never }
+    ]) {
+      await expect(invoke('update-host-preauthorization', 'host', invalid)).rejects.toThrow();
+    }
+    expect(call).not.toHaveBeenCalled();
+    expect(state.updateHost).not.toHaveBeenCalled();
   });
 });
