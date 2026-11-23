@@ -11,7 +11,8 @@ export interface RecoveryDisposition { action: RecoveryActionKind; actionId: str
 export class RecoveryDecisionStore {
   constructor(private readonly store: SqliteStore,
     private readonly operations: Map<string, OperationView>,
-    private readonly publish: () => void) {}
+    private readonly publish: () => void,
+    private readonly observe?: (operation: OperationView) => void) {}
 
   /** Persists an explicit user risk acceptance. The remote outcome stays unknown:
    * this only records that the user took over the risk so the write lock can be
@@ -61,6 +62,7 @@ export class RecoveryDecisionStore {
   private commit(operationId: string, updated: OperationView): void {
     this.store.put('operations', operationId, updated);
     this.operations.set(operationId, updated);
+    try { this.observe?.(updated); } catch { /* Debug capture cannot affect recovery. */ }
     this.publish();
   }
 }

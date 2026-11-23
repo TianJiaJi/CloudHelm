@@ -525,7 +525,11 @@ export interface StoredAppearanceSettings { mode: 'system' | 'light' | 'dark' }
 /** Persisted UI layout; 'ssh' keeps the terminal-first workspace. */
 export interface StoredLayoutSettings { mode: 'ssh' | 'agent' }
 
+export type DebugReplayAction = 'status' | 'enable' | 'disable' | 'read' | 'clear';
+export interface DebugReplayView { enabled: boolean; file: string; error?: string; text?: string }
+
 export interface DesktopAPI {
+  debugReplay(action: DebugReplayAction): Promise<DebugReplayView>;
   openReferenceDraft(scope: import('./message-content.js').ReferenceDraftScope): Promise<string>;
   claimDraftReferences(draftId: string, referenceIds: string[]): Promise<void>;
   releaseReferenceDraft(draftId: string): Promise<void>;

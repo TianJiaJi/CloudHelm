@@ -53,6 +53,7 @@ const api: DesktopAPI = {
   shortcuts: () => invoke('shortcuts'),
   saveShortcuts: (settings) => invoke('save-shortcuts', settings),
   appearanceSettings: () => invoke('appearance-settings'),
+  debugReplay: (action) => invoke('debug-replay', action),
   saveAppearanceSettings: (settings) => invoke('save-appearance-settings', settings),
   layoutSettings: () => invoke('layout-settings'),
   saveLayoutSettings: (settings) => invoke('save-layout-settings', settings),

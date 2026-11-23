@@ -60,7 +60,8 @@ export class AppState {
   private readonly inputStore: ConversationInputStore;
   private revalidatePreparations?: () => void;
 
-  constructor(private readonly store: SqliteStore, private readonly emit: (event: AppEvent) => void) {
+  constructor(private readonly store: SqliteStore, private readonly emit: (event: AppEvent) => void,
+    observeRecovery?: (operation: OperationView) => void) {
     for (const host of store.list<HostView>('hosts')) this.hosts.set(host.id, { ...host, status: 'disconnected',
       protectedReadPaths: host.protectedReadPaths ?? host.protectedPaths ?? [],
       protectedWritePaths: host.protectedWritePaths ?? host.protectedPaths ?? [], policyRevision: host.policyRevision ?? 1 });
@@ -79,7 +80,7 @@ export class AppState {
     }
     for (const operation of store.list<OperationView>('operations')) this.operations.set(operation.id,
       recoverOperation(operation, 'Application exited before outcome was recorded'));
-    this.recoveryDecisions = new RecoveryDecisionStore(store, this.operations, () => this.publish());
+    this.recoveryDecisions = new RecoveryDecisionStore(store, this.operations, () => this.publish(), observeRecovery);
     for (const task of this.tasks.values()) this.execution[task.id] = { model: 'idle', stopping: false, canStop: false,
       remote: [...this.operations.values()].some((op) => op.taskId === task.id && op.status === 'unknown' && !op.reconciledAt) ? 'unknown' : 'idle' };
     this.messages.push(...store.list<AppSnapshot['messages'][number]>('messages').sort((a, b) => a.createdAt - b.createdAt));

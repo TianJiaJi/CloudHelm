@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppSnapshot, ModelProfileDraft, ModelProviderSettings, ModelProviderView, ReviewSelection } from '@cloudhelm/contracts';
 import { errorMessage, inlineError } from './error-presentation.js';
 import { ShortcutSettings } from './shortcut-settings.js';
+import { DebugReplaySettings } from './debug-replay-settings.js';
 import { Button, MenuSurface } from './ui/index.js';
 import { useMenuAnchor } from './composer-controls.js';
 import { Icon } from './ui-helpers.js';
@@ -385,7 +386,7 @@ export function ModelSettingsDialog({ current, close, report, registerNavigation
 
     {section === 'shortcuts' && <ShortcutSettings report={callback.current.report} />}
 
-    {section === 'appearance' && <AppearanceSettings />}
+    {section === 'appearance' && <><AppearanceSettings /><DebugReplaySettings report={callback.current.report} /></>}
 
     <footer className={styles.footer}>
       <p>{section === 'api' ? '默认模型用于新对话；已有对话可在输入框中切换模型。'

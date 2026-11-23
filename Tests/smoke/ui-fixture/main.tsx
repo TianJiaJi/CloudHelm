@@ -31,6 +31,7 @@ let layout = { mode: sessionStorage.getItem('fixture-layout') === 'agent' ? 'age
 
 const referenceBodies = new Map<string, ReferenceBody>();
 const api: DesktopAPI = {
+  debugReplay: async () => ({ enabled: false, file: 'fixture/conversation.log' }),
   openReferenceDraft: async () => crypto.randomUUID(),
   claimDraftReferences: async (_draftId, ids) => { if (ids.some((id) => !referenceBodies.has(id))) throw new Error('引用已失效'); },
   releaseReferenceDraft: async () => {},

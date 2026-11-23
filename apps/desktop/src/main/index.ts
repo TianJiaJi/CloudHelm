@@ -2,6 +2,7 @@ import { ReferenceStore } from './reference-store.js';
 import { acquireProfileLock } from './profile-instance.js';
 import { resumeConversationCleanup } from './conversation-cleanup.js';
 import { DiagnosticLogger, diagnosticSettings } from './diagnostic-logger.js';
+import { DebugReplay } from './debug-replay.js';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -59,7 +60,10 @@ function restoreLocalSelections(tokens: string[], scopes: LocalScope[]): void {
   tokens.forEach((token, index) => selectedLocalPaths.set(token, scopes[index]!));
 }
 
+let debugReplay: DebugReplay | undefined;
+
 function publish(event: AppEvent): void {
+  debugReplay?.event(event);
   if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('cloudhelm:event', event);
 }
 
@@ -96,6 +100,11 @@ async function connectOnce(hostId: string, signal: AbortSignal): Promise<void> {
 }
 
 function registerIpc(): void {
+  ipcMain.handle('cloudhelm:debug-replay', (event, action: Parameters<DesktopAPI['debugReplay']>[0]) => {
+    if (!debugReplay || !window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame)
+      throw new Error('无效的调试日志接收方');
+    return debugReplay.control(action);
+  });
   const hostTester = new HostConnectionTester(state, (host, jump) => runtime.call({ method: 'test-host', host, jump }));
   ipcMain.handle('cloudhelm:test-host', (_event, input: Parameters<DesktopAPI['testHostConnection']>[0]) => hostTester.test(input));
   const conversation = registerConversationIpc({ store, references, sessionRoot: join(app.getPath('userData'), 'pi-sessions'), state, runtime, connectHost, takeSelections: takeLocalSelections, restoreSelections: restoreLocalSelections });
@@ -261,7 +270,8 @@ void app.whenReady().then(async () => {
   else Menu.setApplicationMenu(null);
   store = new SqliteStore(join(app.getPath('userData'), 'cloudhelm.sqlite'));
   store.beginReferenceSession(randomUUID());
-  state = new AppState(store, publish);
+  debugReplay = new DebugReplay(app.getPath('userData'));
+  state = new AppState(store, publish, (operation) => debugReplay?.operation(operation));
   references = new ReferenceStore(store, state);
   const diagnostics = new DiagnosticLogger(diagnosticSettings(!!process.env.ELECTRON_RENDERER_URL, process.env, app.getPath('userData')));
   diagnostics.write({ event: 'runtime.started', level: 'info' });
@@ -269,11 +279,15 @@ void app.whenReady().then(async () => {
     if (!state.acceptsEvent(event)) return;
     if (event.type === 'terminal-command' || event.type === 'terminal-data' || event.type === 'terminal-state') references.record(event);
     state.record(event);
+    if (event.type === 'operation') debugReplay?.operation(event.value);
     if (!testWindow.hidden && !window?.isFocused() && Notification.isSupported()
       && (event.type === 'approval-open' || event.type === 'input-open' || event.type === 'approval-reminder')) {
       new Notification({ title: 'CloudHelm', body: event.type === 'approval-reminder' ? '一项审批已超时，请尽快处理或续期。' : 'AI 需要你处理一项请求。' }).show();
     }
-  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => diagnostics.write(event), (command) => state.requestBudget(command), (operation) => state.commitOperation(operation), (value) => {
+  }, (taskId, operationId, cursor) => state.readOperationLog(taskId, operationId, cursor), () => { diagnostics.write({ event: 'runtime.stopped', level: 'error' }); state.runtimeStopped(); }, (event) => { diagnostics.write(event); debugReplay?.diagnostic(event); }, (command) => state.requestBudget(command), (operation) => {
+    state.commitOperation(operation);
+    debugReplay?.operation(operation);
+  }, (value) => {
     state.commitInput(value);
     if (!testWindow.hidden && !window?.isFocused() && Notification.isSupported()
       && (value.status === 'expired' || value.status === 'failed'))
