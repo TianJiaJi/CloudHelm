@@ -60,7 +60,7 @@ async function setup(options: { singleLarge?: boolean; reply?: () => Promise<Fix
     connectHost: async () => { throw new Error('Test must not connect SSH'); },
     takeSelections: () => [], restoreSelections() {} });
   const input: StructuredSend = { conversationId: task.id, hostId: null, localSelectionTokens: [],
-    document: { requestId: 'new-real-input', parts: [{ type: 'text', text: 'New explicit inspect-only request. '.repeat(900) }] } };
+    document: { requestId: 'new-real-input', parts: [{ type: 'text', text: 'New explicit inspect-only request. '.repeat(700) }] } };
   return { state, store, worker, task, input, fixture, original, file, calls, events, budgetCalls, closed,
     hold: (next: typeof hold) => { hold = next; } };
 }

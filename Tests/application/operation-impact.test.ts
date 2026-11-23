@@ -34,6 +34,7 @@ it('supplies the same impact dimensions to independent review without changing a
   });
   const gate = new SafetyGate({ analyzer: new BashAnalyzer(), executor: { execute }, evaluator: { evaluate },
     approvals: { requestApproval }, settings: () => ({ mode: 'ai-review', revision: 1 }),
+    independentReview: () => true,
     lease: { currentGeneration: () => 1, isAgentOwner: () => true },
     audit: { proposed: async () => {}, decided: async () => {}, completed: async () => {} } });
   expect((await gate.execute(operation)).decision.ruleId).toBe('ai-review-deny');

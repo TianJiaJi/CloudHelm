@@ -54,6 +54,12 @@ it('keeps real input and answered clarification in review, then restores the per
     { event: (event) => events.push(structuredClone(event)), requestApproval: async () => false, cancelApproval() {} },
     undefined, undefined, { id: task.id, directory, restore });
   let runner = make(task, false);
+  // A dedicated reviewer keeps the independent-review port; without it the
+  // ai-review tier runs the self-adjudication protocol and never consults
+  // this fixture's review endpoint.
+  const dedicatedReviewer = () => runner.setReviewProfile({ selection: { kind: 'model', provider: 'cloudhelm-custom',
+    modelId: 'fixture' }, provider: 'cloudhelm-custom', modelId: 'fixture', apiKey: 'dummy', baseUrl: fixture.baseUrl, revision: 1 });
+  dedicatedReviewer();
   try {
     const started = runner.start(false, undefined, undefined, initial);
     await vi.waitFor(() => expect(events.some((event) => event.type === 'clarification' && event.value.status === 'pending')).toBe(true), { timeout: 15000 });
@@ -84,6 +90,7 @@ it('keeps real input and answered clarification in review, then restores the per
     runner.dispose();
     const beforeRestore = events.filter((event) => event.type === 'task-intent').length;
     runner = make({ ...task, intent: saved, status: 'failed', resumeReason: 'model' }, true);
+    dedicatedReviewer();
     await runner.start(true);
     expect(count).toBe(4);
     expect(events.filter((event) => event.type === 'task-intent')).toHaveLength(beforeRestore);
