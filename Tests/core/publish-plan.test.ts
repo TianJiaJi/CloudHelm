@@ -12,18 +12,34 @@ describe('publish plan', () => {
   it('builds two literal scripts and their su wraps for the plan input', () => {
     const plan = buildPublishPlan(input);
     expect(plan).toBeDefined();
+    expect(plan!.candidateScript).toContain('test -c /dev/full || exit 12');
     expect(plan!.candidateScript).toContain(`test ! -e '${input.targetPath}' || exit 10`);
     expect(plan!.candidateScript).toContain(`test ! -L '${input.targetPath}' || exit 10`);
-    expect(plan!.candidateScript).toContain(`find '${input.stagingPath}' -maxdepth 0 -type f -size 128c || exit 11`);
+    expect(plan!.candidateScript).toContain(`test ! -L '${input.stagingPath}' || exit 11`);
+    expect(plan!.candidateScript).toContain(`test -f '${input.stagingPath}' || exit 11`);
+    expect(plan!.candidateScript).toContain(`find '${input.stagingPath}' -maxdepth 0 -type f -size 128c -fprint /dev/full && exit 11`);
     expect(plan!.candidateScript).toContain(`dd if='${input.stagingPath}' of='${plan!.candidatePath}' conv=excl || exit 13`);
-    expect(plan!.candidateScript).toContain(`chmod '644' '${plan!.candidatePath}'`);
-    expect(plan!.candidateScript).toContain(`chown 'root:root' '${plan!.candidatePath}'`);
-    expect(plan!.candidateScript).toContain(`find '${plan!.candidatePath}' -maxdepth 0 -type f -user 'root' -group 'root' -perm 644`);
+    expect(plan!.candidateScript).toContain(`chmod '600' '${plan!.candidatePath}'`);
+    expect(plan!.candidateScript).not.toContain(`chown '${input.owner}' '${plan!.candidatePath}'`);
     expect(plan!.candidateScript).toContain(`sha256sum '${plan!.candidatePath}'`);
     expect(plan!.candidateScript).toContain('cloudhelm-publish: candidate ready');
-    expect(plan!.commitScript).toContain(`ln '${plan!.candidatePath}' '${input.targetPath}' || exit 20`);
-    expect(plan!.commitScript).toContain(`sha256sum '${input.targetPath}'`);
-    expect(plan!.commitScript).toContain(`find '${input.targetPath}' -maxdepth 0 -type f -user 'root' -group 'root' -perm 644 || exit 22`);
+    expect(plan!.commitScript).toContain('test -c /dev/full || exit 21');
+    expect(plan!.commitScript).toContain(`test ! -e '${input.targetPath}' || exit 20`);
+    expect(plan!.commitScript).toContain(`test ! -L '${input.targetPath}' || exit 20`);
+    expect(plan!.commitScript).toContain(`test -f '${plan!.candidatePath}' || exit 21`);
+    expect(plan!.commitScript).toContain(`find '${plan!.candidatePath}' -maxdepth 0 -type f -user root -perm 600 -fprint /dev/full && exit 21`);
+    expect(plan!.commitScript).toContain(`ln -T '${plan!.candidatePath}' '${input.targetPath}' || exit 20`);
+    expect(plan!.commitScript).toContain(`chown '${input.owner}' '${input.targetPath}' || exit 22`);
+    expect(plan!.commitScript).toContain(`chmod '644' '${input.targetPath}' || exit 22`);
+    expect(plan!.commitScript).toContain(`find '${input.targetPath}' -maxdepth 0 -type f -user 'root' -group 'root' -perm 644 -fprint /dev/full && exit 22`);
+    // The candidate hash is emitted at the commit boundary before the link,
+    // and the committed hash after it; parsePublishHash tells them apart by path.
+    const boundaryIndex = plan!.commitScript.indexOf(`sha256sum '${plan!.candidatePath}'`);
+    const linkIndex = plan!.commitScript.indexOf(`ln -T '${plan!.candidatePath}'`);
+    const targetHashIndex = plan!.commitScript.indexOf(`sha256sum '${input.targetPath}'`);
+    expect(boundaryIndex).toBeGreaterThan(-1);
+    expect(boundaryIndex).toBeLessThan(linkIndex);
+    expect(targetHashIndex).toBeGreaterThan(linkIndex);
     expect(plan!.commitScript).toContain('cloudhelm-publish: readback verified');
     expect(plan!.candidatePath).toBe(`/etc/systemd/system/.cloudhelm-publish-${input.nonce}`);
     expect(plan!.parentPath).toBe('/etc/systemd/system');
@@ -35,8 +51,8 @@ describe('publish plan', () => {
     expect(Buffer.byteLength(plan!.wrappedCommitCommand, 'utf8')).toBeLessThanOrEqual(8000);
     // Literal-only bodies: the credential-bound native PTY su route refuses
     // pipelines, redirections and expansions inside the quoted -c payload
-    // (logical || is allowed), and the reviewed content hash itself never
-    // travels through command text.
+    // (logical || and && are allowed), and the reviewed content hash itself
+    // never travels through command text.
     for (const script of [plan!.candidateScript, plan!.commitScript]) {
       expect(script).not.toContain('$');
       expect(script).not.toContain('`');
@@ -51,8 +67,9 @@ describe('publish plan', () => {
     const plan = buildPublishPlan({ ...input, targetPath: '/opt/apps/demo/config.yaml' });
     expect(plan).toBeDefined();
     for (const component of ['/', '/opt', '/opt/apps', '/opt/apps/demo']) {
+      expect(plan!.candidateScript).toContain(`test -d '${component}' || exit 12`);
       expect(plan!.candidateScript)
-        .toContain(`find '${component}' -maxdepth 0 -type d -user root ! -perm -020 ! -perm -002 || exit 12`);
+        .toContain(`find '${component}' -maxdepth 0 -type d -user root ! -perm -020 ! -perm -002 -fprint /dev/full && exit 12`);
     }
   });
 
@@ -111,17 +128,18 @@ describe('publish plan', () => {
     expect(candidateExitCode(11)).toBe('staging-invalid');
     expect(candidateExitCode(12)).toBe('parent-untrusted');
     expect(candidateExitCode(13)).toBe('candidate-create-failed');
-    expect(candidateExitCode(14)).toBe('candidate-metadata-failed');
+    expect(candidateExitCode(14)).toBe('candidate-mode-failed');
     expect(candidateExitCode(99)).toBe('unknown');
   });
 
   it('maps commit exit codes onto phases and stable codes', () => {
     expect(commitExitPhase(0)).toBe('succeeded');
-    for (const code of [20, 125]) expect(commitExitPhase(code)).toBe('commit-failed');
+    for (const code of [20, 21, 125]) expect(commitExitPhase(code)).toBe('commit-failed');
     expect(commitExitPhase(22)).toBe('committed-unverified');
     expect(commitExitPhase(undefined)).toBe('unknown');
     expect(commitExitPhase(1)).toBe('unknown');
     expect(commitExitCode(20)).toBe('commit-failed');
+    expect(commitExitCode(21)).toBe('candidate-untrusted');
     expect(commitExitCode(22)).toBe('readback-metadata-mismatch');
     expect(commitExitCode(99)).toBe('unknown');
   });
@@ -136,5 +154,9 @@ describe('publish plan', () => {
     expect(parsePublishHash(`${hash}  ${candidate}.staging`, candidate)).toBeUndefined();
     expect(parsePublishHash('no hash line at all', candidate)).toBeUndefined();
     expect(parsePublishHash(`${hash}  ${candidate} trailing`, candidate)).toBeUndefined();
+    // The match-assertion guards surface find's /dev/full write error on
+    // stderr as a progress line; it must never parse as a hash.
+    expect(parsePublishHash(`find: '/dev/full': No space left on device\n${hash}  ${candidate}\n`, candidate)).toBe(hash);
+    expect(parsePublishHash("find: '/dev/full': No space left on device\n", candidate)).toBeUndefined();
   });
 });
