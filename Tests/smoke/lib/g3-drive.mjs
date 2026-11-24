@@ -18,7 +18,7 @@ import { captureQuietDesktop } from '../quiet-screenshot.mjs';
 export const FINAL_STATUSES = ['answered', 'failed', 'human-control', 'waiting-user'];
 
 export function createDriver(context) {
-  const { page, application, output, secrets, redact, record } = context;
+  const { page, application, output, secrets, redact, record, inputDecider, approvalDecider } = context;
   const snapshot = () => page.evaluate(() => window.cloudhelm.snapshot());
   const shot = (name, timeoutMs = 25_000) => captureQuietDesktop(application, page, path.join(output, `${name}.png`), { timeoutMs });
   const seenOperations = new Map();
@@ -69,16 +69,23 @@ export function createDriver(context) {
         record('approval', { taskId, approvalId: approval.id, title: approval.title, impact: approval.impact,
           preview: approval.preview.slice(0, 200) });
         await shot(`approval-${approval.id.slice(0, 8)}`);
-        await page.evaluate((approvalId) => window.cloudhelm.decideApproval(approvalId, true), approval.id);
-        record('approval-decided', { approvalId: approval.id, approved: true });
+        const approved = approvalDecider ? approvalDecider(approval) : true;
+        await page.evaluate(([approvalId, value]) => window.cloudhelm.decideApproval(approvalId, value), [approval.id, approved]);
+        record('approval-decided', { approvalId: approval.id, approved });
       }
       for (const input of latest.inputs ?? []) {
         if (handled.has(input.id)) continue;
         handled.add(input.id);
-        const decision = decideInputAnswer(input);
+        const decision = inputDecider ? inputDecider(input) : null;
+        const chosen = decision ?? decideInputAnswer(input);
         record('input-request', { taskId, inputId: input.id, kind: input.kind, title: input.title,
-          choices: input.choices ?? null, answered: decision?.rule ?? null });
-        if (decision) await page.evaluate(([inputId, answer]) => window.cloudhelm.answerInput(inputId, answer), [input.id, decision.answer]);
+          choices: input.choices ?? null, answered: chosen?.rule ?? null, cancelled: decision?.cancel === true });
+        if (decision?.cancel) {
+          await page.evaluate((inputId) => window.cloudhelm.cancelInput(inputId), input.id);
+          record('input-cancelled', { inputId: input.id });
+        } else if (chosen) {
+          await page.evaluate(([inputId, answer]) => window.cloudhelm.answerInput(inputId, answer), [input.id, chosen.answer]);
+        }
       }
       if (onTick) {
         try {
