@@ -3,6 +3,7 @@ import { controlledFileTools } from './controlled-file-tools.js';
 import { createServiceTool } from './service-tool.js';
 import { createRemoteFilePrepareTool } from './remote-file-prepare-tool.js';
 import { OperationPrivilege } from './operation-privilege.js';
+import { createPublishFileTool } from './publish-file-tool.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { OutputRedactor, redactOutput, type BusinessTool } from '@cloudhelm/core';
 import { Type, type Static } from 'typebox';
@@ -166,7 +167,7 @@ export function createRemoteTools(deps: RemoteToolDependencies, gate: SafetyGate
     };
   const tools = [createServiceTool(deps, gate),
     tool, readTool, createRemoteFilePrepareTool(deps, files), ...controlledFileTools(files),
-    writeTool, deleteTool, listLocalTool, readLocalTool, uploadTool];
+    writeTool, createPublishFileTool(deps, gate), deleteTool, listLocalTool, readLocalTool, uploadTool];
   // Pre-dispatch refusals create no operation record, so surface a fixed reason code
   // for diagnosis. The code is allowlisted; arguments and content never reach the log.
   return deps.refused ? (tools as BusinessTool<any>[]).map((item) => ({ ...item,

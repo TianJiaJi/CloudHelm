@@ -26,6 +26,7 @@ export { describeCommandReview, type CommandReviewReasonCode } from './command-r
 export * from './redaction.js';
 export * from './sudo-plan.js';
 export * from './su-plan.js';
+export * from './publish-plan.js';
 export * from './clarification.js';
 export * from './diagnostics.js';
 export * from './sudo-outcome.js';
