@@ -77,7 +77,8 @@ class LiveNativePtySession {
   private settled = false;
   private requested = false;
   private outputBytes = 0;
-  private exit: NativePtyOutcome | undefined;
+  private exitObserved = false;
+  private exit: number | Extract<NativePtyOutcome, { state: 'signaled' }> | undefined;
   private windowOpen = false;
   private challengeId = '';
   private injections = 0;
@@ -137,26 +138,33 @@ class LiveNativePtySession {
           stream.on('data', (data: Buffer) => this.processChunk(data));
           stream.on('error', () => this.finish({ state: 'unknown', reason: 'channel-error' }));
           stream.on('exit', (code: number | null, name?: string, coreDumped?: boolean) => {
-            this.exit = Number.isInteger(code) && code !== null && code >= 0 && code <= 255
-              ? this.mode === 'su-window'
-                ? { state: 'exited', exitCode: code, markerSeen: this.markerSeenOnce, sudoMissing: false,
-                  ...(this.suAuthenticationFailed ? { suAuthenticationFailed: true } : {}),
-                  ...(this.suMissing ? { suMissing: true } : {}),
-                  ...(this.suUserMissing ? { suUserMissing: true } : {}) }
-                : { state: 'exited', exitCode: code, markerSeen: this.markerSeenOnce, sudoMissing: this.sudoMissing,
-                  ...(this.sudoDenied ? { sudoDenied: true } : {}) }
+            if (this.exitObserved || this.settled) return;
+            this.exitObserved = true;
+            this.exit = Number.isInteger(code) && code !== null && code >= 0 && code <= 255 ? code
               : typeof name === 'string' && /^[A-Z0-9]{1,24}$/u.test(name)
                 ? { state: 'signaled', signal: name, coreDumped: coreDumped === true }
                 : undefined;
+            this.closeChallenge();
           });
-          stream.on('close', () => this.finish(!this.current() ? { state: 'unknown', reason: 'authorization-expired' }
-            : this.exit ?? { state: 'unknown', reason: 'missing-exit' }));
+          stream.on('close', () => this.finish(this.closeOutcome()));
         });
     } catch { this.finish({ state: 'unknown', reason: 'allocation' }); }
   }
 
+  private closeOutcome(): NativePtyOutcome {
+    if (!this.current()) return { state: 'unknown', reason: 'authorization-expired' };
+    if (typeof this.exit !== 'number') return this.exit ?? { state: 'unknown', reason: 'missing-exit' };
+    // SSH exit-status can precede the final data packet. These flags remain
+    // output diagnostics only, never proof that a payload did not start.
+    return { state: 'exited', exitCode: this.exit, markerSeen: this.markerSeenOnce, sudoMissing: this.sudoMissing,
+      ...(this.sudoDenied ? { sudoDenied: true } : {}),
+      ...(this.suAuthenticationFailed ? { suAuthenticationFailed: true } : {}),
+      ...(this.suMissing ? { suMissing: true } : {}),
+      ...(this.suUserMissing ? { suUserMissing: true } : {}) };
+  }
+
   private answer(id: string, answer: string | null): boolean {
-    if (this.settled || !this.windowOpen || id !== this.challengeId) return false;
+    if (this.settled || this.exitObserved || !this.windowOpen || id !== this.challengeId) return false;
     if (answer !== null && (answer.length > 4095 || /[\r\n\u0000]/u.test(answer))) return false;
     const closed = this.challengeId;
     if (this.mode === 'su-window') {
@@ -195,7 +203,7 @@ class LiveNativePtySession {
   }
 
   private write(data: string): void {
-    if (this.settled || !this.channel || this.channel.destroyed) return;
+    if (this.settled || this.exitObserved || !this.channel || this.channel.destroyed) return;
     try { this.channel.write(Buffer.from(data, 'utf8')); } catch { /* Channel errors surface via the error handler. */ }
   }
 
@@ -318,6 +326,7 @@ class LiveNativePtySession {
 
   private openWindowAtMarker(): boolean {
     this.markerSeenOnce = true;
+    if (this.exitObserved) return false;
     if (this.windowOpen) {
       // A duplicate echo while the window is already open never mints a second
       // injectable id; it only re-arms suppression around the same prompt.
@@ -401,6 +410,7 @@ class LiveNativePtySession {
   }
 
   private openSuWindow(): void {
+    if (this.exitObserved) { this.suState = 'disarmed'; return; }
     this.windowOpen = true;
     this.challengeId = randomUUID().replaceAll('-', '');
     this.suState = 'open';
@@ -429,16 +439,20 @@ class LiveNativePtySession {
     return 0;
   }
 
+  private closeChallenge(): void {
+    if (!this.windowOpen) return;
+    const id = this.challengeId;
+    this.windowOpen = false;
+    this.challengeId = '';
+    if (this.suState === 'open') this.suState = 'disarmed';
+    this.notifyClosed(id);
+  }
+
   private finish(outcome: NativePtyOutcome): void {
     if (this.settled) return;
     this.settled = true;
     clearTimeout(this.timer);
-    if (this.windowOpen) {
-      const id = this.challengeId;
-      this.windowOpen = false;
-      this.challengeId = '';
-      this.notifyClosed(id);
-    }
+    this.closeChallenge();
     try {
       // A holdback carry is unemitted output and must not be lost; a straddle
       // carry re-queues already-suppressed bytes and must stay suppressed.

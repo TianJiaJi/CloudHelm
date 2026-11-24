@@ -71,6 +71,30 @@ function openSu(overrides: { signal?: AbortSignal; current?: () => boolean } = {
   return { client, handle, data, authentication };
 }
 
+it('collects a trailing sudo diagnosis after exit-status without minting any further credential window', async () => {
+  const pty = open();
+  feed(pty, PROMPT);
+  const id = challenge(pty);
+  expect(pty.handle.answer(id, 'fixture-only')).toBe(true);
+  pty.client.channel!.emit('exit', 1);
+  feed(pty, '\r\nadmin is not in the sudoers file.\r\nSorry, try again.\r\n' + PROMPT);
+  pty.client.channel!.close();
+  expect(await pty.handle.result).toMatchObject({ state: 'exited', exitCode: 1, sudoDenied: true });
+  expect(pty.authentication.mock.calls.filter(([event]) => event.open)).toHaveLength(1);
+  expect(pty.handle.answer(id, 'fixture-late')).toBe(false);
+  expect(written(pty)).toBe('fixture-only\n');
+});
+
+it('does not open a su password challenge from buffered output after exit-status', async () => {
+  const pty = openSu();
+  pty.client.channel!.emit('exit', 1);
+  feed(pty, `${SU_MARKER}Password: `);
+  pty.client.channel!.close();
+  expect(await pty.handle.result).toMatchObject({ state: 'exited', exitCode: 1 });
+  expect(pty.authentication).not.toHaveBeenCalled();
+  expect(written(pty)).toBe('');
+});
+
 it('dispatches on a dumb echo-off pty and injects the password only into the marker window', async () => {
   const opened = open({ cols: 40, rows: 0 });
   expect(opened.client.commands[0]).toBe(renderNativeExecCommand(
