@@ -2,7 +2,15 @@ import type { SafetyGate } from '@cloudhelm/application';
 import type { OperationScope, PrivilegeMethod, ProposedOperation } from '@cloudhelm/core';
 import type { RuntimeHost } from '@cloudhelm/contracts/runtime';
 
+export type ElevationRoute = 'sudo' | 'su';
+export interface ElevationChoice {
+  operationId: string;
+  command: string;
+  cwd: string;
+}
+
 export interface PrivilegedTaskAccess {
+  selectElevation?(host: RuntimeHost, operation: ElevationChoice, signal?: AbortSignal): Promise<ElevationRoute | null>;
   request(host: RuntimeHost, command: string, cwd: string, reason: string, goal: string,
     gate: SafetyGate, signal?: AbortSignal, intent?: OperationScope['intent'], method?: PrivilegeMethod): Promise<
       { sessionId: string; method: 'ssh' | 'su'; runAs: 'root' }

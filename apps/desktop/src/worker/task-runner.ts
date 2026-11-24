@@ -185,6 +185,7 @@ export class TaskRunner {
         }
         return this.ensureTerminal(id);
       },
+      selectElevation: this.privileged?.selectElevation,
       requestRoot: async (host, command, cwd, reason, signal, method) => {
         this.assertRemoteActive();
         if (!this.privileged) throw new Error('Root sessions unavailable');

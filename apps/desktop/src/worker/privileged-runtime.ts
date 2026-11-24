@@ -74,6 +74,7 @@ export class PrivilegedRuntime implements OperationExecutor {
 
   forTask(taskId: string): PrivilegedTaskAccess {
     return {
+      selectElevation: (host, operation, signal) => this.selectElevation(taskId, host, operation, signal),
       request: (host, command, cwd, reason, goal, gate, signal, intent, method) => this.request(taskId, host, command, cwd, reason, goal, gate, signal, intent, method),
       prepare: async (operation) => { if (operation.scope.taskId !== taskId) throw new Error('Context outside task'); return this.prepare(operation); },
       sudoContexts: () => [...this.entries.values()].flatMap((entry) => {
@@ -103,6 +104,28 @@ export class PrivilegedRuntime implements OperationExecutor {
       }),
       close: () => this.closeTask(taskId)
     };
+  }
+
+  private async selectElevation(taskId: string, host: RuntimeHost,
+    operation: import('./privileged-access.js').ElevationChoice, signal?: AbortSignal): Promise<import('./privileged-access.js').ElevationRoute | null> {
+    if (this.requesting.has(taskId)) throw new Error('Root route confirmation already pending');
+    signal?.throwIfAborted();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const generation = this.deps.ssh.connectionGeneration(host.id);
+    signal?.addEventListener('abort', abort, { once: true });
+    this.requesting.set(taskId, controller);
+    try {
+      const choice = await this.deps.input({ taskId, hostId: host.id, operationId: operation.operationId, kind: 'confirmation',
+        title: '确认本次操作的提权方式', choices: ['使用 sudo', '通过 su 切换 root'],
+        explanation: `主机：${host.label}\n目录：${operation.cwd}\n待审核操作：${operation.command.slice(0, 400)}\n只选择执行路线，不批准执行。su 通常需要 root 密码；密码只在后续私有认证窗口输入。` }, controller.signal);
+      controller.signal.throwIfAborted();
+      if (generation !== this.deps.ssh.connectionGeneration(host.id)) throw new Error('SSH connection changed during route confirmation');
+      return choice === '使用 sudo' ? 'sudo' : choice === '通过 su 切换 root' ? 'su' : null;
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      if (this.requesting.get(taskId) === controller) this.requesting.delete(taskId);
+    }
   }
 
   private async request(taskId: string, host: RuntimeHost, command: string, cwd: string, reason: string, goal: string,

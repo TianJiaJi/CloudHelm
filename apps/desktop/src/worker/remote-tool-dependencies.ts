@@ -19,6 +19,7 @@ export interface RemoteToolDependencies {
   readRemoteFile?(hostId: string, path: string, cwd: string | undefined, signal?: AbortSignal, maxBytes?: number): Promise<RemoteFileSnapshot>;
   background?(signal: AbortSignal | undefined, run: (signal: AbortSignal) => ReturnType<RemoteToolDependencies['runOperation']>): ReturnType<RemoteToolDependencies['runOperation']>;
   ensureTerminal(hostId: string, sessionId?: string): Promise<string>;
+  selectElevation?: import('./privileged-access.js').PrivilegedTaskAccess['selectElevation'];
   requestRoot?(host: RuntimeHost, command: string, cwd: string, reason: string, signal?: AbortSignal, method?: import('@cloudhelm/core').PrivilegeMethod): Promise<unknown>;
   scope(host: RuntimeHost, terminalId: string, cwd?: string): OperationScope;
   runOperation(gate: SafetyGate, operation: ProposedOperation, signal: AbortSignal | undefined, hostLabel: string, onFileInspection?: import('@cloudhelm/core').ExecutionOptions['onFileInspection']): Promise<{ result?: import('@cloudhelm/core').OperationResult; readOnly?: boolean; content: Array<{ type: 'text'; text: string }>; details: unknown; structuredContent?: unknown; isError: boolean }>;

@@ -48,11 +48,22 @@ export class OperationPrivilege {
       this.assertLease(host, operation.scope.terminalId, key, signal);
       this.identities.set(key, uid);
     }
+    if (uid !== 0 && this.deps.selectElevation) {
+      let route: Awaited<ReturnType<NonNullable<RemoteToolDependencies['selectElevation']>>>;
+      try {
+        route = await this.deps.selectElevation(host, { operationId: operation.id, command: operation.command, cwd: scope.cwd }, signal);
+        this.assertLease(host, operation.scope.terminalId, key, signal);
+      } catch {
+        return denied('elevation-selection-invalidated', 'Elevation choice was interrupted or its scope changed. No privileged command dispatched.');
+      }
+      if (route === 'su') return this.dispatchSu(gate, host, operation, analysis, key, signal, operation.id);
+      if (route !== 'sudo') return denied('elevation-selection-cancelled', 'No elevation route was selected. No privileged command dispatched.');
+    }
     const actual: Command = { ...operation, privilege: 'root', command: uid === 0 ? operation.command : sudo,
       scope: { ...this.deps.scope(host, operation.scope.terminalId, operation.scope.cwd), runAs: 'root' } };
     this.assertLease(host, operation.scope.terminalId, key, signal);
     const first = await this.deps.runOperation(gate, actual, signal, host.label);
-    if (uid === 0 || !first.result || !canOfferSuFallback(first.result) || !this.deps.requestRoot) return first;
+    if (this.deps.selectElevation || uid === 0 || !first.result || !canOfferSuFallback(first.result) || !this.deps.requestRoot) return first;
     this.assertLease(host, operation.scope.terminalId, key, signal);
     try {
       const context = await this.deps.requestRoot(host, operation.command, operation.scope.cwd,
@@ -79,13 +90,13 @@ export class OperationPrivilege {
    * the credential-bound native PTY and dispatched as its own reviewed operation.
    * No session, no persistent credential, one password window per dispatch. */
   private async dispatchSu(gate: SafetyGate, host: RuntimeHost, operation: Command, analysis: CommandAnalysis,
-    key: string, signal?: AbortSignal): Promise<Feedback> {
+    key: string, signal?: AbortSignal, operationId: string = randomUUID()): Promise<Feedback> {
     const denied = (code: string, message: string) => blockedOperationFeedback(operation.id, code, message);
     signal?.throwIfAborted();
     const wrapped = suPtyCommand(analysis, operation.scope.cwd);
     if (!wrapped) return denied('unsupported-root-command', 'Root routing accepts one literal action without expansion, pipes or redirection. Split independent actions; no business command executed.');
     this.assertLease(host, operation.scope.terminalId, key, signal);
-    const feedback = await this.deps.runOperation(gate, { id: randomUUID(), kind: 'command', command: wrapped, privilege: 'root',
+    const feedback = await this.deps.runOperation(gate, { id: operationId, kind: 'command', command: wrapped, privilege: 'root',
       delegationId: operation.delegationId, toolCallId: operation.toolCallId,
       scope: { ...this.deps.scope(host, operation.scope.terminalId, operation.scope.cwd), runAs: 'root' } }, signal, host.label);
     // A transport-classified su outcome (authentication rejected or route unsupported)

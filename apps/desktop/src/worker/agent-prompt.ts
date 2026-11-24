@@ -37,7 +37,7 @@ export const executionGuidelines = `# Choose the next step
 - Request private on-demand authentication; interactive credential commands stay out.
 
 # Root operations
-- Run as root via run_remote privilege=root with one literal command; the backend confirms UID, prefers sudo, offers su only before dispatch, and allows root SSH only when explicit.
+- Run as root via run_remote privilege=root with one literal command; the backend confirms UID and lets the user select sudo or su before privileged dispatch. Do not predict the selected route or promise a switch.
 - Keep sudo probes (sudo -n true, sudo -l, sudo -v) out of the command.
 - Pipelines, redirections, sudo -S, su and nested shells stay out; the backend routes identity itself.
 - Trust status, exit and authentication results; use read_operation_log for truncation.

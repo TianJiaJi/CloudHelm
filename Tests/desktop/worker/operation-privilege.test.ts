@@ -7,7 +7,7 @@ import { OperationPrivilege } from '../../../apps/desktop/src/worker/operation-p
 import { operationToolResult } from '../../../apps/desktop/src/worker/operation-feedback.js';
 import type { RemoteToolDependencies } from '../../../apps/desktop/src/worker/remote-tool-dependencies.js';
 
-function fixture(uid = '1000') {
+function fixture(uid = '1000', selectElevation?: RemoteToolDependencies['selectElevation']) {
   const host: RuntimeHost = { id: 'host', label: 'fixture', address: '192.0.2.1', port: 22, username: 'user', auth: 'agent',
     status: 'connected', defaultMode: 'ask', protectedPaths: [], policyRevision: 1 };
   const state = { generation: 1, failure: undefined as Partial<OperationResult> | undefined };
@@ -27,7 +27,7 @@ function fixture(uid = '1000') {
       ...(command.startsWith('sudo') ? state.failure : {}) };
     return operationToolResult(result, host.label, true);
   });
-  const deps = { hosts: [host], scope, ensureTerminal, requestRoot, runOperation } as unknown as RemoteToolDependencies;
+  const deps = { hosts: [host], scope, ensureTerminal, requestRoot, runOperation, selectElevation } as unknown as RemoteToolDependencies;
   const routing = new OperationPrivilege(deps);
   const operation: Extract<ProposedOperation, { kind: 'command' }> = { id: 'business', kind: 'command', command: 'stat /root/example', scope: scope(host, 'ordinary') };
   const wrap = async (): Promise<string> => {
@@ -47,6 +47,30 @@ const suRejected: Partial<OperationResult> = { status: 'failed', failureKind: 'a
   privilege: { method: 'su', stage: 'authentication', code: 'authentication-rejected', source: 'transport', businessCommand: 'not-started', recovery: 'user-action' } };
 
 describe('operation-level privilege routing', () => {
+  it('routes selected su directly through the gate using the confirmed operation ID', async () => {
+    const select = vi.fn(async () => 'su' as const);
+    const f = fixture('1000', select);
+    await f.run();
+    expect(select).toHaveBeenCalledWith(f.host, { operationId: 'business', cwd: '/', command: 'stat /root/example' }, undefined);
+    expect(f.commands()).toEqual(['id -u', await f.wrap()]);
+    expect(f.runOperation.mock.calls[1]![1]).toMatchObject({ id: 'business', privilege: 'root', scope: { runAs: 'root' } });
+    expect(f.requestRoot).not.toHaveBeenCalled();
+  });
+  it('does not switch away from an explicitly chosen sudo even with legacy fallback evidence', async () => {
+    const f = fixture('1000', async () => 'sudo');
+    f.state.failure = missing;
+    await f.run();
+    expect(f.commands()).toEqual(['id -u', 'sudo -- stat /root/example']);
+    expect(f.requestRoot).not.toHaveBeenCalled();
+  });
+  it('does not dispatch when route selection is cancelled or the terminal changes', async () => {
+    const cancelled = fixture('1000', async () => null);
+    expect((await cancelled.run()).isError).toBe(true);
+    expect(cancelled.commands()).toEqual(['id -u']);
+    const stale = fixture('1000', async () => { stale.state.generation++; return 'su'; });
+    expect((await stale.run()).isError).toBe(true);
+    expect(stale.commands()).toEqual(['id -u']);
+  });
   it('verifies UID and routes through sudo without requesting a prepared session or password', async () => {
     const f = fixture(); await f.run();
     expect(f.commands()).toEqual(['id -u', 'sudo -- stat /root/example']); expect(f.requestRoot).not.toHaveBeenCalled();
