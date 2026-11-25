@@ -41,7 +41,7 @@ export function createDriver(context) {
         privilege: operation.privilege ? { method: operation.privilege.method, stage: operation.privilege.stage,
           code: operation.privilege.code, source: operation.privilege.source } : null,
         authentication: operation.authentication ?? null,
-        preview: operation.preview.slice(0, 200) });
+        preview: operation.preview.slice(0, 400) });
     }
   }
 
@@ -76,13 +76,17 @@ export function createDriver(context) {
       for (const input of latest.inputs ?? []) {
         if (handled.has(input.id)) continue;
         handled.add(input.id);
-        const decision = inputDecider ? inputDecider(input) : null;
+        const decision = inputDecider ? inputDecider(input, latest) : null;
         const chosen = decision ?? decideInputAnswer(input);
         record('input-request', { taskId, inputId: input.id, kind: input.kind, title: input.title,
-          choices: input.choices ?? null, answered: chosen?.rule ?? null, cancelled: decision?.cancel === true });
+          choices: input.choices ?? null, answered: decision?.hold ? null : chosen?.rule ?? null, cancelled: decision?.cancel === true });
         if (decision?.cancel) {
           await page.evaluate((inputId) => window.cloudhelm.cancelInput(inputId), input.id);
           record('input-cancelled', { inputId: input.id });
+        } else if (decision?.hold) {
+          // Deliberately leave the window unanswered (e.g. hold the su
+          // credential window so a mid-dispatch cut stays unconfirmed).
+          record('input-held', { inputId: input.id, rule: decision.rule ?? null });
         } else if (chosen) {
           await page.evaluate(([inputId, answer]) => window.cloudhelm.answerInput(inputId, answer), [input.id, chosen.answer]);
         }

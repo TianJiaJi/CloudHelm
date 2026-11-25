@@ -49,11 +49,16 @@ async function cleanState(session) {
   const unit = await session.exec('test -e /etc/systemd/system/g3-health.service; echo unit=$?', 10_000);
   const dirs = await session.exec('ls -d /usr/local/share/g3-health /home/admin/g3-health /home/admin/g3-net 2>/dev/null; true', 10_000);
   const net = await session.exec('test -e /tmp/g3-net; echo net=$?', 10_000);
+  const marker = await session.exec('test -e /usr/local/share/g3-netcut-marker; echo marker=$?', 10_000);
+  const publishTemp = await session.exec('ls /tmp/.cloudhelm-publish-*.staging /usr/local/share/.cloudhelm-publish-*'
+    + ' /usr/local/share/g3-health/.cloudhelm-publish-* /etc/systemd/system/.cloudhelm-publish-* 2>/dev/null; true', 10_000);
   const port = await session.exec('curl -s -o /dev/null -m 2 http://127.0.0.1:18080/health; echo exit=$?', 10_000);
   return {
     unitAbsent: /unit=1$/u.test(clean(unit.stdout)),
     dirsAbsent: clean(dirs.stdout) === '',
     netAbsent: /net=1$/u.test(clean(net.stdout)),
+    markerAbsent: /marker=1$/u.test(clean(marker.stdout)),
+    publishTempAbsent: clean(publishTemp.stdout) === '',
     portClosed: /exit=7$/u.test(clean(port.stdout)),
     checkedAt: clean((await session.exec('date -Ins', 10_000)).stdout),
   };
@@ -69,6 +74,9 @@ export function vmResetDeployment(vm, password) {
       'rm -f /etc/systemd/system/g3-health.service', 'systemctl daemon-reload',
       'rm -rf /usr/local/share/g3-health /home/admin/g3-health /home/admin/g3-net',
       'rm -f /tmp/g3-net',
+      'rm -f /usr/local/share/g3-netcut-marker',
+      'rm -f /tmp/.cloudhelm-publish-*.staging /usr/local/share/.cloudhelm-publish-*'
+        + ' /usr/local/share/g3-health/.cloudhelm-publish-* /etc/systemd/system/.cloudhelm-publish-*',
       'rm -rf /home/admin/.cloudhelm-edit-*']) {
       const run = await session.exec(command, 30_000);
       actions.push({ command, code: run.code });
