@@ -112,9 +112,11 @@ export function parsePublishHash(output: string, filePath: string): string | und
 }
 
 /** Best-effort candidate removal with its own marker line; the business exit
- * code stays independent of the cleanup outcome. */
+ * code stays independent of the cleanup outcome. unlink is the single-file
+ * primitive: it has no recursive or directory semantics at all, so the
+ * scripts stay unambiguous mass-destruction-free command sets. */
 function cleanupClause(candidate: string): string {
-  return `rm -f ${quote(candidate)} && printf 'cloudhelm-publish: cleanup ok\\n' || printf 'cloudhelm-publish: cleanup failed\\n'`;
+  return `unlink ${quote(candidate)} && printf 'cloudhelm-publish: cleanup ok\\n' || printf 'cloudhelm-publish: cleanup failed\\n'`;
 }
 
 export function buildPublishPlan(input: PublishPlanInput): PublishPlan | undefined {
