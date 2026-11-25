@@ -21,7 +21,7 @@
 | G1-L 模式三预授权范围 | 局部回归通过 | core 纯匹配器 matchPreauthorization：单调用形状/参数前缀/文件 kind+路径根命中自动允许（decisionSource='user-preauthorization'、autoAdjudicated），越界 deny 未执行（preauthorization-out-of-scope，receipt 'rejected'，primary 'revise-operation'）；解释器/提权入口 core 匹配层与 contracts 校验层双层拦截；硬门/披露/身份/高影响/保护路径/项目代码/外传不随模式放宽；scope 经 update-host-safety 增量下发（null 清除、undefined 不动）并随 policyRevision 失效；core 12/12、主进程 IPC 7/7、风险矩阵 51 项通过；类型与四项 lint 通过 | 预授权范围的 UI 编辑入口非目标未做；真实主机范围命中率未验收 |
 | G1 收尾 | 全量串行与构建通过 | 341 个测试文件通过、4 环境跳过；3086 项通过、6 环境跳过、0 失败；类型/四项 lint/生产构建通过；模式二协议引起的 3 处集成测试预期已对齐（独立审核需显式 dedicated reviewer，自审为默认路径） | 真实主机/付费模型授权的验收仍按计划留待 G3 |
 | G2 核验、写锁及一次确认恢复 | 全部子批交付，全量串行与构建通过 | `f9fdd4a` 统一恢复用例的三种具名处置（拒绝/仅解除/接受并继续，恢复决策持久化）；`781b545` 显式逻辑上下文契约（默认 cwd/环境配置随任务显式下发）；`dbab5ca` 业务失联的记录与重建分支（断线归约、recordConnectionLoss、已交接未知不重放）；`2d8b0f2` 收敛长作业观察与精确停止（OBSERVATION_LIMITS 具名常量、onObservationTimeout 钩子、expireObservation unknown 结算、迟到退出仍记账）；345 个测试文件通过、4 环境跳过；3135 项通过、6 环境跳过、0 失败；类型/四项 lint/生产构建通过；补齐批次外 server-preparation 假 runner 的 recordConnectionLoss 桩 | 真实主机/付费模型授权的验收仍按计划留待 G3 |
-| G3 隔离真机对照 | 恢复交互专项已完成；整体验收未结项 | [真机专项报告](G3_REAL_MACHINE_REPORT.md)：真实 SSH/PAM 与模型；只读提示及处置回执通过，先执行后拒绝本次未复现 | 正向部署与健康证据、实际失联恢复、同条件新旧版本体验对照 |
+| G3 隔离真机对照 | 隔离真机验收完成 | [恢复交互](G3_REAL_MACHINE_REPORT.md)、[写操作失联与新旧受阻对照](G3_REAL_MACHINE_SUPPLEMENT_REPORT.md)、[提权路线](G3_PRIVILEGE_ROUTE_REPORT.md)、[正向部署与发布断线](G3_PUBLISH_ACCEPTANCE_REPORT.md)：`e484c25` 在隔离 VM 完成受控 `su` 部署，健康端点 HTTP 200；发布认证窗口断连后结果保持 unknown，先核验对账、再新提案，未自动重发 | 发布守卫异常拒绝与提交前哈希强制检查仍待加固；认证窗口断连不代表已验证提交中途失联；不外推生产准入或模型请求数改善 |
 | G4 受控切换 | 未开始 | 无新证据 | 数据/会话/未决账兼容、单一路由、移除旧入口 |
 | G5 工具及人工底座收敛 | 未开始 | 无本轮交付证据 | 五域、有界 Schema、人工回归与审计盲区 |
 | G6 Skills/MCP/多主机/子代理 | 未开始 | 既有草稿/资源不计作完成 | 各自授权、披露、隔离与恢复验收 |
